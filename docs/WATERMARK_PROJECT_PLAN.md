@@ -661,12 +661,8 @@ class WatermarkDataset(Dataset):
         }
 
 def collate_fn(batch):
-    # Standard stack
-    batch_dict = {k: torch.stack([b[k] for b in batch]) for k in batch[0].keys()}
-    
-    # FIX: If 'message' is missing, generate it from model_id/version?
-    # Better: Pass codec to training loop and generate 'message' there from IDs.
-    return batch_dict
+    # Standard stack - message guarantees to be present now
+    return {k: torch.stack([b[k] for b in batch]) for k in batch[0].keys()}
 ```
 
 ## 5.2 Stage 1: Detection (with Negatives!)
@@ -730,27 +726,30 @@ def train_stage1b(decoder, loader, device, preamble, epochs=10, warmup=3, top_k=
     - Warmup: use preamble correlation (detector not trusted)
     - After: use detect prob
     """
-    # Create optimizer ONCE (not per epoch)
-    trainable = [p for p in decoder.parameters() if p.requires_grad]
-    opt = torch.optim.AdamW(trainable, lr=1e-4)
-    
     for epoch in range(epochs):
         in_warmup = epoch < warmup
         
-        # Adjust frozen parameters if switching phases
-        if epoch == warmup:
-            # Unfreeze everything for post-warmup phase
-            for p in decoder.parameters():
-                p.requires_grad = True
-            # Recreate optimizer for full model
-            trainable = [p for p in decoder.parameters()]
-            opt = torch.optim.AdamW(trainable, lr=1e-4)
+        # Phase switch logic: Reconfigure optimizer ONLY when phase changes
+        # (or just simple check at start of epoch)
         
-        elif in_warmup:
-            # Ensure proper freezing during warmup
-            for n, p in decoder.named_parameters():
-                if 'head_message' not in n:
-                     p.requires_grad = False
+        if epoch == 0 or epoch == warmup:
+             # 1. Set requires_grad FIRST
+            if in_warmup:
+                # Warmup: Freeze everything EXCEPT message head
+                for n, p in decoder.named_parameters():
+                    if 'head_message' not in n:
+                        p.requires_grad = False
+                    else:
+                        p.requires_grad = True
+            else:
+                 # Normal: Unfreeze everything
+                for p in decoder.parameters():
+                    p.requires_grad = True
+            
+            # 2. Create optimizer SECOND (only for currently trainable params)
+            trainable = [p for p in decoder.parameters() if p.requires_grad]
+            opt = torch.optim.AdamW(trainable, lr=1e-4)
+            print(f"Optimizer reset. Trainable params: {len(trainable)}")
         
         for batch in loader:
             # ... training loop ...
@@ -962,14 +961,17 @@ def apply_attack_safe(audio: torch.Tensor, attack_fn) -> torch.Tensor:
     """
     Apply attack and restore to SEGMENT_SAMPLES.
     Handles length-changing attacks (time-stretch, codecs).
+    Assumes audio is (T,) or (channels, T).
     """
     attacked = attack_fn(audio)
     
     # FIX: Enforce length post-attack!
+    # Ensure we work on last dim
     T = attacked.shape[-1]
     if T > SEGMENT_SAMPLES:
         attacked = attacked[..., :SEGMENT_SAMPLES]
     elif T < SEGMENT_SAMPLES:
+        # Pad last dim
         attacked = F.pad(attacked, (0, SEGMENT_SAMPLES - T))
     
     return attacked
@@ -987,6 +989,9 @@ EVAL_ATTACKS = {
 
 ```python
 def compute_visqol_aligned(original, degraded, sr=16000):
+    import numpy as np
+    import os
+    import soundfile as sf
     from scipy.signal import correlate
     
     # Cross-correlation alignment
