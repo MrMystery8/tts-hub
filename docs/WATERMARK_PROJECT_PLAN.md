@@ -1,245 +1,142 @@
-# FYP Project Plan v10: Audio Watermarking (Final)
+# FYP Project Plan v11: Audio Watermarking (Final)
 
-> **Operational details complete** — Implementation-ready
-
----
-
-## v10 Fixes Summary
-
-| v9 Issue | v10 Fix |
-|----------|---------|
-| Variable audio length | **Fixed 3s segments + collate_fn** |
-| Sample rate not enforced | **Resample to 16kHz on load** |
-| BCE numerically unstable | **BCEWithLogitsLoss** |
-| Stage-1B top-k on garbage | **Curriculum: freeze detect first** |
-| Metrics misaligned | **Payload correctness separate** |
-| FWER not explicit | **Family-wise error framing** |
+> **Acceptance criteria defined** — Implementation-ready with checklist
 
 ---
 
-## 1. Fixed-Length Pipeline
+## v11 Fixes Summary
+
+| v10 Issue | v11 Fix |
+|-----------|---------|
+| collate crashes on non-tensors | **Convert in `__getitem__`** |
+| "Freeze detect" not implemented | **`requires_grad=False`** |
+| Stage-1B warmup uses garbage | **Preamble correlation selection** |
+| FWER wording sloppy | **"Tune empirically"** |
+| Thresholds hardcoded | **Stated as "learned from validation"** |
+| Codec I/O bound | **Bulk precompute + cache** |
+| Missing conditional attribution | **Two attribution metrics** |
+| No reproducibility | **Seeds + version pinning** |
+| Overclaiming | **Acceptance criteria checklist** |
+
+---
+
+## 1. Robust Dataset with Tensor Conversion
 
 ```python
-# === GLOBAL CONSTANTS ===
-SAMPLE_RATE = 16000
-SEGMENT_SECONDS = 3.0
-SEGMENT_SAMPLES = int(SAMPLE_RATE * SEGMENT_SECONDS)  # 48000
-
-
-def load_and_prepare(path: Path) -> torch.Tensor:
+class Stage1DatasetV11(Dataset):
     """
-    Load audio with:
-    - Sample rate enforcement (resample to 16kHz)
-    - Mono conversion
-    - Fixed-length (3s = 48000 samples)
+    All type conversions in __getitem__, not collate.
+    Returns only needed fields with guaranteed types.
     """
-    audio, sr = torchaudio.load(str(path))
-    
-    # Mono
-    audio = audio.mean(dim=0)  # (T,)
-    
-    # Resample to 16kHz if needed
-    if sr != SAMPLE_RATE:
-        audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
-    
-    # Fixed length: crop or pad to SEGMENT_SAMPLES
-    T = audio.shape[0]
-    if T > SEGMENT_SAMPLES:
-        # Random crop for training
-        start = torch.randint(0, T - SEGMENT_SAMPLES + 1, (1,)).item()
-        audio = audio[start:start + SEGMENT_SAMPLES]
-    elif T < SEGMENT_SAMPLES:
-        # Pad with zeros
-        audio = F.pad(audio, (0, SEGMENT_SAMPLES - T))
-    
-    return audio  # (48000,) guaranteed
-
-
-def collate_fixed_length(batch):
-    """
-    Custom collate for fixed-length audio.
-    All tensors are already SEGMENT_SAMPLES length.
-    """
-    audios = torch.stack([item["audio"] for item in batch])  # (B, T)
-    
-    result = {"audio": audios}
-    
-    # Handle other fields
-    if "has_watermark" in batch[0]:
-        result["has_watermark"] = torch.stack([item["has_watermark"] for item in batch])
-    if "message" in batch[0]:
-        result["message"] = torch.stack([item["message"] for item in batch])
-    if "model_id" in batch[0]:
-        result["model_id"] = torch.tensor([item["model_id"] for item in batch])
-    
-    return result
-
-
-class FixedLengthDataset(Dataset):
-    """Base dataset with fixed-length segments."""
-    
     def __init__(self, manifest_path: Path, training: bool = True):
         with open(manifest_path) as f:
             self.samples = json.load(f)
         self.training = training
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> dict:
         item = self.samples[idx]
         
-        audio, sr = torchaudio.load(item["path"])
-        audio = audio.mean(dim=0)  # Mono
+        # Load and process audio
+        audio = load_and_prepare(item["path"], training=self.training)
         
-        # Resample
-        if sr != SAMPLE_RATE:
-            audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
-        
-        # Fixed length
-        T = audio.shape[0]
-        if T >= SEGMENT_SAMPLES:
-            if self.training:
-                start = torch.randint(0, T - SEGMENT_SAMPLES + 1, (1,)).item()
-            else:
-                start = (T - SEGMENT_SAMPLES) // 2  # Center crop for eval
-            audio = audio[start:start + SEGMENT_SAMPLES]
-        else:
-            audio = F.pad(audio, (0, SEGMENT_SAMPLES - T))
-        
-        return {"audio": audio, **{k: v for k, v in item.items() if k != "path"}}
-```
-
----
-
-## 2. Attack Functions with Length Preservation
-
-```python
-def apply_attack_safe(audio: torch.Tensor, attack_fn) -> torch.Tensor:
-    """
-    Apply attack and restore to SEGMENT_SAMPLES.
-    Handles length-changing attacks (time-stretch).
-    """
-    attacked = attack_fn(audio)
-    
-    T = attacked.shape[-1]
-    if T > SEGMENT_SAMPLES:
-        attacked = attacked[..., :SEGMENT_SAMPLES]
-    elif T < SEGMENT_SAMPLES:
-        attacked = F.pad(attacked, (0, SEGMENT_SAMPLES - T))
-    
-    return attacked
-
-
-EVAL_ATTACKS_SAFE = {
-    "clean": lambda x: x,
-    "mp3_64": lambda x: apply_attack_safe(x, lambda a: apply_codec(a, "mp3", 64)),
-    "mp3_128": lambda x: apply_attack_safe(x, lambda a: apply_codec(a, "mp3", 128)),
-    "time_stretch_95": lambda x: apply_attack_safe(x, lambda a: time_stretch(a, 0.95)),
-    "time_stretch_105": lambda x: apply_attack_safe(x, lambda a: time_stretch(a, 1.05)),
-    # ... etc
-}
-```
-
----
-
-## 3. BCEWithLogitsLoss (Numerically Stable)
-
-```python
-class DecoderV10(nn.Module):
-    """
-    Decoder outputs LOGITS, not probabilities.
-    More numerically stable with BCEWithLogitsLoss.
-    """
-    def __init__(self, ...):
-        ...
-        self.head_detect = nn.Linear(feat_dim, 1)  # Outputs logit
-        self.head_message = nn.Linear(feat_dim, msg_bits)  # Outputs logits
-    
-    def forward(self, audio: torch.Tensor) -> dict:
-        ...
+        # EXPLICIT type conversions (not in collate!)
         return {
-            # LOGITS (not sigmoid'd)
-            "clip_detect_logit": clip_detect_logit,
-            "all_window_logits": window_logits,       # (B, n_win)
-            "all_message_logits": message_logits,     # (B, n_win, 32)
-            
-            # Probs for inference (sigmoid applied)
-            "clip_detect_prob": torch.sigmoid(clip_detect_logit),
-            "all_window_probs": torch.sigmoid(window_logits),
-            "all_message_probs": torch.sigmoid(message_logits),
+            "audio": audio,  # torch.Tensor (SEGMENT_SAMPLES,)
+            "has_watermark": torch.tensor(
+                float(item["has_watermark"]), 
+                dtype=torch.float32
+            ),
+            # Only include fields that exist and are needed
+        }
+    
+    def __len__(self):
+        return len(self.samples)
+
+
+class Stage1BDatasetV11(Dataset):
+    """Payload dataset with explicit tensor conversion."""
+    
+    def __getitem__(self, idx) -> dict:
+        item = self.samples[idx]
+        audio = load_and_prepare(item["path"], training=self.training)
+        
+        return {
+            "audio": audio,
+            "message": torch.tensor(item["message"], dtype=torch.float32),
+            "model_id": torch.tensor(item["model_id"], dtype=torch.long),
         }
 
 
-def train_stage1_v10(decoder, loader, device, epochs=20):
-    """Training with BCEWithLogitsLoss."""
-    
-    opt = torch.optim.AdamW(decoder.parameters(), lr=3e-4)
-    
-    for epoch in range(epochs):
-        for batch in loader:
-            audio = batch["audio"].to(device)
-            has_wm = batch["has_watermark"].to(device)
-            
-            outputs = decoder(audio)
-            
-            # Per-window loss (with LOGITS)
-            n_win = outputs["all_window_logits"].shape[1]
-            has_wm_exp = has_wm.unsqueeze(1).expand(-1, n_win)
-            
-            loss_window = F.binary_cross_entropy_with_logits(
-                outputs["all_window_logits"],
-                has_wm_exp
-            )
-            
-            # Clip loss (with LOGITS)
-            loss_clip = F.binary_cross_entropy_with_logits(
-                outputs["clip_detect_logit"],
-                has_wm
-            )
-            
-            loss = loss_window + 0.5 * loss_clip
-            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+def collate_v11(batch: list) -> dict:
+    """
+    Simple collate - all tensors already have correct types.
+    """
+    return {
+        key: torch.stack([item[key] for item in batch])
+        for key in batch[0].keys()
+    }
 ```
 
 ---
 
-## 4. Stage-1B Curriculum (Freeze Detect First)
+## 2. Actual Freeze Implementation
 
 ```python
-def train_stage1b_v10(decoder, loader, device, epochs=10, warmup_epochs=3, top_k=3):
+def train_stage1b_v11(decoder, loader, device, epochs=10, warmup_epochs=3, top_k=3):
     """
-    Stage-1B with curriculum:
-    - First 3 epochs: use ALL windows (detector not trusted)
-    - Remaining: use top-k by detect prob
+    Stage-1B with ACTUAL parameter freezing during warmup.
     """
-    print("=== Stage 1B: Payload (curriculum) ===")
+    print("=== Stage 1B: Payload (with freeze) ===")
     
-    opt = torch.optim.AdamW(decoder.parameters(), lr=1e-4)
+    # Identify detect-related parameters
+    detect_params = [
+        p for n, p in decoder.named_parameters() 
+        if 'head_detect' in n or 'backbone' in n
+    ]
+    message_params = [
+        p for n, p in decoder.named_parameters()
+        if 'head_message' in n
+    ]
     
     for epoch in range(epochs):
-        use_topk = epoch >= warmup_epochs
+        in_warmup = epoch < warmup_epochs
+        
+        # ACTUALLY FREEZE detect params during warmup
+        for p in detect_params:
+            p.requires_grad = not in_warmup
+        
+        # Message params always trainable
+        for p in message_params:
+            p.requires_grad = True
+        
+        # Optimizer with only trainable params
+        trainable = [p for p in decoder.parameters() if p.requires_grad]
+        opt = torch.optim.AdamW(trainable, lr=1e-4)
         
         for batch in loader:
             audio = batch["audio"].to(device)
             message = batch["message"].to(device)
             
             outputs = decoder(audio)
-            msg_logits = outputs["all_message_logits"]  # (B, n_win, 32)
-            detect = outputs["all_window_probs"]        # (B, n_win)
+            msg_logits = outputs["all_message_logits"]
             
-            B, n_win, msg_bits = msg_logits.shape
-            
-            if use_topk:
-                # Top-k windows by detection
-                k = min(top_k, n_win)
-                _, top_idx = torch.topk(detect, k, dim=1)
-                top_idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, msg_bits)
-                selected_logits = torch.gather(msg_logits, 1, top_idx_exp)
-                avg_logits = selected_logits.mean(dim=1)
+            if in_warmup:
+                # Use PREAMBLE CORRELATION for window selection (not detect)
+                preamble_scores = compute_preamble_correlation(
+                    outputs["all_message_probs"],
+                    PREAMBLE
+                )  # (B, n_win) correlation scores
+                
+                _, top_idx = torch.topk(preamble_scores, top_k, dim=1)
             else:
-                # Warmup: all windows (don't trust detector yet)
-                avg_logits = msg_logits.mean(dim=1)
+                # After warmup: use detect prob
+                _, top_idx = torch.topk(outputs["all_window_probs"], top_k, dim=1)
+            
+            # Gather top-k message logits
+            B, n_win, msg_bits = msg_logits.shape
+            top_idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, msg_bits)
+            selected = torch.gather(msg_logits, 1, top_idx_exp)
+            avg_logits = selected.mean(dim=1)
             
             loss = F.binary_cross_entropy_with_logits(avg_logits, message)
             
@@ -247,35 +144,118 @@ def train_stage1b_v10(decoder, loader, device, epochs=10, warmup_epochs=3, top_k
             loss.backward()
             opt.step()
         
-        mode = "top-k" if use_topk else "all-windows"
-        print(f"Stage 1B Epoch {epoch+1} ({mode}): loss={loss.item():.4f}")
+        mode = "warmup (frozen detect)" if in_warmup else "normal"
+        print(f"Stage 1B Epoch {epoch+1} ({mode})")
+    
+    # Unfreeze all at end
+    for p in decoder.parameters():
+        p.requires_grad = True
+
+
+def compute_preamble_correlation(msg_probs, preamble):
+    """
+    Compute correlation with known preamble for window selection.
+    Used during warmup when detector isn't reliable.
+    """
+    # msg_probs: (B, n_win, 32)
+    # preamble: (16,) binary
+    B, n_win, _ = msg_probs.shape
+    
+    preamble_probs = msg_probs[:, :, :16]  # First 16 bits
+    preamble_exp = preamble.view(1, 1, 16).expand(B, n_win, -1)
+    
+    # Correlation: how well do probs match preamble?
+    match = (preamble_probs > 0.5).float() == preamble_exp.float()
+    correlation = match.float().mean(dim=2)  # (B, n_win)
+    
+    return correlation
 ```
 
 ---
 
-## 5. Separate Detection vs Payload Metrics
+## 3. Bulk Precompute for Codec (Avoid I/O Bound)
 
 ```python
-def evaluate_v10(decoder, loader, codec, decision_rule):
+def precompute_all_codecs(manifest_path: Path, output_dir: Path):
     """
-    Report BOTH detection and payload correctness separately.
+    BULK precompute all codec variants in one pass.
+    Avoids per-sample subprocess overhead during training.
+    """
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define all codec operations
+    codecs = [
+        ("mp3_64", ["-c:a", "libmp3lame", "-b:a", "64k"]),
+        ("mp3_128", ["-c:a", "libmp3lame", "-b:a", "128k"]),
+        ("aac_96", ["-c:a", "aac", "-b:a", "96k"]),
+    ]
+    
+    def process_one(args):
+        i, item, codec_name, codec_args = args
+        in_path = item["path"]
+        out_path = output_dir / f"{i:04d}_{codec_name}.flac"
+        
+        # Encode then decode (round-trip)
+        temp = output_dir / f"temp_{i}_{codec_name}.mp3"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", in_path] + codec_args + [str(temp)],
+            capture_output=True
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(temp), str(out_path)],
+            capture_output=True
+        )
+        temp.unlink()
+        
+        return {"path": str(out_path), "codec": codec_name, "source_idx": i}
+    
+    # Parallel processing
+    tasks = []
+    for i, item in enumerate(manifest):
+        for codec_name, codec_args in codecs:
+            tasks.append((i, item, codec_name, codec_args))
+    
+    print(f"Precomputing {len(tasks)} codec variants...")
+    
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(process_one, tasks))
+    
+    # Save manifest
+    with open(output_dir / "precomputed_manifest.json", "w") as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"Done. Saved to {output_dir}")
+```
+
+---
+
+## 4. Two Attribution Metrics
+
+```python
+def evaluate_attribution_v11(decoder, loader, codec, decision_rule):
+    """
+    Report BOTH:
+    1. Attribution accuracy on TRUE POSITIVES (correctly detected)
+    2. Attribution accuracy on ALL PREDICTED POSITIVES
     """
     results = {
-        "detection": {"probs": [], "labels": []},
-        "payload": {"correct": 0, "total": 0, "positives": 0},
+        "true_positives": {"correct_attr": 0, "total": 0},
+        "predicted_positives": {"correct_attr": 0, "total": 0},
     }
     
     for batch in loader:
         outputs = decoder(batch["audio"].to(device))
         
         for i in range(len(batch["audio"])):
-            # Detection (raw probability)
-            clip_prob = outputs["clip_detect_prob"][i].item()
-            label = batch["has_watermark"][i].item()
-            results["detection"]["probs"].append(clip_prob)
-            results["detection"]["labels"].append(label)
+            gt_label = int(batch["has_watermark"][i].item())
+            gt_model = batch["model_id"][i].item() if "model_id" in batch else None
             
-            # Payload correctness (end-to-end)
             single = {
                 "clip_detect_prob": outputs["clip_detect_prob"][i],
                 "all_window_probs": outputs["all_window_probs"][i],
@@ -284,32 +264,35 @@ def evaluate_v10(decoder, loader, codec, decision_rule):
             decision = decision_rule.decide(single, codec)
             
             if decision["positive"]:
-                results["payload"]["positives"] += 1
+                results["predicted_positives"]["total"] += 1
                 
-                # Check if decoded model_id matches ground truth
-                if label == 1 and "model_id" in batch:
-                    gt_model = batch["model_id"][i].item()
+                if gt_model is not None:
                     if decision.get("model_id") == gt_model:
-                        results["payload"]["correct"] += 1
-                    results["payload"]["total"] += 1
-    
-    # Compute metrics
-    from sklearn.metrics import roc_auc_score
-    
-    probs = np.array(results["detection"]["probs"])
-    labels = np.array(results["detection"]["labels"])
+                        results["predicted_positives"]["correct_attr"] += 1
+                    
+                    # True positive = actually watermarked AND detected
+                    if gt_label == 1:
+                        results["true_positives"]["total"] += 1
+                        if decision.get("model_id") == gt_model:
+                            results["true_positives"]["correct_attr"] += 1
     
     metrics = {
-        # Detection metrics
-        "detection_auc": roc_auc_score(labels, probs),
-        "detection_tpr_at_1pct_fpr": compute_tpr_at_fpr(labels, probs, 0.01),
-        
-        # Payload correctness (SEPARATE from detection)
-        "payload_accuracy": (
-            results["payload"]["correct"] / results["payload"]["total"]
-            if results["payload"]["total"] > 0 else None
+        # Attribution accuracy on TRUE positives (correct detection first)
+        "attr_acc_true_positive": (
+            results["true_positives"]["correct_attr"] / 
+            results["true_positives"]["total"]
+            if results["true_positives"]["total"] > 0 else None
         ),
-        "positive_rate": results["payload"]["positives"] / len(labels),
+        
+        # Attribution accuracy on ALL predicted positives (includes false positives)
+        "attr_acc_predicted_positive": (
+            results["predicted_positives"]["correct_attr"] /
+            results["predicted_positives"]["total"]
+            if results["predicted_positives"]["total"] > 0 else None
+        ),
+        
+        "n_true_positives": results["true_positives"]["total"],
+        "n_predicted_positives": results["predicted_positives"]["total"],
     }
     
     return metrics
@@ -317,64 +300,139 @@ def evaluate_v10(decoder, loader, codec, decision_rule):
 
 ---
 
-## 6. FWER Framing (Explicit)
+## 5. Reproducibility
 
 ```python
-"""
-FAMILY-WISE ERROR RATE CONSIDERATION
+def set_seed(seed: int = 42):
+    """Set all random seeds for reproducibility."""
+    import random
+    import numpy as np
+    import torch
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
+    # MPS doesn't have manual_seed_all, but torch.manual_seed covers it
+    
+    # Deterministic algorithms where possible
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-When scanning N windows per clip:
-- Per-window FPR = α
-- Clip-level FPR ≈ 1 - (1-α)^N (if independent, worse if correlated)
 
-For N=10 windows and α=0.01:
-- Naive clip FPR ≈ 9.6% (unacceptable!)
-
-Our mitigation:
-1. Report and tune at CLIP level, not window level
-2. Require BOTH high detect AND valid preamble in same window
-3. Use top-k aggregation (not "any window fires")
-
-This is analogous to Bonferroni/FWER correction mindset.
-"""
-
-# Config with explicit FWER-aware thresholds
-DECISION_CONFIG = {
-    "detect_threshold": 0.8,      # High threshold (FWER mitigation)
-    "preamble_min": 15,           # 15/16 bits match
-    "min_valid_windows": 1,       # At least 1 passes both
-    "clip_detect_min": 0.7,       # Clip-level threshold
-}
+def save_run_metadata(output_dir: Path, config: dict):
+    """Save reproducibility metadata."""
+    import subprocess
+    
+    metadata = {
+        "config": config,
+        "torch_version": torch.__version__,
+        "torchaudio_version": torchaudio.__version__,
+        "git_commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True
+        ).stdout.strip(),
+        "timestamp": datetime.now().isoformat(),
+        "seed": config.get("seed", 42),
+    }
+    
+    with open(output_dir / "run_metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
 ```
 
 ---
 
-## 7. Final Training Pipeline
+## 6. Corrected FWER Framing
 
 ```python
-def train_full_v10(encoder, decoder, config):
-    """Complete v10 training pipeline."""
+"""
+FAMILY-WISE ERROR RATE
+
+When scanning N overlapping windows:
+- Independence formula: P(any fires) = 1 - (1-α)^N
+- Reality: windows are correlated (positive dependence)
+- Effect: independence formula is only an approximation
+
+PRACTICAL APPROACH (not mathematical correction):
+- Tune thresholds at CLIP LEVEL empirically on validation set
+- Do not trust per-window thresholds directly
+- Require joint (detect + preamble) validation in same window
+
+Thresholds are LEARNED from validation, not hardcoded:
+"""
+
+class ThresholdConfig:
+    """
+    Thresholds are calibrated on validation set, not hardcoded.
+    These are initial defaults; final values come from tune_thresholds().
+    """
+    detect_threshold: float = 0.8      # Initial default
+    preamble_min: int = 15             # Initial default
+    clip_detect_min: float = 0.7       # Initial default
     
-    # Dataloaders with fixed-length collate
-    stage1_loader = DataLoader(
-        Stage1Dataset(config["stage1_manifest"]),
-        batch_size=16,
-        shuffle=True,
-        collate_fn=collate_fixed_length
-    )
-    
-    # STAGE 1: Detection (with negatives)
-    train_stage1_v10(decoder, stage1_loader, device, epochs=20)
-    
-    # STAGE 1B: Payload (with curriculum)
-    train_stage1b_v10(decoder, stage1b_loader, device, epochs=10, warmup_epochs=3)
-    
-    # STAGE 2: Encoder (differentiable, logits loss)
-    train_stage2_v10(encoder, decoder, stage2_loader, device, epochs=20)
-    
-    # STAGE 3: Joint fine-tune
-    train_stage3_v10(encoder, decoder, stage3_loader, device, epochs=10)
+    @classmethod
+    def from_validation(cls, val_results: dict):
+        """Populate from validation tuning."""
+        return cls(
+            detect_threshold=val_results["optimal_detect_thresh"],
+            preamble_min=val_results["optimal_preamble_min"],
+            clip_detect_min=val_results["optimal_clip_thresh"],
+        )
 ```
+
+---
+
+## 7. Acceptance Criteria Checklist
+
+> [!IMPORTANT]
+> **What must pass before declaring "done"**
+
+### Training Acceptance
+
+- [ ] Stage 1 loss converges (both per-window and clip BCE decrease)
+- [ ] Stage 1B payload loss decreases after warmup
+- [ ] Stage 2 quality loss (STFT) stays below threshold
+- [ ] No NaN/Inf in any loss or gradient
+
+### Detection Acceptance (on held-out test set)
+
+- [ ] Clip-level AUC > 0.95
+- [ ] TPR @ 1% FPR > 85%
+- [ ] TPR @ 5% FPR > 92%
+
+### Payload Acceptance
+
+- [ ] Valid payload rate (clean) > 90%
+- [ ] Valid payload rate (MP3-128) > 70%
+- [ ] Attribution accuracy (true positives) > 85%
+
+### Quality Acceptance
+
+- [ ] ViSQOL > 4.0 (or SNR > 30 dB if ViSQOL unavailable)
+- [ ] Subjective listening: "no noticeable difference"
+
+### Reproducibility Acceptance
+
+- [ ] `run_metadata.json` saved with git commit + versions
+- [ ] Same seed → same results (within floating point tolerance)
+
+---
+
+## 8. Claim Control
+
+> [!CAUTION]
+> **Do NOT claim the following without additional work:**
+
+| Claim | Why Not | What to Say Instead |
+|-------|---------|---------------------|
+| "Robust to removal attacks" | Not evaluated against adversarial removal | "Survives common non-adversarial transforms" |
+| "Secure attribution" | No HMAC/authentication | "Decodable attribution in benign settings" |
+| "Real-world robust" | Missing Opus, reverb, noise mixtures | "Evaluated on subset of common transforms" |
+| "Production-ready" | Not battle-tested | "Proof-of-concept validated on test set" |
 
 ---
 
@@ -382,12 +440,15 @@ def train_full_v10(encoder, decoder, config):
 
 | Ver | Issue | Status |
 |-----|-------|--------|
-| v1-v8 | Various | ✅ Fixed |
-| v9 | Variable length | ✅ Fixed 3s + collate |
-| v9 | No sr enforcement | ✅ Resample to 16k |
-| v9 | BCE unstable | ✅ BCEWithLogitsLoss |
-| v9 | Top-k on garbage | ✅ Curriculum warmup |
-| v9 | Metrics misaligned | ✅ Payload accuracy separate |
-| v9 | FWER not explicit | ✅ Documented + mitigated |
+| v1-v9 | Various | ✅ Fixed |
+| v10 | collate crashes | ✅ Convert in `__getitem__` |
+| v10 | Freeze not implemented | ✅ `requires_grad=False` |
+| v10 | Warmup uses garbage | ✅ Preamble correlation |
+| v10 | FWER wording | ✅ "Tune empirically" |
+| v10 | Hardcoded thresholds | ✅ "Learned from validation" |
+| v10 | Codec I/O bound | ✅ Bulk precompute |
+| v10 | Missing conditional attr | ✅ Two metrics |
+| v10 | No reproducibility | ✅ Seeds + version pinning |
+| v10 | Overclaiming | ✅ Acceptance criteria |
 
-**v10 is implementation-ready.**
+**v11 meets acceptance criteria definition. Ready for implementation.**
