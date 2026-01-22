@@ -188,8 +188,8 @@ class MessageCodec:
         preamble_bits = (probs[0:16] > 0.5).int()
         preamble_match = (preamble_bits == preamble.int()).sum().item()
         
-        if preamble_match < 15:
-            return {"valid": False, "reason": f"preamble ({preamble_match}/16)"}
+        # FIX: Remove hardcoded 15/16 check. Let DecisionRule be the source of truth.
+        # preamble_match is returned for the rule to check against tuned params.
         
         # SOFT-AVERAGE: average probs, then threshold
         model_probs = (probs[16:19] + probs[23:26]) / 2
@@ -309,15 +309,16 @@ class OverlapAddEncoder(nn.Module):
         # Reshape for fold
         wm = wm_flat.squeeze(1).reshape(B, N, W).permute(0, 2, 1)
         
-        # F.fold: overlap-add reconstruction
-        output = F.fold(
+        # F.fold: reconstruct WATERMARK RESIDUAL only
+        # This is safer/cleaner than reconstructing input+watermark
+        watermark_residual = F.fold(
             wm,
             output_size=(1, out_len),
             kernel_size=(1, self.window),
             stride=(1, self.hop)
         ).squeeze(2)
         
-        # Normalizer
+        # Normalizer (sum of overlapping windows)
         norm_in = torch.ones_like(wm) * self.hann.view(1, -1, 1)
         normalizer = F.fold(
             norm_in,
@@ -326,12 +327,15 @@ class OverlapAddEncoder(nn.Module):
             stride=(1, self.hop)
         ).squeeze(2).clamp(min=1e-8)
         
-        output = output / normalizer
+        watermark_residual = watermark_residual / normalizer
         
+        # Remove padding
         if pad > 0:
-            output = output[:, :, :-pad]
+            audio = audio[:, :, :-pad]  # Original audio (unpadded)
+            watermark_residual = watermark_residual[:, :, :-pad]
         
-        return output
+        # Add residual to original audio
+        return audio + watermark_residual
 ```
 
 ## 4.4 Decoder (Outputs Logits)
@@ -544,8 +548,9 @@ class ClipDecisionRule:
                 continue
             
             result = codec.decode(w_msg)
-            if not result["valid"]:
-                continue
+            result = codec.decode(w_msg)
+            # FIX: DecisionRule is the SINGLE source of truth for thresholds
+            # We check result["preamble_score"] against self.preamble_min (tuned)
             if result["preamble_score"] * 16 < self.preamble_min:
                 continue
             
@@ -628,15 +633,30 @@ class WatermarkDataset(Dataset):
         else:
             audio = F.pad(audio, (0, SEGMENT_SAMPLES - T))
         
-        # Type conversions IN __getitem__ (not collate!)
+        # Type conversions
+        model_id = int(item.get("model_id", 0))
+        version = int(item.get("version", 1))
+        
+        # FIX: Generate MESSAGE tensor on-the-fly (needed for Stage 1B/2)
+        # We need a codec instance to do this
+        # message = codec.encode(model_id, version)  <-- Handled in collate or separate dataset
+        # For simple dataloader, we can return IDs and let training loop generate msg,
+        # OR generate it here if we pass codec to Dataset init.
+        
         return {
             "audio": audio,
             "has_watermark": torch.tensor(float(item["has_watermark"]), dtype=torch.float32),
-            "model_id": torch.tensor(item.get("model_id", 0), dtype=torch.long),
+            "model_id": torch.tensor(model_id, dtype=torch.long),
+            "version": torch.tensor(version, dtype=torch.long),
         }
 
 def collate_fn(batch):
-    return {k: torch.stack([b[k] for b in batch]) for k in batch[0].keys()}
+    # Standard stack
+    batch_dict = {k: torch.stack([b[k] for b in batch]) for k in batch[0].keys()}
+    
+    # FIX: If 'message' is missing, generate it from model_id/version?
+    # Better: Pass codec to training loop and generate 'message' there from IDs.
+    return batch_dict
 ```
 
 ## 5.2 Stage 1: Detection (with Negatives!)
@@ -703,9 +723,10 @@ def train_stage1b(decoder, loader, device, preamble, epochs=10, warmup=3, top_k=
     for epoch in range(epochs):
         in_warmup = epoch < warmup
         
-        # ACTUALLY freeze detect during warmup
+        # ACTUALLY freeze BACKBONE + DETECT during warmup
+        # FIX: Freeze backbone too, not just head!
         for n, p in decoder.named_parameters():
-            if 'head_detect' in n:
+            if 'head_message' not in n:  # Freeze everything EXCEPT message head
                 p.requires_grad = not in_warmup
         
         trainable = [p for p in decoder.parameters() if p.requires_grad]
