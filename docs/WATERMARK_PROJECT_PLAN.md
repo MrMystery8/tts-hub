@@ -148,6 +148,8 @@ class MessageCodec:
     - Bits 30-31: Reserved
     
     Effective payload: 7 bits with 2× soft-average redundancy
+    
+    BUG FIX: preamble moved to device in decode() to avoid CPU/GPU mismatch
     """
     def __init__(self, key: str = "fyp2026"):
         h = hashlib.sha256(key.encode()).digest()
@@ -177,9 +179,14 @@ class MessageCodec:
         Decode with:
         - Strict preamble (15/16 match)
         - Soft-averaging (NOT OR logic!)
+        
+        BUG FIX: Move preamble to probs.device to avoid CPU/MPS mismatch!
         """
+        # FIX: Move preamble to same device as probs!
+        preamble = self.preamble.to(probs.device)
+        
         preamble_bits = (probs[0:16] > 0.5).int()
-        preamble_match = (preamble_bits == self.preamble.int()).sum().item()
+        preamble_match = (preamble_bits == preamble.int()).sum().item()
         
         if preamble_match < 15:
             return {"valid": False, "reason": f"preamble ({preamble_match}/16)"}
@@ -335,6 +342,10 @@ class WatermarkDecoder(nn.Module):
     Decoder with:
     - Pure-torch mel (MPS-safe, no torchaudio MelSpectrogram)
     - Outputs LOGITS (use BCEWithLogitsLoss)
+    
+    PERFORMANCE FIXES:
+    - Hann window cached as buffer (not recreated every forward)
+    - mel_fb already on device via register_buffer (no .to() in forward)
     """
     def __init__(self, msg_bits: int = 32, n_models: int = 8, n_fft: int = 512):
         super().__init__()
@@ -343,7 +354,9 @@ class WatermarkDecoder(nn.Module):
         self.hop = n_fft // 4
         self.n_mels = 80
         
+        # Register BOTH as buffers (avoids device copies in forward!)
         self.register_buffer('mel_fb', self._create_mel_filterbank())
+        self.register_buffer('stft_window', torch.hann_window(n_fft))
         
         # CNN backbone
         self.backbone = nn.Sequential(
@@ -389,10 +402,12 @@ class WatermarkDecoder(nn.Module):
         return torch.from_numpy(fb).float()
     
     def _compute_mel(self, audio: torch.Tensor) -> torch.Tensor:
-        window = torch.hann_window(self.n_fft, device=audio.device)
-        spec = torch.stft(audio, self.n_fft, self.hop, window=window, return_complex=True)
+        # Use cached window (no creation in forward!)
+        spec = torch.stft(audio, self.n_fft, self.hop, 
+                          window=self.stft_window, return_complex=True)
         mag = spec.abs()
-        mel = torch.matmul(self.mel_fb.to(audio.device), mag)
+        # mel_fb already on correct device via register_buffer
+        mel = torch.matmul(self.mel_fb, mag)
         return torch.log(mel + 1e-8).unsqueeze(1)
     
     def forward(self, audio: torch.Tensor) -> dict:
@@ -403,14 +418,17 @@ class WatermarkDecoder(nn.Module):
         mel = self._compute_mel(audio)
         features = self.backbone(mel).view(mel.size(0), -1)
         
+        detect_logit = self.head_detect(features)
+        message_logits = self.head_message(features)
+        
         return {
-            "detect_logit": self.head_detect(features),
-            "message_logits": self.head_message(features),
+            "detect_logit": detect_logit,
+            "message_logits": message_logits,
             "model_logits": self.head_model(features),
             
-            # Probs for inference
-            "detect_prob": torch.sigmoid(self.head_detect(features)),
-            "message_probs": torch.sigmoid(self.head_message(features)),
+            # Probs for inference (computed once, not twice!)
+            "detect_prob": torch.sigmoid(detect_logit),
+            "message_probs": torch.sigmoid(message_logits),
         }
 ```
 
@@ -420,6 +438,8 @@ class WatermarkDecoder(nn.Module):
 class SlidingWindowDecoder(nn.Module):
     """
     Wraps base decoder with sliding window + top-k aggregation.
+    
+    BUG FIX: Now returns clip_detect_logit for proper BCEWithLogitsLoss training
     """
     def __init__(self, base_decoder, window: int = 16000, hop_ratio: float = 0.5, top_k: int = 3):
         super().__init__()
@@ -448,14 +468,20 @@ class SlidingWindowDecoder(nn.Module):
         detect_logits = outputs["detect_logit"].reshape(B, n_win)
         message_logits = outputs["message_logits"].reshape(B, n_win, -1)
         
-        # Top-k aggregation
+        # Top-k aggregation (on PROBS for ranking)
         k = min(self.top_k, n_win)
         top_vals, top_idx = torch.topk(detect, k, dim=1)
-        clip_detect = top_vals.mean(dim=1)
+        clip_detect_prob = top_vals.mean(dim=1)
+        
+        # BUG FIX: Also aggregate LOGITS for training!
+        # Gather top-k logits and average (for BCEWithLogitsLoss)
+        top_logits = torch.gather(detect_logits, 1, top_idx)
+        clip_detect_logit = top_logits.mean(dim=1)
         
         return {
-            # Clip-level
-            "clip_detect_prob": clip_detect,
+            # Clip-level (BOTH prob and logit!)
+            "clip_detect_prob": clip_detect_prob,
+            "clip_detect_logit": clip_detect_logit,  # FIX: For BCEWithLogitsLoss!
             
             # Per-window (for decision rule)
             "all_window_probs": detect,
@@ -478,22 +504,41 @@ class ClipDecisionRule:
     """
     Clip-level decision with FWER awareness.
     Thresholds tuned on validation set, not hardcoded.
+    
+    BUG FIX: Accepts SINGLE CLIP outputs (not batched).
+    For batched inference, call decide() per clip.
     """
     def __init__(self, detect_threshold: float = 0.8, preamble_min: int = 15):
         self.detect_threshold = detect_threshold
         self.preamble_min = preamble_min
     
     def decide(self, outputs: dict, codec: MessageCodec) -> dict:
-        clip_prob = outputs["clip_detect_prob"].item()
+        """
+        Expects SINGLE CLIP outputs:
+        - clip_detect_prob: scalar or (1,) tensor
+        - all_window_probs: (n_win,) tensor
+        - all_message_probs: (n_win, 32) tensor
+        
+        For batched: call this per clip with sliced outputs.
+        """
+        # Handle both scalar and tensor
+        clip_prob = outputs["clip_detect_prob"]
+        if hasattr(clip_prob, 'item'):
+            clip_prob = clip_prob.item()
         
         if clip_prob < self.detect_threshold:
             return {"positive": False, "reason": "clip_detect_low"}
         
-        # Check per-window validity
+        # FIX: Explicitly handle per-window indexing
+        window_probs = outputs["all_window_probs"]  # (n_win,)
+        message_probs = outputs["all_message_probs"]  # (n_win, 32)
+        
+        n_win = window_probs.shape[0]
+        
         valid_windows = []
-        for w_idx in range(outputs["all_window_probs"].shape[0]):
-            w_detect = outputs["all_window_probs"][w_idx].item()
-            w_msg = outputs["all_message_probs"][w_idx]
+        for w_idx in range(n_win):
+            w_detect = window_probs[w_idx].item()
+            w_msg = message_probs[w_idx]  # (32,)
             
             if w_detect < self.detect_threshold:
                 continue
@@ -525,6 +570,25 @@ class ClipDecisionRule:
             "valid_windows": len(valid_windows),
             "clip_detect_prob": clip_prob,
         }
+
+
+def decide_batch(outputs: dict, codec: MessageCodec, rule: ClipDecisionRule) -> list:
+    """
+    Helper to run decision rule on batched outputs.
+    Returns list of decisions, one per clip.
+    """
+    B = outputs["clip_detect_prob"].shape[0]
+    decisions = []
+    
+    for b in range(B):
+        single = {
+            "clip_detect_prob": outputs["clip_detect_prob"][b],
+            "all_window_probs": outputs["all_window_probs"][b],
+            "all_message_probs": outputs["all_message_probs"][b],
+        }
+        decisions.append(rule.decide(single, codec))
+    
+    return decisions
 ```
 
 ---
@@ -582,6 +646,8 @@ def train_stage1(decoder, loader, device, epochs=20):
     """
     Train detection on BOTH positives and negatives.
     Uses per-window + clip-level loss for stable gradients.
+    
+    BUG FIX: Use clip_detect_LOGIT (not prob) with BCEWithLogitsLoss!
     """
     opt = torch.optim.AdamW(decoder.parameters(), lr=3e-4)
     
@@ -592,17 +658,17 @@ def train_stage1(decoder, loader, device, epochs=20):
             
             outputs = decoder(audio)
             
-            # Per-window loss (stable gradients)
+            # Per-window loss (stable gradients) - LOGITS
             n_win = outputs["all_window_logits"].shape[1]
             has_wm_exp = has_wm.unsqueeze(1).expand(-1, n_win)
             loss_window = F.binary_cross_entropy_with_logits(
                 outputs["all_window_logits"], has_wm_exp
             )
             
-            # Clip loss
+            # Clip loss - FIX: Use LOGIT, not prob!
             loss_clip = F.binary_cross_entropy_with_logits(
-                outputs["clip_detect_prob"].unsqueeze(1),  # Shape fix
-                has_wm.unsqueeze(1)
+                outputs["clip_detect_logit"],  # FIX: logit, not prob!
+                has_wm
             )
             
             loss = loss_window + 0.5 * loss_clip
