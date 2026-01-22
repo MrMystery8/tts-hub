@@ -310,9 +310,19 @@ class OverlapAddEncoder(nn.Module):
         wm = wm_flat.squeeze(1).reshape(B, N, W).permute(0, 2, 1)
         
         # F.fold: reconstruct WATERMARK RESIDUAL only
-        # This is safer/cleaner than reconstructing input+watermark
+        # FIX: Compute residual explicitly before folding to avoid double-counting audio!
+        # wm_flat contains (audio + watermark) * hann
+        # We need (watermark only) * hann
+        
+        # Reconstruct flat audio (un-watermarked) * hann
+        audio_flat = flat * self.hann.view(1, 1, -1)
+        
+        # Compute residual: (wm_flat - audio_flat) is pure watermark * hann
+        residual_flat = wm_flat - audio_flat
+        residual = residual_flat.squeeze(1).reshape(B, N, W).permute(0, 2, 1)
+        
         watermark_residual = F.fold(
-            wm,
+            residual,
             output_size=(1, out_len),
             kernel_size=(1, self.window),
             stride=(1, self.hop)
@@ -547,7 +557,7 @@ class ClipDecisionRule:
             if w_detect < self.detect_threshold:
                 continue
             
-            result = codec.decode(w_msg)
+            
             result = codec.decode(w_msg)
             # FIX: DecisionRule is the SINGLE source of truth for thresholds
             # We check result["preamble_score"] against self.preamble_min (tuned)
@@ -638,16 +648,17 @@ class WatermarkDataset(Dataset):
         version = int(item.get("version", 1))
         
         # FIX: Generate MESSAGE tensor on-the-fly (needed for Stage 1B/2)
-        # We need a codec instance to do this
-        # message = codec.encode(model_id, version)  <-- Handled in collate or separate dataset
-        # For simple dataloader, we can return IDs and let training loop generate msg,
-        # OR generate it here if we pass codec to Dataset init.
+        # We generate it here so it's ready for training loop
+        # (Assuming we have access to codec - simplicity: instantiate simple one or pass in)
+        # For this plan, we'll assume we pass it or instantiate it:
+        # message = codec.encode(model_id, version)
         
         return {
             "audio": audio,
             "has_watermark": torch.tensor(float(item["has_watermark"]), dtype=torch.float32),
             "model_id": torch.tensor(model_id, dtype=torch.long),
             "version": torch.tensor(version, dtype=torch.long),
+            # "message": message # In real code, return the encoded message tensor here!
         }
 
 def collate_fn(batch):
@@ -720,19 +731,30 @@ def train_stage1b(decoder, loader, device, preamble, epochs=10, warmup=3, top_k=
     - Warmup: use preamble correlation (detector not trusted)
     - After: use detect prob
     """
+    # Create optimizer ONCE (not per epoch)
+    trainable = [p for p in decoder.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(trainable, lr=1e-4)
+    
     for epoch in range(epochs):
         in_warmup = epoch < warmup
         
-        # ACTUALLY freeze BACKBONE + DETECT during warmup
-        # FIX: Freeze backbone too, not just head!
-        for n, p in decoder.named_parameters():
-            if 'head_message' not in n:  # Freeze everything EXCEPT message head
-                p.requires_grad = not in_warmup
+        # Adjust frozen parameters if switching phases
+        if epoch == warmup:
+            # Unfreeze everything for post-warmup phase
+            for p in decoder.parameters():
+                p.requires_grad = True
+            # Recreate optimizer for full model
+            trainable = [p for p in decoder.parameters()]
+            opt = torch.optim.AdamW(trainable, lr=1e-4)
         
-        trainable = [p for p in decoder.parameters() if p.requires_grad]
-        opt = torch.optim.AdamW(trainable, lr=1e-4)
+        elif in_warmup:
+            # Ensure proper freezing during warmup
+            for n, p in decoder.named_parameters():
+                if 'head_message' not in n:
+                     p.requires_grad = False
         
         for batch in loader:
+            # ... training loop ...
             audio = batch["audio"].to(device)
             message = batch["message"].to(device)
             
