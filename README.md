@@ -1,40 +1,99 @@
-# TTS Hub
+# TTS Hub: Unified Audio Generation Platform
 
-Single local Web UI that routes to multiple Apple-Silicon-friendly TTS / voice-cloning stacks:
+> **Status:** Active Development (FYP Phase: Watermark Classifier Training)
 
-- `index-tts` (IndexTTS2)
-- `chatterbox-multilingual` (Chatterbox Multilingual)
-- `f5-hindi-urdu` (F5 Hindi/Urdu)
-- `cosyvoice3-mlx` (CosyVoice3-MLX)
-- `pocket-tts` (Pocket TTS)
-- `voxcpm-ane` (VoxCPM-ANE)
+A centralized hub for running and managing multiple Apple Silicon-optimized TTS and voice cloning models. Now integrating **Audio Provenance Watermarking** with trained supervised classification.
 
-## Requirements
+---
 
-- `ffmpeg` available on `PATH` (macOS: `brew install ffmpeg`)
-- A Python env for the hub itself:
-  - `python3 -m venv .venv && source .venv/bin/activate`
-  - `pip install -r requirements.txt`
-- Each model repo is expected to exist next to `tts-hub/`, and to have its own `.venv` at `<repo>/.venv/`.
+## 🏗️ Architecture
 
-## Run
+TTS Hub unifies 6 distinct inference stacks under a single API and Web UI:
 
-From the repo root:
+| Model | Type | Architecture | Optimization |
+|-------|------|--------------|--------------|
+| **IndexTTS2** | Voice Cloning | Retrieval-based VC | MPS (High) |
+| **Chatterbox** | Multilingual TTS | Transformer | MTL / Ane |
+| **F5 Hindi/Urdu** | TTS | F5-TTS | CoreML |
+| **CosyVoice3** | Voice Cloning | Flow Matching | MLX |
+| **PocketTTS** | Lightweight TTS | VITS | CPU/Mobile |
+| **VoxCPM-ANE** | Voice Cloning | GPT-VITS | ANE (Neural Engine) |
 
-```bash
-python3 tts-hub/webui.py --port 7891
+## 🌊 Current Focus: Watermarking w/ Trained Classifier
+
+We are implementing an end-to-end watermarking system to detect AI-generated audio and attribute it to specific models.
+
+**Key Components:**
+- **Watermark Module (`watermark/`):** Custom WavMark-inspired encoder/decoder implementation.
+- **Dataset Pipeline (`dataset/`):** Scripts to generate standard & attacked samples from all 6 models.
+- **Classifier (`checkpoints/`):** PyTorch model trained from scratch to detect provenance.
+
+👉 **See [docs/WATERMARK_PROJECT_PLAN.md](docs/WATERMARK_PROJECT_PLAN.md) for the full FYP specification.**
+
+---
+
+## 📂 Project Structure
+
+```
+tts-hub/
+├── custom_ui/          # Unified Web Interface (HTML/JS/CSS)
+├── hub/                # Core Logic (Model Registry, Process Management)
+├── workers/            # Independent Worker Scripts for each Model
+├── watermark/          # [NEW] Encoder/Decoder Model Implementation
+├── dataset/            # [NEW] Dataset Generation & Augmentation
+├── scripts/            # [NEW] Training & Utility Scripts
+├── docs/               # Project Documentation
+└── webui.py            # Main Entry Point
 ```
 
-Open `http://localhost:7891`.
+## 🚀 Quick Start
 
-## Quick Diagnostics
+### 1. Prerequisites
+- macOS (Apple Silicon recommended)
+- `ffmpeg` installed (`brew install ffmpeg`)
+- Python 3.10+
 
+### 2. Installation
 ```bash
-python3 tts-hub/tools/doctor.py
+# Clone and setup environment
+git clone https://github.com/yourusername/tts-hub.git
+cd tts-hub
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-## Docs
+### 3. Run the Hub
+```bash
+# Start the Web UI
+./run.sh
+# OR manually: python webui.py
+```
+Access the UI at: `http://localhost:7860`
 
-- `tts-hub/SPEC_SHEET.md`
-- `tts-hub/IMPLEMENTATION_SUMMARY.md`
-- `tts-hub/ROADMAP_AND_IMPROVEMENTS.md`
+### 4. Run Watermark Training (Upcoming)
+```bash
+# Generate dataset
+python -m dataset.generate
+# Train classifier
+python -m watermark.train
+```
+
+---
+
+## 📚 Documentation
+
+Detailed documentation has been moved to the `docs/` folder:
+- **[Watermark Project Plan](docs/WATERMARK_PROJECT_PLAN.md)** - Comprehensive FYP plan
+- **[Roadmap](docs/ROADMAP_AND_IMPROVEMENTS.md)** - Future features
+- **[Spec Sheet](docs/SPEC_SHEET.md)** - Technical specifications
+- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)** - Dev logs
+
+---
+
+## 🛠️ Diagnostics
+
+If models fail to load or environment issues occur:
+```bash
+python tools/doctor.py
+```
