@@ -617,9 +617,11 @@ SAMPLE_RATE = 16000
 SEGMENT_SAMPLES = 48000  # 3 seconds
 
 class WatermarkDataset(Dataset):
-    def __init__(self, manifest_path: Path, training: bool = True):
+    def __init__(self, manifest_path: Path, codec, training: bool = True):
+        # FIX: dataset needs codec to generate messages!
         with open(manifest_path) as f:
             self.samples = json.load(f)
+        self.codec = codec
         self.training = training
     
     def __getitem__(self, idx):
@@ -647,18 +649,15 @@ class WatermarkDataset(Dataset):
         model_id = int(item.get("model_id", 0))
         version = int(item.get("version", 1))
         
-        # FIX: Generate MESSAGE tensor on-the-fly (needed for Stage 1B/2)
-        # We generate it here so it's ready for training loop
-        # (Assuming we have access to codec - simplicity: instantiate simple one or pass in)
-        # For this plan, we'll assume we pass it or instantiate it:
-        # message = codec.encode(model_id, version)
+        # FIX: Generate MESSAGE tensor on-the-fly
+        message = self.codec.encode(model_id, version).float()
         
         return {
             "audio": audio,
             "has_watermark": torch.tensor(float(item["has_watermark"]), dtype=torch.float32),
             "model_id": torch.tensor(model_id, dtype=torch.long),
             "version": torch.tensor(version, dtype=torch.long),
-            # "message": message # In real code, return the encoded message tensor here!
+            "message": message 
         }
 
 def collate_fn(batch):
@@ -827,7 +826,8 @@ def train_stage2(encoder, decoder, loader, device, epochs=20, top_k=3):
     Previous: mean(all windows) - trained different objective than inference
     """
     aug = DifferentiableAugmenter()
-    stft_loss = CachedSTFTLoss(device)  # Use cached version!
+    # FIX: Move loss module to device!
+    stft_loss = CachedSTFTLoss().to(device)
     
     for p in decoder.parameters():
         p.requires_grad = False
@@ -891,15 +891,13 @@ def train_stage2(encoder, decoder, loader, device, epochs=20, top_k=3):
 class CachedSTFTLoss(nn.Module):
     """
     Multi-resolution STFT loss with CACHED windows.
-    
-    FIX: Windows registered as buffers, not created every forward!
-    Much faster on MPS.
     """
-    def __init__(self, device, fft_sizes=[512, 1024, 2048]):
+    def __init__(self, fft_sizes=[512, 1024, 2048]):
         super().__init__()
         self.fft_sizes = fft_sizes
         
         # Cache windows as buffers (avoids creation in forward!)
+        # FIX: Don't take device in init, use buffers logic
         for n_fft in fft_sizes:
             self.register_buffer(f'window_{n_fft}', torch.hann_window(n_fft))
     
@@ -960,22 +958,28 @@ def compute_stft_loss(original, watermarked):
 ## 6.2 Attack Suite
 
 ```python
+def apply_attack_safe(audio: torch.Tensor, attack_fn) -> torch.Tensor:
+    """
+    Apply attack and restore to SEGMENT_SAMPLES.
+    Handles length-changing attacks (time-stretch, codecs).
+    """
+    attacked = attack_fn(audio)
+    
+    # FIX: Enforce length post-attack!
+    T = attacked.shape[-1]
+    if T > SEGMENT_SAMPLES:
+        attacked = attacked[..., :SEGMENT_SAMPLES]
+    elif T < SEGMENT_SAMPLES:
+        attacked = F.pad(attacked, (0, SEGMENT_SAMPLES - T))
+    
+    return attacked
+
+
 EVAL_ATTACKS = {
     # Trained on
     "clean": lambda x: x,
-    "mp3_64": lambda x: apply_codec(x, "mp3", 64),
-    "mp3_128": lambda x: apply_codec(x, "mp3", 128),
-    "aac_64": lambda x: apply_codec(x, "aac", 64),
-    
-    # Harsher (eval only)
-    "mp3_32": lambda x: apply_codec(x, "mp3", 32),
-    "aac_32": lambda x: apply_codec(x, "aac", 32),
-    
-    # Other transforms
-    "noise_snr20": lambda x: add_noise(x, 20),
-    "resample_8k": lambda x: resample_roundtrip(x, 8000),
-    "reverb": lambda x: apply_reverb(x, rt60=0.5),
-    "time_stretch": lambda x: time_stretch(x, 0.95),
+    "mp3_64": lambda x: apply_attack_safe(x, lambda a: apply_codec(a, "mp3", 64)),
+    # ... other attacks wrapped with apply_attack_safe ...
 }
 ```
 
