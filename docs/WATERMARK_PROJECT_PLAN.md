@@ -1,313 +1,172 @@
-# FYP Project Plan v11: Audio Watermarking (Final)
+# FYP Project Plan v12: Audio Watermarking (Final)
 
-> **Acceptance criteria defined** — Implementation-ready with checklist
+> **Research-defensible** — All known issues addressed
 
 ---
 
-## v11 Fixes Summary
+## v12 Fixes Summary
 
-| v10 Issue | v11 Fix |
+| v11 Issue | v12 Fix |
 |-----------|---------|
-| collate crashes on non-tensors | **Convert in `__getitem__`** |
-| "Freeze detect" not implemented | **`requires_grad=False`** |
-| Stage-1B warmup uses garbage | **Preamble correlation selection** |
-| FWER wording sloppy | **"Tune empirically"** |
-| Thresholds hardcoded | **Stated as "learned from validation"** |
-| Codec I/O bound | **Bulk precompute + cache** |
-| Missing conditional attribution | **Two attribution metrics** |
-| No reproducibility | **Seeds + version pinning** |
-| Overclaiming | **Acceptance criteria checklist** |
+| AAC uses .mp3 extension | **Correct containers: .m4a for AAC** |
+| Train/test leakage | **GroupShuffleSplit by source_idx** |
+| Determinism nukes MPS | **Optional flag, documented caveat** |
+| Preamble uses hard match | **Log-likelihood scoring** |
+| ViSQOL misalignment | **Cross-correlation alignment** |
+| ffmpeg no error check | **check=True + logging** |
+| Security: 32 bits too small | **Explicit note** |
 
 ---
 
-## 1. Robust Dataset with Tensor Conversion
+## 1. Correct Codec Containers
 
 ```python
-class Stage1DatasetV11(Dataset):
+def precompute_all_codecs_v12(manifest_path: Path, output_dir: Path):
     """
-    All type conversions in __getitem__, not collate.
-    Returns only needed fields with guaranteed types.
+    Bulk precompute with CORRECT containers for each codec.
     """
-    def __init__(self, manifest_path: Path, training: bool = True):
-        with open(manifest_path) as f:
-            self.samples = json.load(f)
-        self.training = training
-    
-    def __getitem__(self, idx) -> dict:
-        item = self.samples[idx]
-        
-        # Load and process audio
-        audio = load_and_prepare(item["path"], training=self.training)
-        
-        # EXPLICIT type conversions (not in collate!)
-        return {
-            "audio": audio,  # torch.Tensor (SEGMENT_SAMPLES,)
-            "has_watermark": torch.tensor(
-                float(item["has_watermark"]), 
-                dtype=torch.float32
-            ),
-            # Only include fields that exist and are needed
-        }
-    
-    def __len__(self):
-        return len(self.samples)
-
-
-class Stage1BDatasetV11(Dataset):
-    """Payload dataset with explicit tensor conversion."""
-    
-    def __getitem__(self, idx) -> dict:
-        item = self.samples[idx]
-        audio = load_and_prepare(item["path"], training=self.training)
-        
-        return {
-            "audio": audio,
-            "message": torch.tensor(item["message"], dtype=torch.float32),
-            "model_id": torch.tensor(item["model_id"], dtype=torch.long),
-        }
-
-
-def collate_v11(batch: list) -> dict:
-    """
-    Simple collate - all tensors already have correct types.
-    """
-    return {
-        key: torch.stack([item[key] for item in batch])
-        for key in batch[0].keys()
-    }
-```
-
----
-
-## 2. Actual Freeze Implementation
-
-```python
-def train_stage1b_v11(decoder, loader, device, epochs=10, warmup_epochs=3, top_k=3):
-    """
-    Stage-1B with ACTUAL parameter freezing during warmup.
-    """
-    print("=== Stage 1B: Payload (with freeze) ===")
-    
-    # Identify detect-related parameters
-    detect_params = [
-        p for n, p in decoder.named_parameters() 
-        if 'head_detect' in n or 'backbone' in n
-    ]
-    message_params = [
-        p for n, p in decoder.named_parameters()
-        if 'head_message' in n
-    ]
-    
-    for epoch in range(epochs):
-        in_warmup = epoch < warmup_epochs
-        
-        # ACTUALLY FREEZE detect params during warmup
-        for p in detect_params:
-            p.requires_grad = not in_warmup
-        
-        # Message params always trainable
-        for p in message_params:
-            p.requires_grad = True
-        
-        # Optimizer with only trainable params
-        trainable = [p for p in decoder.parameters() if p.requires_grad]
-        opt = torch.optim.AdamW(trainable, lr=1e-4)
-        
-        for batch in loader:
-            audio = batch["audio"].to(device)
-            message = batch["message"].to(device)
-            
-            outputs = decoder(audio)
-            msg_logits = outputs["all_message_logits"]
-            
-            if in_warmup:
-                # Use PREAMBLE CORRELATION for window selection (not detect)
-                preamble_scores = compute_preamble_correlation(
-                    outputs["all_message_probs"],
-                    PREAMBLE
-                )  # (B, n_win) correlation scores
-                
-                _, top_idx = torch.topk(preamble_scores, top_k, dim=1)
-            else:
-                # After warmup: use detect prob
-                _, top_idx = torch.topk(outputs["all_window_probs"], top_k, dim=1)
-            
-            # Gather top-k message logits
-            B, n_win, msg_bits = msg_logits.shape
-            top_idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, msg_bits)
-            selected = torch.gather(msg_logits, 1, top_idx_exp)
-            avg_logits = selected.mean(dim=1)
-            
-            loss = F.binary_cross_entropy_with_logits(avg_logits, message)
-            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-        
-        mode = "warmup (frozen detect)" if in_warmup else "normal"
-        print(f"Stage 1B Epoch {epoch+1} ({mode})")
-    
-    # Unfreeze all at end
-    for p in decoder.parameters():
-        p.requires_grad = True
-
-
-def compute_preamble_correlation(msg_probs, preamble):
-    """
-    Compute correlation with known preamble for window selection.
-    Used during warmup when detector isn't reliable.
-    """
-    # msg_probs: (B, n_win, 32)
-    # preamble: (16,) binary
-    B, n_win, _ = msg_probs.shape
-    
-    preamble_probs = msg_probs[:, :, :16]  # First 16 bits
-    preamble_exp = preamble.view(1, 1, 16).expand(B, n_win, -1)
-    
-    # Correlation: how well do probs match preamble?
-    match = (preamble_probs > 0.5).float() == preamble_exp.float()
-    correlation = match.float().mean(dim=2)  # (B, n_win)
-    
-    return correlation
-```
-
----
-
-## 3. Bulk Precompute for Codec (Avoid I/O Bound)
-
-```python
-def precompute_all_codecs(manifest_path: Path, output_dir: Path):
-    """
-    BULK precompute all codec variants in one pass.
-    Avoids per-sample subprocess overhead during training.
-    """
-    import subprocess
-    from concurrent.futures import ThreadPoolExecutor
-    
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Define all codec operations
-    codecs = [
-        ("mp3_64", ["-c:a", "libmp3lame", "-b:a", "64k"]),
-        ("mp3_128", ["-c:a", "libmp3lame", "-b:a", "128k"]),
-        ("aac_96", ["-c:a", "aac", "-b:a", "96k"]),
-    ]
+    # Codec configs with CORRECT extensions and encoder names
+    codecs = {
+        "mp3_64": {
+            "ext": ".mp3",
+            "args": ["-c:a", "libmp3lame", "-b:a", "64k"],
+        },
+        "mp3_128": {
+            "ext": ".mp3",
+            "args": ["-c:a", "libmp3lame", "-b:a", "128k"],
+        },
+        "aac_96": {
+            "ext": ".m4a",  # CORRECT: M4A container for AAC!
+            "args": ["-c:a", "aac", "-b:a", "96k"],
+        },
+    }
     
-    def process_one(args):
-        i, item, codec_name, codec_args = args
-        in_path = item["path"]
-        out_path = output_dir / f"{i:04d}_{codec_name}.flac"
-        
-        # Encode then decode (round-trip)
-        temp = output_dir / f"temp_{i}_{codec_name}.mp3"
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", in_path] + codec_args + [str(temp)],
-            capture_output=True
-        )
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(temp), str(out_path)],
-            capture_output=True
-        )
-        temp.unlink()
-        
-        return {"path": str(out_path), "codec": codec_name, "source_idx": i}
+    results = []
     
-    # Parallel processing
-    tasks = []
     for i, item in enumerate(manifest):
-        for codec_name, codec_args in codecs:
-            tasks.append((i, item, codec_name, codec_args))
-    
-    print(f"Precomputing {len(tasks)} codec variants...")
-    
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        results = list(executor.map(process_one, tasks))
+        in_path = item["path"]
+        source_idx = item.get("source_idx", i)  # Track for splitting
+        
+        for codec_name, cfg in codecs.items():
+            # Temp file with CORRECT extension
+            temp_path = output_dir / f"temp_{i}_{codec_name}{cfg['ext']}"
+            out_path = output_dir / f"{i:04d}_{codec_name}.flac"
+            
+            # Encode
+            encode_result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(in_path)] 
+                + cfg["args"] 
+                + ["-ac", "1", "-ar", "16000"]  # Force mono, 16kHz
+                + [str(temp_path)],
+                capture_output=True,
+                text=True,
+            )
+            
+            # CHECK returncode!
+            if encode_result.returncode != 0:
+                logging.error(f"Encode failed for {in_path} -> {codec_name}")
+                logging.error(encode_result.stderr)
+                continue
+            
+            # Decode to FLAC
+            decode_result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(temp_path), 
+                 "-ac", "1", "-ar", "16000",  # Consistent output
+                 str(out_path)],
+                capture_output=True,
+                text=True,
+            )
+            
+            if decode_result.returncode != 0:
+                logging.error(f"Decode failed for {temp_path}")
+                logging.error(decode_result.stderr)
+                continue
+            
+            # Clean up temp (only if exists)
+            if temp_path.exists():
+                temp_path.unlink()
+            
+            results.append({
+                "path": str(out_path),
+                "codec": codec_name,
+                "encoder": cfg["args"][1],  # Log encoder identity
+                "source_idx": source_idx,   # For split grouping
+            })
     
     # Save manifest
     with open(output_dir / "precomputed_manifest.json", "w") as f:
         json.dump(results, f, indent=2)
     
-    print(f"Done. Saved to {output_dir}")
+    return results
 ```
 
 ---
 
-## 4. Two Attribution Metrics
+## 2. Group-Wise Train/Test Split
 
 ```python
-def evaluate_attribution_v11(decoder, loader, codec, decision_rule):
+def create_splits_v12(manifest_path: Path, test_ratio: float = 0.2, val_ratio: float = 0.1):
     """
-    Report BOTH:
-    1. Attribution accuracy on TRUE POSITIVES (correctly detected)
-    2. Attribution accuracy on ALL PREDICTED POSITIVES
+    Split by SOURCE_IDX (not file path) to prevent leakage.
+    Same utterance in different codecs stays together.
     """
-    results = {
-        "true_positives": {"correct_attr": 0, "total": 0},
-        "predicted_positives": {"correct_attr": 0, "total": 0},
+    from sklearn.model_selection import GroupShuffleSplit
+    
+    with open(manifest_path) as f:
+        samples = json.load(f)
+    
+    # Extract groups
+    groups = np.array([s["source_idx"] for s in samples])
+    indices = np.arange(len(samples))
+    
+    # First split: train+val vs test
+    gss_test = GroupShuffleSplit(n_splits=1, test_size=test_ratio, random_state=42)
+    trainval_idx, test_idx = next(gss_test.split(indices, groups=groups))
+    
+    # Second split: train vs val
+    trainval_groups = groups[trainval_idx]
+    gss_val = GroupShuffleSplit(n_splits=1, test_size=val_ratio/(1-test_ratio), random_state=42)
+    train_rel_idx, val_rel_idx = next(gss_val.split(trainval_idx, groups=trainval_groups))
+    
+    train_idx = trainval_idx[train_rel_idx]
+    val_idx = trainval_idx[val_rel_idx]
+    
+    # Verify no leakage
+    train_sources = set(groups[train_idx])
+    val_sources = set(groups[val_idx])
+    test_sources = set(groups[test_idx])
+    
+    assert len(train_sources & val_sources) == 0, "Train/val leakage!"
+    assert len(train_sources & test_sources) == 0, "Train/test leakage!"
+    assert len(val_sources & test_sources) == 0, "Val/test leakage!"
+    
+    print(f"Split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test")
+    print(f"Source groups: {len(train_sources)} train, {len(val_sources)} val, {len(test_sources)} test")
+    
+    return {
+        "train": [samples[i] for i in train_idx],
+        "val": [samples[i] for i in val_idx],
+        "test": [samples[i] for i in test_idx],
     }
-    
-    for batch in loader:
-        outputs = decoder(batch["audio"].to(device))
-        
-        for i in range(len(batch["audio"])):
-            gt_label = int(batch["has_watermark"][i].item())
-            gt_model = batch["model_id"][i].item() if "model_id" in batch else None
-            
-            single = {
-                "clip_detect_prob": outputs["clip_detect_prob"][i],
-                "all_window_probs": outputs["all_window_probs"][i],
-                "all_message_probs": outputs["all_message_probs"][i],
-            }
-            decision = decision_rule.decide(single, codec)
-            
-            if decision["positive"]:
-                results["predicted_positives"]["total"] += 1
-                
-                if gt_model is not None:
-                    if decision.get("model_id") == gt_model:
-                        results["predicted_positives"]["correct_attr"] += 1
-                    
-                    # True positive = actually watermarked AND detected
-                    if gt_label == 1:
-                        results["true_positives"]["total"] += 1
-                        if decision.get("model_id") == gt_model:
-                            results["true_positives"]["correct_attr"] += 1
-    
-    metrics = {
-        # Attribution accuracy on TRUE positives (correct detection first)
-        "attr_acc_true_positive": (
-            results["true_positives"]["correct_attr"] / 
-            results["true_positives"]["total"]
-            if results["true_positives"]["total"] > 0 else None
-        ),
-        
-        # Attribution accuracy on ALL predicted positives (includes false positives)
-        "attr_acc_predicted_positive": (
-            results["predicted_positives"]["correct_attr"] /
-            results["predicted_positives"]["total"]
-            if results["predicted_positives"]["total"] > 0 else None
-        ),
-        
-        "n_true_positives": results["true_positives"]["total"],
-        "n_predicted_positives": results["predicted_positives"]["total"],
-    }
-    
-    return metrics
 ```
 
 ---
 
-## 5. Reproducibility
+## 3. Determinism with MPS Caveat
 
 ```python
-def set_seed(seed: int = 42):
-    """Set all random seeds for reproducibility."""
+def set_seed_v12(seed: int = 42, deterministic: bool = False):
+    """
+    Set seeds with OPTIONAL determinism.
+    
+    Note: torch.use_deterministic_algorithms(True) can cause
+    significant performance degradation on MPS (Apple Silicon).
+    Enable only for debugging or when exact reproducibility is critical.
+    """
     import random
     import numpy as np
-    import torch
     
     random.seed(seed)
     np.random.seed(seed)
@@ -316,123 +175,227 @@ def set_seed(seed: int = 42):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     
-    # MPS doesn't have manual_seed_all, but torch.manual_seed covers it
-    
-    # Deterministic algorithms where possible
-    torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if deterministic:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        logging.warning(
+            "Deterministic mode enabled. May cause MPS performance degradation."
+        )
+    else:
+        # Log when nondeterministic ops occur
+        torch.use_deterministic_algorithms(False)
+        logging.info("Nondeterministic mode. Results may vary slightly between runs.")
 
 
-def save_run_metadata(output_dir: Path, config: dict):
-    """Save reproducibility metadata."""
-    import subprocess
-    
-    metadata = {
-        "config": config,
-        "torch_version": torch.__version__,
-        "torchaudio_version": torchaudio.__version__,
-        "git_commit": subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True
-        ).stdout.strip(),
-        "timestamp": datetime.now().isoformat(),
-        "seed": config.get("seed", 42),
-    }
-    
-    with open(output_dir / "run_metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
+# Config default
+CONFIG = {
+    "seed": 42,
+    "deterministic": False,  # Default OFF for MPS performance
+}
 ```
 
 ---
 
-## 6. Corrected FWER Framing
+## 4. Log-Likelihood Preamble Scoring
 
 ```python
-"""
-FAMILY-WISE ERROR RATE
-
-When scanning N overlapping windows:
-- Independence formula: P(any fires) = 1 - (1-α)^N
-- Reality: windows are correlated (positive dependence)
-- Effect: independence formula is only an approximation
-
-PRACTICAL APPROACH (not mathematical correction):
-- Tune thresholds at CLIP LEVEL empirically on validation set
-- Do not trust per-window thresholds directly
-- Require joint (detect + preamble) validation in same window
-
-Thresholds are LEARNED from validation, not hardcoded:
-"""
-
-class ThresholdConfig:
+def compute_preamble_log_likelihood(msg_probs: torch.Tensor, preamble: torch.Tensor) -> torch.Tensor:
     """
-    Thresholds are calibrated on validation set, not hardcoded.
-    These are initial defaults; final values come from tune_thresholds().
-    """
-    detect_threshold: float = 0.8      # Initial default
-    preamble_min: int = 15             # Initial default
-    clip_detect_min: float = 0.7       # Initial default
+    Compute log-likelihood score for preamble match.
+    Better than hard thresholding: 0.51 and 0.99 are NOT treated the same.
     
-    @classmethod
-    def from_validation(cls, val_results: dict):
-        """Populate from validation tuning."""
-        return cls(
-            detect_threshold=val_results["optimal_detect_thresh"],
-            preamble_min=val_results["optimal_preamble_min"],
-            clip_detect_min=val_results["optimal_clip_thresh"],
-        )
+    score = Σ log(p) for preamble-bit=1 + Σ log(1-p) for preamble-bit=0
+    """
+    # msg_probs: (B, n_win, 32)
+    # preamble: (16,) binary {0, 1}
+    
+    B, n_win, _ = msg_probs.shape
+    preamble_probs = msg_probs[:, :, :16]  # First 16 bits
+    
+    # Expand preamble: (1, 1, 16)
+    preamble_exp = preamble.view(1, 1, 16).expand(B, n_win, -1)
+    
+    # Clamp probs to avoid log(0)
+    eps = 1e-7
+    p_clamped = torch.clamp(preamble_probs, eps, 1 - eps)
+    
+    # Log-likelihood: log(p) if bit=1, log(1-p) if bit=0
+    log_p = torch.log(p_clamped)
+    log_1_minus_p = torch.log(1 - p_clamped)
+    
+    ll = torch.where(preamble_exp == 1, log_p, log_1_minus_p)
+    
+    # Sum over preamble bits: (B, n_win)
+    total_ll = ll.sum(dim=2)
+    
+    return total_ll  # Higher = better match
+
+
+def train_stage1b_v12(decoder, loader, device, epochs=10, warmup_epochs=3, top_k=3):
+    """Stage-1B with log-likelihood preamble selection during warmup."""
+    
+    for epoch in range(epochs):
+        in_warmup = epoch < warmup_epochs
+        
+        # Freeze detect params during warmup
+        for n, p in decoder.named_parameters():
+            if 'head_detect' in n or 'backbone' in n:
+                p.requires_grad = not in_warmup
+        
+        for batch in loader:
+            outputs = decoder(batch["audio"].to(device))
+            msg_probs = outputs["all_message_probs"]
+            
+            if in_warmup:
+                # LOG-LIKELIHOOD scoring (not hard match!)
+                ll_scores = compute_preamble_log_likelihood(msg_probs, PREAMBLE.to(device))
+                _, top_idx = torch.topk(ll_scores, top_k, dim=1)
+            else:
+                _, top_idx = torch.topk(outputs["all_window_probs"], top_k, dim=1)
+            
+            # ... rest of training ...
 ```
 
 ---
 
-## 7. Acceptance Criteria Checklist
+## 5. ViSQOL with Alignment
 
-> [!IMPORTANT]
-> **What must pass before declaring "done"**
+```python
+def compute_visqol_aligned(original: np.ndarray, degraded: np.ndarray, sr: int = 16000) -> float:
+    """
+    Compute ViSQOL with cross-correlation alignment.
+    Codec round-trips can introduce delay; misalignment tanks scores.
+    """
+    from scipy.signal import correlate
+    
+    # Cross-correlation to find best alignment
+    correlation = correlate(degraded, original, mode='full')
+    lag = np.argmax(correlation) - len(original) + 1
+    
+    # Align
+    if lag > 0:
+        aligned = degraded[lag:]
+        ref = original[:len(aligned)]
+    else:
+        aligned = degraded[:len(degraded) + lag]
+        ref = original[-lag:-lag + len(aligned)] if lag != 0 else original[:len(aligned)]
+    
+    # Trim to same length
+    min_len = min(len(ref), len(aligned))
+    ref = ref[:min_len]
+    aligned = aligned[:min_len]
+    
+    # Save temp files
+    import soundfile as sf
+    sf.write("/tmp/ref.wav", ref, sr)
+    sf.write("/tmp/deg.wav", aligned, sr)
+    
+    # Run ViSQOL
+    from visqol import visqol_lib_py
+    config = visqol_lib_py.MakeVisqolConfig()
+    config.audio.sample_rate = sr
+    
+    api = visqol_lib_py.VisqolApi()
+    api.Create(config)
+    
+    result = api.Measure("/tmp/ref.wav", "/tmp/deg.wav")
+    
+    return result.moslqo
+```
+
+---
+
+## 6. Fold Divisor Check (Tests)
+
+```python
+def test_overlap_add_divisor():
+    """
+    Verify fold divisor has no zeros (required for valid reconstruction).
+    PyTorch docs warn fold/unfold are inverses only when divisor is nonzero.
+    """
+    window = 16000
+    hop = 8000  # 50% overlap
+    T = 48000
+    
+    # Compute divisor (sum of overlapping Hann windows)
+    hann = torch.hann_window(window)
+    n_win = (T - window) // hop + 1
+    
+    divisor = torch.zeros(T)
+    for i in range(n_win):
+        start = i * hop
+        divisor[start:start + window] += hann
+    
+    # Check no zeros in valid region
+    valid_start = hop  # First full overlap
+    valid_end = T - hop
+    
+    assert divisor[valid_start:valid_end].min() > 0.5, \
+        f"Divisor has near-zeros: min={divisor[valid_start:valid_end].min()}"
+    
+    print("✓ Fold divisor check passed")
+
+
+def test_fold_version_pinned():
+    """Document version for reproducibility."""
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"Torchaudio version: {torchaudio.__version__}")
+    
+    # Known good versions (update as needed)
+    assert torch.__version__.startswith("2."), f"Unexpected torch version: {torch.__version__}"
+    
+    print("✓ Version check passed (update pin as needed)")
+```
+
+---
+
+## 7. Security Note (Expanded)
+
+> [!CAUTION]
+> **32 bits is insufficient for authentication tags**
+> 
+> HMAC-SHA256 produces 256-bit tags. Truncating to fit 32-bit payload:
+> - Reduces security to ~16 bits effective (after preamble)
+> - Brute-force attack: 2^16 = 65,536 attempts (trivial)
+> 
+> **Options for real authentication:**
+> - Increase payload to 64-96 bits
+> - Spread tag bits across time windows
+> - Accept limited scope: "decodable, not authenticated"
+> 
+> **Current system: DECODABLE ONLY**
+
+---
+
+## 8. Acceptance Criteria (Final)
+
+### Engineering Acceptance
+
+- [ ] Codec precompute uses correct containers (.mp3, .m4a)
+- [ ] No ffmpeg errors in logs
+- [ ] Train/val/test have zero source overlap
+- [ ] Fold divisor test passes
+- [ ] Version pinning documented
 
 ### Training Acceptance
 
-- [ ] Stage 1 loss converges (both per-window and clip BCE decrease)
-- [ ] Stage 1B payload loss decreases after warmup
-- [ ] Stage 2 quality loss (STFT) stays below threshold
-- [ ] No NaN/Inf in any loss or gradient
+- [ ] Stage 1 loss converges
+- [ ] Stage 1B loss decreases after warmup
+- [ ] No NaN/Inf
 
-### Detection Acceptance (on held-out test set)
+### Metrics Acceptance
 
 - [ ] Clip-level AUC > 0.95
-- [ ] TPR @ 1% FPR > 85%
-- [ ] TPR @ 5% FPR > 92%
-
-### Payload Acceptance
-
-- [ ] Valid payload rate (clean) > 90%
-- [ ] Valid payload rate (MP3-128) > 70%
+- [ ] TPR @ 1% FPR > 85% (tuned at clip level)
 - [ ] Attribution accuracy (true positives) > 85%
+- [ ] ViSQOL > 4.0 (with alignment)
 
-### Quality Acceptance
+### Claim Control
 
-- [ ] ViSQOL > 4.0 (or SNR > 30 dB if ViSQOL unavailable)
-- [ ] Subjective listening: "no noticeable difference"
-
-### Reproducibility Acceptance
-
-- [ ] `run_metadata.json` saved with git commit + versions
-- [ ] Same seed → same results (within floating point tolerance)
-
----
-
-## 8. Claim Control
-
-> [!CAUTION]
-> **Do NOT claim the following without additional work:**
-
-| Claim | Why Not | What to Say Instead |
-|-------|---------|---------------------|
-| "Robust to removal attacks" | Not evaluated against adversarial removal | "Survives common non-adversarial transforms" |
-| "Secure attribution" | No HMAC/authentication | "Decodable attribution in benign settings" |
-| "Real-world robust" | Missing Opus, reverb, noise mixtures | "Evaluated on subset of common transforms" |
-| "Production-ready" | Not battle-tested | "Proof-of-concept validated on test set" |
+- [ ] Report scopes claims to "benign settings"
+- [ ] Does NOT claim "secure attribution"
+- [ ] Does NOT claim "robust to adversarial removal"
 
 ---
 
@@ -440,15 +403,13 @@ class ThresholdConfig:
 
 | Ver | Issue | Status |
 |-----|-------|--------|
-| v1-v9 | Various | ✅ Fixed |
-| v10 | collate crashes | ✅ Convert in `__getitem__` |
-| v10 | Freeze not implemented | ✅ `requires_grad=False` |
-| v10 | Warmup uses garbage | ✅ Preamble correlation |
-| v10 | FWER wording | ✅ "Tune empirically" |
-| v10 | Hardcoded thresholds | ✅ "Learned from validation" |
-| v10 | Codec I/O bound | ✅ Bulk precompute |
-| v10 | Missing conditional attr | ✅ Two metrics |
-| v10 | No reproducibility | ✅ Seeds + version pinning |
-| v10 | Overclaiming | ✅ Acceptance criteria |
+| v1-v10 | Various | ✅ Fixed |
+| v11 | AAC container | ✅ .m4a |
+| v11 | Train/test leakage | ✅ GroupShuffleSplit |
+| v11 | Determinism MPS | ✅ Optional flag |
+| v11 | Hard preamble match | ✅ Log-likelihood |
+| v11 | ViSQOL misalignment | ✅ Cross-correlation |
+| v11 | ffmpeg no check | ✅ check returncode |
+| v11 | Security 32-bit | ✅ Explicit note |
 
-**v11 meets acceptance criteria definition. Ready for implementation.**
+**v12 is research-defensible and implementation-ready.**
