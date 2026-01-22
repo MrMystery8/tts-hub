@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TTS Hub - Unified Voice Synthesis</title>
+  <meta name="description" content="One local UI for IndexTTS2, Chatterbox Multilingual, F5 Hindi/Urdu, CosyVoice3-MLX, PocketTTS, and VoxCPM-ANE." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">🎙</span>
+          <span>TTS Hub</span>
+        </div>
+      </div>
+
+      <div class="sidebar-label">Models</div>
+      <nav class="model-nav" id="modelNav">
+        <!-- Model cards will be populated by JS -->
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="system-info">
+          <span class="status-dot" id="ffmpegDot"></span>
+          <span id="ffmpegStatus">Checking ffmpeg...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="top-bar">
+        <div class="page-title">
+          <h1 id="selectedModelName">Select a Model</h1>
+          <div class="status-badges" id="modelStatusBadges">
+            <!-- Status badges populated by JS -->
+          </div>
+        </div>
+        <div class="quick-actions">
+          <button class="btn btn-secondary" id="clearSession" title="Clear all saved session data">
+            🗑️ Clear Session
+          </button>
+          <button class="btn btn-danger" id="unloadModel" title="Unload model from memory">
+            ⏏️ Unload
+          </button>
+        </div>
+      </header>
+
+      <!-- Content Grid -->
+      <div class="content-grid">
+        <!-- Left Column: Voice + Text -->
+        <div class="input-column">
+          <!-- Voice Reference Panel -->
+          <div class="panel" id="voicePanel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Voice Reference</div>
+                <div class="panel-subtitle" id="voiceRequirement">Upload or record a voice sample for cloning</div>
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-secondary" id="clearVoice" disabled>Clear</button>
+              </div>
+            </div>
+
+            <!-- Voice Input Methods -->
+            <div class="voice-section">
+              <!-- Upload -->
+              <div class="voice-method" id="uploadMethod">
+                <label class="file-upload" for="promptFile">
+                  <div class="file-upload-icon">📁</div>
+                  <div class="file-upload-text">Upload Audio</div>
+                  <div class="file-upload-hint">WAV, MP3, or M4A</div>
+                </label>
+                <input type="file" id="promptFile" accept="audio/*" />
+              </div>
+
+              <!-- Record -->
+              <div class="voice-method" id="recordMethod">
+                <div class="voice-method-icon">🎤</div>
+                <div class="voice-method-title">Record Voice</div>
+                <div class="voice-method-desc">Use your microphone</div>
+                <div class="record-controls">
+                  <button class="record-btn" id="recToggle" title="Start/Stop Recording">●</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Audio Preview -->
+            <div id="voicePreviewContainer" class="hidden">
+              <div class="waveform-container" id="waveformContainer">
+                <canvas id="waveformCanvas" class="waveform-canvas"></canvas>
+                <div class="waveform-time" id="waveformTime">0:00</div>
+              </div>
+              <audio id="promptPreview" class="audio-player" controls></audio>
+              <div class="form-hint" id="promptInfo"></div>
+            </div>
+
+            <!-- Recording Indicator -->
+            <div id="recordingIndicator" class="recording-indicator hidden">
+              <span class="recording-dot"></span>
+              <span>Recording...</span>
+              <span id="recordingTime">0:00</span>
+            </div>
+
+            <!-- Transcript (expanded inline for models that need it) -->
+            <div class="collapsible" id="transcriptSection">
+              <div class="collapsible-header" data-toggle="transcriptContent">
+                <span class="collapsible-title">Reference Transcript</span>
+                <span class="collapsible-icon">▼</span>
+              </div>
+              <div class="collapsible-content" id="transcriptContent">
+                <div class="form-group">
+                  <textarea id="promptText" rows="3"
+                    placeholder="Enter the exact text spoken in the reference audio (required for some models)"></textarea>
+                  <div class="form-hint">Required for: VoxCPM-ANE, CosyVoice3 zero-shot, F5 Hindi/Urdu</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Emotion Audio (IndexTTS2 only) -->
+            <div class="collapsible hidden" id="emotionSection">
+              <div class="collapsible-header" data-toggle="emotionContent">
+                <span class="collapsible-title">Emotion Reference Audio</span>
+                <span class="collapsible-icon">▼</span>
+              </div>
+              <div class="collapsible-content" id="emotionContent">
+                <div class="form-group">
+                  <label class="file-upload" for="emoFile" style="padding: var(--space-md);">
+                    <div class="file-upload-text">📎 Upload emotion audio</div>
+                  </label>
+                  <input type="file" id="emoFile" accept="audio/*" />
+                  <div class="form-hint" id="emoInfo"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Text Input Panel -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Text to Speak</div>
+                <div class="panel-subtitle">Enter the text you want to synthesize</div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <textarea id="text" rows="5" placeholder="Type what you want the model to say..."></textarea>
+            </div>
+
+            <div class="form-row" style="justify-content: space-between;">
+              <div class="form-row">
+                <label class="form-label" for="outputFormat" style="width: auto;">Output Format</label>
+                <select id="outputFormat" style="width: 100px;">
+                  <option value="wav">WAV</option>
+                  <option value="mp3">MP3</option>
+                  <option value="flac">FLAC</option>
+                </select>
+              </div>
+              <div style="display: flex; gap: var(--space-sm);">
+                <button class="btn btn-secondary" id="reset">Reset All</button>
+                <button class="btn btn-primary btn-lg" id="generate">
+                  <span id="generateText">✨ Generate</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Status Bar -->
+            <div class="status-bar" id="statusBar">
+              <span class="status-icon" id="statusIcon">ℹ️</span>
+              <span class="status-text" id="statusText">Ready</span>
+            </div>
+          </div>
+
+          <!-- Output Panel -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Output</div>
+                <div class="panel-subtitle" id="outputInfo">Generated audio will appear here</div>
+              </div>
+            </div>
+
+            <div class="output-player" id="outputContainer">
+              <div class="output-placeholder" id="outputPlaceholder">
+                🔊 No audio generated yet
+              </div>
+              <audio id="output" class="audio-player hidden" controls></audio>
+              <div class="output-actions hidden" id="outputActions">
+                <a class="btn btn-primary" id="download" href="#" download>⬇️ Download</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Settings -->
+        <div class="settings-column">
+          <!-- Model Settings Panel -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Model Settings</div>
+                <div class="panel-subtitle" id="modelDescription">Configure model-specific options</div>
+              </div>
+            </div>
+
+            <!-- IndexTTS2 Settings -->
+            <div class="model-settings hidden" id="settingsIndex" data-model="index-tts2">
+              <!-- Emotion Mode -->
+              <div class="form-group">
+                <label class="form-label" for="indexEmoMode">Emotion Mode</label>
+                <select id="indexEmoMode">
+                  <option value="speaker">Same as speaker (default)</option>
+                  <option value="emo_ref">Use emotion reference audio</option>
+                  <option value="emo_vector">Custom emotion vector</option>
+                  <option value="emo_text">Emotion from text description</option>
+                </select>
+              </div>
+
+              <!-- Emotion Weight -->
+              <div class="slider-group">
+                <span class="slider-label">Emotion Weight</span>
+                <div class="slider-container">
+                  <input type="range" id="indexEmoAlpha" min="0" max="1" step="0.01" value="0.65" />
+                  <span class="slider-value" id="indexEmoAlphaVal">0.65</span>
+                </div>
+              </div>
+
+              <!-- Random Sampling -->
+              <div class="form-group mt-md">
+                <div class="checkbox-group">
+                  <input type="checkbox" id="indexUseRandom" />
+                  <label class="checkbox-label" for="indexUseRandom">Random sampling</label>
+                </div>
+                <div class="form-hint">May reduce cloning fidelity</div>
+              </div>
+
+              <!-- Emotion Vector (conditional) -->
+              <div class="form-group hidden" id="indexEmoVectorRow">
+                <label class="form-label" for="indexEmoVector">Emotion Vector</label>
+                <input type="text" id="indexEmoVector" placeholder="[0,0,0,0,0,0,0.45,0] or 8 comma-separated floats" />
+              </div>
+
+              <!-- Emotion Text (conditional) -->
+              <div class="form-group hidden" id="indexEmoTextRow">
+                <label class="form-label" for="indexEmoText">Emotion Description</label>
+                <textarea id="indexEmoText" rows="2" placeholder="Describe the emotion (or leave blank to use main text)"></textarea>
+              </div>
+
+              <!-- Segmentation Settings -->
+              <div class="collapsible">
+                <div class="collapsible-header" data-toggle="indexSegmentSettings">
+                  <span class="collapsible-title">Segmentation</span>
+                  <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-content" id="indexSegmentSettings">
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Text Tokens / Segment</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexMaxTextTokens" min="20" max="400" value="120" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Max Mel Tokens</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexMaxMelTokens" min="50" max="5000" value="1500" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="checkbox-group">
+                    <input type="checkbox" id="indexFastMode" />
+                    <label class="checkbox-label" for="indexFastMode">Fast mode (greedy decoding)</label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Advanced Sampling -->
+              <div class="collapsible">
+                <div class="collapsible-header" data-toggle="indexAdvancedSettings">
+                  <span class="collapsible-title">Advanced Sampling</span>
+                  <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-content" id="indexAdvancedSettings">
+                  <div class="checkbox-group mb-md">
+                    <input type="checkbox" id="indexDoSample" checked />
+                    <label class="checkbox-label" for="indexDoSample">do_sample</label>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Temperature</span>
+                    <div class="slider-container">
+                      <input type="range" id="indexTemperature" min="0.1" max="2.0" step="0.1" value="0.8" />
+                      <span class="slider-value" id="indexTemperatureVal">0.8</span>
+                    </div>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Top P</span>
+                    <div class="slider-container">
+                      <input type="range" id="indexTopP" min="0" max="1" step="0.05" value="0.8" />
+                      <span class="slider-value" id="indexTopPVal">0.80</span>
+                    </div>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Top K</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexTopK" min="0" max="100" value="30" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Num Beams</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexNumBeams" min="1" max="10" value="3" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Repetition Penalty</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexRepetitionPenalty" min="0.1" max="20" step="0.1" value="10.0" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="slider-group">
+                    <span class="slider-label">Length Penalty</span>
+                    <div class="slider-container">
+                      <input type="number" id="indexLengthPenalty" min="-2" max="2" step="0.1" value="0.0" style="width: 80px;" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chatterbox Multilingual Settings -->
+            <div class="model-settings hidden" id="settingsChatterbox" data-model="chatterbox-multilingual">
+              <div class="form-group">
+                <label class="form-label" for="cbLanguage">Language</label>
+                <select id="cbLanguage">
+                  <option value="hi">Hindi (hi)</option>
+                  <option value="en">English (en)</option>
+                  <option value="zh">Chinese (zh)</option>
+                  <option value="ar">Arabic (ar)</option>
+                  <option value="fr">French (fr)</option>
+                  <option value="es">Spanish (es)</option>
+                  <option value="de">German (de)</option>
+                  <option value="ja">Japanese (ja)</option>
+                  <option value="ko">Korean (ko)</option>
+                  <option value="it">Italian (it)</option>
+                  <option value="pt">Portuguese (pt)</option>
+                  <option value="ru">Russian (ru)</option>
+                  <option value="tr">Turkish (tr)</option>
+                </select>
+              </div>
+
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="cbUsePrompt" checked />
+                <label class="checkbox-label" for="cbUsePrompt">Use reference audio for cloning</label>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">CFG Weight</span>
+                <div class="slider-container">
+                  <input type="range" id="cbCfgWeight" min="0" max="1" step="0.05" value="0.5" />
+                  <span class="slider-value" id="cbCfgWeightVal">0.50</span>
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Temperature</span>
+                <div class="slider-container">
+                  <input type="range" id="cbTemperature" min="0.1" max="2.0" step="0.1" value="0.8" />
+                  <span class="slider-value" id="cbTemperatureVal">0.8</span>
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Exaggeration</span>
+                <div class="slider-container">
+                  <input type="range" id="cbExaggeration" min="0" max="1" step="0.05" value="0.5" />
+                  <span class="slider-value" id="cbExaggerationVal">0.50</span>
+                </div>
+              </div>
+
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="cbFastMode" />
+                <label class="checkbox-label" for="cbFastMode">Fast mode</label>
+              </div>
+
+              <!-- Long-form Chunking -->
+              <div class="collapsible">
+                <div class="collapsible-header" data-toggle="cbChunkingSettings">
+                  <span class="collapsible-title">Long-form (Chunking)</span>
+                  <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-content" id="cbChunkingSettings">
+                  <div class="checkbox-group mb-md">
+                    <input type="checkbox" id="cbChunking" checked />
+                    <label class="checkbox-label" for="cbChunking">Enable chunking</label>
+                  </div>
+                  <div class="slider-group mb-md">
+                    <span class="slider-label">Max Chars</span>
+                    <div class="slider-container">
+                      <input type="number" id="cbMaxChunkChars" min="50" max="400" value="150" style="width: 80px;" />
+                    </div>
+                  </div>
+                  <div class="slider-group">
+                    <span class="slider-label">Crossfade (ms)</span>
+                    <div class="slider-container">
+                      <input type="number" id="cbCrossfade" min="0" max="500" value="50" style="width: 80px;" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Enhancement -->
+              <div class="collapsible">
+                <div class="collapsible-header" data-toggle="cbEnhancementSettings">
+                  <span class="collapsible-title">Audio Enhancement</span>
+                  <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-content" id="cbEnhancementSettings">
+                  <div class="checkbox-group mb-md">
+                    <input type="checkbox" id="cbEnableDf" />
+                    <label class="checkbox-label" for="cbEnableDf">DeepFilterNet (noise removal)</label>
+                  </div>
+                  <div class="checkbox-group">
+                    <input type="checkbox" id="cbEnableNovasr" />
+                    <label class="checkbox-label" for="cbEnableNovasr">NovaSR (48kHz upscaling)</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- F5 Hindi/Urdu Settings -->
+            <div class="model-settings hidden" id="settingsF5" data-model="f5-hindi-urdu">
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="f5RomanMode" checked />
+                <label class="checkbox-label" for="f5RomanMode">Roman input (converts to Devanagari)</label>
+              </div>
+
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="f5OverridesEnabled" checked />
+                <label class="checkbox-label" for="f5OverridesEnabled">Enable pronunciation overrides</label>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="f5OverridesText">Override Rules</label>
+                <textarea id="f5OverridesText" rows="4" placeholder="# from=to (one per line)"></textarea>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Cross-fade Duration</span>
+                <div class="slider-container">
+                  <input type="number" id="f5CrossFade" min="0" max="1" step="0.01" value="0.15" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">NFE Steps</span>
+                <div class="slider-container">
+                  <input type="number" id="f5NfeStep" min="1" max="100" value="32" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Speed</span>
+                <div class="slider-container">
+                  <input type="number" id="f5Speed" min="0.25" max="2" step="0.05" value="1.0" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="f5RemoveSilence" />
+                <label class="checkbox-label" for="f5RemoveSilence">Remove silence</label>
+              </div>
+
+              <div class="slider-group">
+                <span class="slider-label">Seed</span>
+                <div class="slider-container">
+                  <input type="number" id="f5Seed" min="-1" max="2147483647" value="-1" style="width: 100px;" />
+                </div>
+              </div>
+              <div class="form-hint">-1 for random seed</div>
+            </div>
+
+            <!-- CosyVoice3-MLX Settings -->
+            <div class="model-settings hidden" id="settingsCosy" data-model="cosyvoice3-mlx">
+              <div class="form-group">
+                <label class="form-label" for="cosyModel">Model Variant</label>
+                <select id="cosyModel">
+                  <option value="8bit" selected>8-bit (recommended)</option>
+                  <option value="4bit">4-bit (faster)</option>
+                  <option value="fp16">FP16 (highest quality)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="cosyMode">Mode</label>
+                <select id="cosyMode">
+                  <option value="zero_shot" selected>Zero-shot (best quality)</option>
+                  <option value="cross_lingual">Cross-lingual</option>
+                  <option value="instruct">Instruct</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="cosyLang">Language</label>
+                <input type="text" id="cosyLang" value="auto" />
+                <div class="form-hint">Use 'auto' for automatic detection</div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Speed</span>
+                <div class="slider-container">
+                  <input type="number" id="cosySpeed" min="0.5" max="2" step="0.05" value="1.0" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="form-group hidden" id="cosyInstructRow">
+                <label class="form-label" for="cosyInstructText">Instruction</label>
+                <textarea id="cosyInstructText" rows="2" placeholder="Enter instruction for instruct mode"></textarea>
+              </div>
+            </div>
+
+            <!-- Pocket TTS Settings -->
+            <div class="model-settings hidden" id="settingsPocket" data-model="pocket-tts">
+              <div class="form-group">
+                <label class="form-label" for="pocketVoice">Voice URL</label>
+                <input type="text" id="pocketVoice" value="hf://kyutai/tts-voices/alba-mackenna/casual.wav" />
+                <div class="form-hint">If you upload a reference audio, it will be used instead</div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Temperature</span>
+                <div class="slider-container">
+                  <input type="number" id="pocketTemp" min="0.1" max="2" step="0.05" value="0.8" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">LSD Decode Steps</span>
+                <div class="slider-container">
+                  <input type="number" id="pocketLsd" min="1" max="64" value="8" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">EOS Threshold</span>
+                <div class="slider-container">
+                  <input type="number" id="pocketEos" min="0.0" max="1.0" step="0.05" value="0.4" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Noise Clamp</span>
+                <div class="slider-container">
+                  <input type="number" id="pocketNoiseClamp" min="0" max="5" step="0.05" placeholder="(optional)" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="checkbox-group">
+                <input type="checkbox" id="pocketTruncate" />
+                <label class="checkbox-label" for="pocketTruncate">Truncate prompt</label>
+              </div>
+            </div>
+
+            <!-- VoxCPM-ANE Settings -->
+            <div class="model-settings hidden" id="settingsVoxcpm" data-model="voxcpm-ane">
+              <div class="form-group">
+                <label class="form-label" for="voxcpmVoice">Cached Voice Name</label>
+                <input type="text" id="voxcpmVoice" placeholder="Leave empty to use reference audio" />
+                <div class="form-hint">Enter a cached voice name, or upload reference audio with transcript</div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">CFG Value</span>
+                <div class="slider-container">
+                  <input type="number" id="voxcpmCfg" min="0" max="10" step="0.1" value="2.0" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Inference Steps</span>
+                <div class="slider-container">
+                  <input type="number" id="voxcpmSteps" min="1" max="100" value="10" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group">
+                <span class="slider-label">Max Length</span>
+                <div class="slider-container">
+                  <input type="number" id="voxcpmMaxLen" min="1" max="2048" value="2048" style="width: 80px;" />
+                </div>
+              </div>
+            </div>
+
+            <!-- No model selected placeholder -->
+            <div id="noModelSelected" class="output-placeholder">
+              👈 Select a model from the sidebar to see its settings
+            </div>
+          </div>
+
+          <!-- Recent Generations Panel -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Recent Generations</div>
+                <div class="panel-subtitle">Your generation history</div>
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-secondary" id="clearHistory" title="Clear all history">Clear</button>
+              </div>
+            </div>
+
+            <div class="history-list" id="historyList">
+              <div class="history-empty" id="historyEmpty">
+                No generations yet
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
