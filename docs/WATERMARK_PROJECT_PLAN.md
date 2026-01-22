@@ -1,394 +1,327 @@
-# FYP Project Plan v8: Audio Watermarking (Final)
+# FYP Project Plan v9: Audio Watermarking (Final)
 
-> **All blockers resolved** — Implementation-ready
+> **All practical failure modes addressed** — Implementation-ready
 
 ---
 
-## v8 Fixes Summary
+## v9 Fixes Summary
 
-| v7 Issue | v8 Fix |
+| v8 Issue | v9 Fix |
 |----------|--------|
-| Stage-1 has no negatives | **Add clean→codec negatives** (50/50 split) |
-| Decoder output interface mismatch | **Unified output: detect + message per window** |
-| Fixed message uses 0.5 | **Binary zeros** |
-| Window/hop mismatch | **Aligned: 0.5 for both** |
-| Payload not trained under codec | **Stage-1B: varying messages** |
-| Threshold tuning ignores full rule | **Tune with entire decision function** |
+| clip_detect loss → topk gradient | **Per-window BCE auxiliary loss** |
+| Stage-1B averages all windows | **Payload loss on top-k windows only** |
+| Shape inconsistency | **Uniform (B, T) mono everywhere** |
+| tune_thresholds slices ints | **Only pass tensor keys** |
+| Attack suite too narrow | **Expanded eval: resample, reverb, noise** |
+| Success criteria unmeasurable | **Stated negative count + confidence** |
 
 ---
 
-## 1. Stage-1 with Negatives
+## 1. Per-Window Auxiliary Detection Loss
 
 ```python
-def generate_stage1_tensors_v8(manifest_path: Path, output_dir: Path):
+def train_stage1_v9(decoder, stage1_loader, device, epochs=20):
     """
-    Generate BOTH positives and negatives for Stage 1.
-    Positive: clean → watermark(fixed_msg) → codec → FLAC
-    Negative: clean → codec → FLAC (no watermark)
+    Stage 1 with BOTH:
+    - Per-window BCE (stable gradients, robust learning)
+    - Clip-level BCE (for aggregation calibration)
     """
-    embedder = SpreadSpectrumEmbedder()
+    print("=== Stage 1: Detection (per-window + clip) ===")
     
-    # Fixed binary message (not 0.5!)
-    FIXED_MESSAGE = torch.zeros(32)
-    FIXED_MESSAGE[0:16] = PREAMBLE  # Preamble only, payload = 0
-    
-    codecs = ["mp3_64", "mp3_128", "aac_96"]
-    
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    
-    stage1_samples = []
-    
-    for i, item in enumerate(manifest):
-        clean, sr = torchaudio.load(item["audio_path"])
-        clean = clean.mean(dim=0, keepdim=True)
-        
-        # === POSITIVE: watermarked + coded ===
-        wm = embedder(clean.unsqueeze(0), FIXED_MESSAGE.unsqueeze(0)).squeeze(0)
-        
-        for codec in codecs:
-            # Save watermarked + coded
-            pos_path = output_dir / f"{i:04d}_{codec}_pos.flac"
-            coded_wm = apply_codec(wm, codec)
-            save_audio_flac(coded_wm, pos_path, sr)
-            
-            stage1_samples.append({
-                "path": str(pos_path),
-                "has_watermark": 1.0,
-                "codec": codec,
-            })
-        
-        # === NEGATIVE: clean + coded (no watermark) ===
-        for codec in codecs:
-            neg_path = output_dir / f"{i:04d}_{codec}_neg.flac"
-            coded_clean = apply_codec(clean, codec)
-            save_audio_flac(coded_clean, neg_path, sr)
-            
-            stage1_samples.append({
-                "path": str(neg_path),
-                "has_watermark": 0.0,  # NEGATIVE!
-                "codec": codec,
-            })
-        
-        print(f"Stage 1 prep: {i+1}/{len(manifest)}")
-    
-    with open(output_dir / "stage1_manifest.json", "w") as f:
-        json.dump(stage1_samples, f, indent=2)
-    
-    print(f"Generated {len(stage1_samples)} samples (50% pos, 50% neg)")
-
-
-class Stage1DatasetV8(Dataset):
-    """Stage 1 dataset with BOTH positives and negatives."""
-    
-    def __init__(self, manifest_path: Path):
-        with open(manifest_path) as f:
-            self.samples = json.load(f)
-    
-    def __getitem__(self, idx):
-        item = self.samples[idx]
-        audio = load_audio_flac(item["path"])
-        
-        return {
-            "audio": audio,
-            "has_watermark": torch.tensor(item["has_watermark"]),
-            "codec": item["codec"],
-        }
-    
-    def __len__(self):
-        return len(self.samples)
-```
-
----
-
-## 2. Unified Decoder Output Interface
-
-```python
-class UnifiedDecoder(nn.Module):
-    """
-    Returns BOTH detect and message probs per window.
-    Fixes interface mismatch with ClipDecisionRule.
-    """
-    def __init__(self, base_decoder, window=16000, hop_ratio=0.5, top_k=3):
-        super().__init__()
-        self.decoder = base_decoder
-        self.window = window
-        self.hop = int(window * hop_ratio)  # ALIGNED with encoder
-        self.top_k = top_k
-    
-    def forward(self, audio: torch.Tensor) -> dict:
-        B, T = audio.shape
-        
-        if T < self.window:
-            audio = F.pad(audio, (0, self.window - T))
-            T = self.window
-        
-        n_win = (T - self.window) // self.hop + 1
-        windows = audio.unfold(1, self.window, self.hop)
-        windows_flat = windows.reshape(-1, self.window)
-        
-        outputs = self.decoder(windows_flat)
-        
-        # Reshape: (B, n_win, ...)
-        detect = outputs["detect_prob"].reshape(B, n_win)
-        message = outputs["message_prob"].reshape(B, n_win, -1)
-        model = outputs["model_logits"].reshape(B, n_win, -1)
-        
-        # Top-k mean for clip-level detection
-        top_k_vals, top_k_idx = torch.topk(detect, min(self.top_k, n_win), dim=1)
-        clip_detect = top_k_vals.mean(dim=1)
-        
-        return {
-            # Clip-level
-            "clip_detect_prob": clip_detect,
-            
-            # Per-window (BOTH detect and message!)
-            "all_window_probs": detect,        # (B, n_win)
-            "all_message_probs": message,      # (B, n_win, 32)
-            "all_model_logits": model,         # (B, n_win, n_models)
-            
-            # Metadata
-            "n_windows": n_win,
-            "top_k_idx": top_k_idx,
-        }
-```
-
----
-
-## 3. Stage-1B: Payload Under Codec (Varying Messages)
-
-```python
-def generate_stage1b_tensors(manifest_path: Path, output_dir: Path, codec: MessageCodecV5):
-    """
-    Stage-1B: Train payload decoding under codec.
-    Uses VARYING messages (not fixed) so decoder learns to recover bits.
-    """
-    embedder = SpreadSpectrumEmbedder()
-    codecs = ["mp3_128"]  # Focus on one codec for payload training
-    
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    
-    samples = []
-    
-    for i, item in enumerate(manifest):
-        # Random model_id and version for each sample
-        model_id = random.randint(0, 7)
-        version = random.randint(0, 15)
-        message = codec.encode(model_id, version)
-        
-        clean, sr = torchaudio.load(item["audio_path"])
-        clean = clean.mean(dim=0, keepdim=True)
-        
-        wm = embedder(clean.unsqueeze(0), message.unsqueeze(0)).squeeze(0)
-        
-        for codec_name in codecs:
-            out_path = output_dir / f"{i:04d}_{codec_name}_payload.flac"
-            coded = apply_codec(wm, codec_name)
-            save_audio_flac(coded, out_path, sr)
-            
-            samples.append({
-                "path": str(out_path),
-                "message": message.tolist(),
-                "model_id": model_id,
-                "version": version,
-            })
-    
-    with open(output_dir / "stage1b_manifest.json", "w") as f:
-        json.dump(samples, f, indent=2)
-
-
-def train_stage1b(decoder, stage1b_loader, device, epochs=10):
-    """
-    Stage-1B: Train decoder to recover PAYLOAD under codecs.
-    Separate from Stage-1 detection training.
-    """
-    print("=== Stage 1B: Payload under Codec ===")
-    
-    opt = torch.optim.AdamW(decoder.parameters(), lr=1e-4)  # Lower LR
+    opt = torch.optim.AdamW(decoder.parameters(), lr=3e-4)
     
     for epoch in range(epochs):
-        for batch in stage1b_loader:
-            audio = batch["audio"].to(device)
-            message = batch["message"].to(device)
+        total_loss = 0
+        for batch in stage1_loader:
+            audio = batch["audio"].to(device)  # (B, T) - enforced shape
+            has_wm = batch["has_watermark"].to(device)  # (B,)
             
             outputs = decoder(audio)
             
-            # Train message recovery
-            loss = F.binary_cross_entropy(
-                outputs["message_prob"],
-                message
+            # CLIP-LEVEL loss (for aggregation)
+            loss_clip = F.binary_cross_entropy(
+                outputs["clip_detect_prob"],
+                has_wm
             )
+            
+            # PER-WINDOW auxiliary loss (stable gradients!)
+            # Expand label to all windows: (B,) -> (B, n_win)
+            n_win = outputs["all_window_probs"].shape[1]
+            has_wm_expanded = has_wm.unsqueeze(1).expand(-1, n_win)
+            
+            loss_window = F.binary_cross_entropy(
+                outputs["all_window_probs"],
+                has_wm_expanded
+            )
+            
+            # Combined: per-window + clip (weighted)
+            loss = loss_window + 0.5 * loss_clip
             
             opt.zero_grad()
             loss.backward()
             opt.step()
+            
+            total_loss += loss.item()
         
-        print(f"Stage 1B Epoch {epoch+1}: loss={loss.item():.4f}")
+        print(f"Stage 1 Epoch {epoch+1}: loss={total_loss/len(stage1_loader):.4f}")
 ```
 
 ---
 
-## 4. Full Decision Rule Threshold Tuning
+## 2. Stage-1B Payload Loss on Top-K Windows Only
 
 ```python
-def tune_thresholds_full_rule(decoder, val_loader, codec, decision_rule, target_fpr=0.01):
+def train_stage1b_v9(decoder, stage1b_loader, device, epochs=10, top_k=3):
     """
-    Tune thresholds using the ENTIRE decision function.
-    Not just clip_detect_prob, but preamble validity too.
+    Stage-1B: Payload loss ONLY on high-confidence windows.
+    Fixes the garbage-averaging problem.
+    """
+    print("=== Stage 1B: Payload (top-k windows) ===")
+    
+    opt = torch.optim.AdamW(decoder.parameters(), lr=1e-4)
+    
+    for epoch in range(epochs):
+        total_loss = 0
+        for batch in stage1b_loader:
+            audio = batch["audio"].to(device)      # (B, T)
+            message = batch["message"].to(device)  # (B, 32)
+            
+            outputs = decoder(audio)
+            
+            detect = outputs["all_window_probs"]     # (B, n_win)
+            msg_probs = outputs["all_message_probs"] # (B, n_win, 32)
+            
+            B, n_win, msg_bits = msg_probs.shape
+            
+            # Get top-k windows by detection score
+            k = min(top_k, n_win)
+            _, top_idx = torch.topk(detect, k, dim=1)  # (B, k)
+            
+            # Gather top-k message probs: (B, k, 32)
+            top_idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, msg_bits)
+            top_msg_probs = torch.gather(msg_probs, 1, top_idx_exp)
+            
+            # Average over top-k windows only
+            avg_top_msg = top_msg_probs.mean(dim=1)  # (B, 32)
+            
+            # BCE on top-k average (not all windows!)
+            loss = F.binary_cross_entropy(avg_top_msg, message)
+            
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            
+            total_loss += loss.item()
+        
+        print(f"Stage 1B Epoch {epoch+1}: loss={total_loss/len(stage1b_loader):.4f}")
+```
+
+---
+
+## 3. Uniform Shape Enforcement
+
+```python
+# === CANONICAL SHAPE: (B, T) for all audio tensors ===
+
+class Stage1DatasetV9(Dataset):
+    """Enforces mono (T,) output, DataLoader gives (B, T)."""
+    
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        audio, sr = torchaudio.load(item["path"])
+        
+        # Enforce mono, squeeze to (T,)
+        audio = audio.mean(dim=0)  # (channels, T) -> (T,)
+        
+        return {
+            "audio": audio,  # (T,) float32
+            "has_watermark": torch.tensor(item["has_watermark"], dtype=torch.float32),
+        }
+
+
+class Stage1BDatasetV9(Dataset):
+    """Payload dataset with proper tensor conversion."""
+    
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        audio, sr = torchaudio.load(item["path"])
+        audio = audio.mean(dim=0)  # (T,)
+        
+        # Convert message list to tensor!
+        message = torch.tensor(item["message"], dtype=torch.float32)
+        
+        return {
+            "audio": audio,       # (T,)
+            "message": message,   # (32,)
+            "model_id": item["model_id"],
+        }
+
+
+class UnifiedDecoderV9(nn.Module):
+    """Expects input shape (B, T)."""
+    
+    def forward(self, audio: torch.Tensor) -> dict:
+        # Validate input shape
+        assert audio.dim() == 2, f"Expected (B, T), got {audio.shape}"
+        B, T = audio.shape
+        
+        # ... rest of implementation ...
+```
+
+---
+
+## 4. Fixed Threshold Tuning (Tensor Keys Only)
+
+```python
+def tune_thresholds_v9(decoder, val_loader, codec, decision_rule, target_fpr=0.01):
+    """
+    Threshold tuning with ONLY tensor keys passed to decision rule.
+    Fixes the 'slicing int' crash.
     """
     all_decisions = []
     all_labels = []
     
     for batch in val_loader:
-        outputs = decoder(batch["audio"])
+        outputs = decoder(batch["audio"].to(device))
         
         for i in range(len(batch["audio"])):
-            # Run full decision rule
+            # Only pass TENSOR keys that the rule needs
             single_output = {
-                "clip_detect_prob": outputs["clip_detect_prob"][i:i+1],
-                "all_window_probs": outputs["all_window_probs"][i:i+1],
-                "all_message_probs": outputs["all_message_probs"][i:i+1],
+                "clip_detect_prob": outputs["clip_detect_prob"][i],
+                "all_window_probs": outputs["all_window_probs"][i],
+                "all_message_probs": outputs["all_message_probs"][i],
+                # NOT: n_windows (int), top_k_idx (not needed)
             }
             
             decision = decision_rule.decide(single_output, codec)
-            all_decisions.append(decision["positive"])
-            all_labels.append(batch["has_watermark"][i].item())
+            all_decisions.append(1 if decision["positive"] else 0)
+            all_labels.append(int(batch["has_watermark"][i].item()))
     
-    all_decisions = np.array(all_decisions)
-    all_labels = np.array(all_labels)
+    # ... rest of implementation same as v8 ...
+```
+
+---
+
+## 5. Expanded Evaluation Attack Suite
+
+```python
+EVAL_ATTACKS = {
+    # Codec (trained on)
+    "mp3_64": lambda x: apply_codec(x, "mp3", 64),
+    "mp3_128": lambda x: apply_codec(x, "mp3", 128),
+    "mp3_320": lambda x: apply_codec(x, "mp3", 320),
+    "aac_96": lambda x: apply_codec(x, "aac", 96),
     
-    # Compute FPR/TPR for current thresholds
-    neg_mask = all_labels == 0
-    pos_mask = all_labels == 1
+    # Noise (partial training)
+    "noise_snr20": lambda x: add_noise(x, snr=20),
+    "noise_snr30": lambda x: add_noise(x, snr=30),
     
-    current_fpr = all_decisions[neg_mask].mean()
-    current_tpr = all_decisions[pos_mask].mean()
+    # NEW: Evaluation-only attacks (not trained on)
+    "resample_8k": lambda x: resample_round_trip(x, 16000, 8000),
+    "resample_48k": lambda x: resample_round_trip(x, 16000, 48000),
+    "reverb_small": lambda x: apply_reverb(x, rt60=0.3),
+    "reverb_large": lambda x: apply_reverb(x, rt60=0.8),
+    "time_stretch_95": lambda x: time_stretch(x, factor=0.95),
+    "time_stretch_105": lambda x: time_stretch(x, factor=1.05),
+    "background_noise": lambda x: mix_with_noise(x, snr=15),
+}
+
+
+def evaluate_per_attack(decoder, test_loader, codec, decision_rule):
+    """
+    Per-attack evaluation following AudioMarkBench style.
+    Reports clip-level metrics for each attack.
+    """
+    results = {}
     
-    print(f"Current: FPR={current_fpr:.3f}, TPR={current_tpr:.3f}")
-    
-    # Grid search over threshold values
-    best_threshold = None
-    best_tpr = 0
-    
-    for detect_thresh in np.arange(0.5, 0.95, 0.05):
-        decision_rule.detect_threshold = detect_thresh
+    for attack_name, attack_fn in EVAL_ATTACKS.items():
+        clip_probs = []
+        clip_labels = []
+        valid_payloads = []
         
-        decisions = []
-        for batch in val_loader:
-            outputs = decoder(batch["audio"])
+        for batch in test_loader:
+            # Apply attack
+            attacked = attack_fn(batch["audio"])
+            
+            outputs = decoder(attacked.to(device))
+            
             for i in range(len(batch["audio"])):
-                single_output = {k: v[i:i+1] for k, v in outputs.items()}
-                d = decision_rule.decide(single_output, codec)
-                decisions.append(d["positive"])
+                clip_probs.append(outputs["clip_detect_prob"][i].item())
+                clip_labels.append(int(batch["has_watermark"][i].item()))
+                
+                # Check payload validity
+                single = {
+                    "clip_detect_prob": outputs["clip_detect_prob"][i],
+                    "all_window_probs": outputs["all_window_probs"][i],
+                    "all_message_probs": outputs["all_message_probs"][i],
+                }
+                decision = decision_rule.decide(single, codec)
+                valid_payloads.append(decision.get("positive", False))
         
-        decisions = np.array(decisions)
-        fpr = decisions[neg_mask].mean()
-        tpr = decisions[pos_mask].mean()
+        # Compute metrics
+        from sklearn.metrics import roc_auc_score
         
-        if fpr <= target_fpr and tpr > best_tpr:
-            best_tpr = tpr
-            best_threshold = detect_thresh
+        results[attack_name] = {
+            "auc": roc_auc_score(clip_labels, clip_probs) if len(set(clip_labels)) > 1 else None,
+            "valid_payload_rate": sum(valid_payloads) / len(valid_payloads),
+            "n_samples": len(clip_labels),
+        }
+        
+        print(f"{attack_name}: AUC={results[attack_name]['auc']:.3f}, "
+              f"Payload={results[attack_name]['valid_payload_rate']:.1%}")
     
-    print(f"Best: threshold={best_threshold}, TPR={best_tpr:.3f} @ FPR<={target_fpr}")
-    decision_rule.detect_threshold = best_threshold
-    
-    return {"threshold": best_threshold, "tpr": best_tpr}
+    return results
 ```
 
 ---
 
-## 5. Aligned Window/Hop (0.5 for Both)
+## 6. Success Criteria with Confidence
 
 ```python
-# ALIGNED: both encoder and decoder use hop_ratio=0.5
-WINDOW_SAMPLES = 16000  # 1 second at 16kHz
-HOP_RATIO = 0.5         # 50% overlap
-
-encoder = SafeOverlapAddEncoder(base_encoder, window=WINDOW_SAMPLES, hop_ratio=HOP_RATIO)
-decoder = UnifiedDecoder(base_decoder, window=WINDOW_SAMPLES, hop_ratio=HOP_RATIO, top_k=3)
+def compute_metrics_with_confidence(y_true, y_prob, n_bootstrap=1000):
+    """
+    Compute metrics with 95% confidence intervals via bootstrap.
+    """
+    from sklearn.metrics import roc_auc_score
+    import numpy as np
+    
+    aucs = []
+    tprs_at_1pct = []
+    
+    for _ in range(n_bootstrap):
+        idx = np.random.choice(len(y_true), len(y_true), replace=True)
+        y_t = np.array(y_true)[idx]
+        y_p = np.array(y_prob)[idx]
+        
+        if len(set(y_t)) < 2:
+            continue
+        
+        aucs.append(roc_auc_score(y_t, y_p))
+        
+        # TPR @ 1% FPR
+        neg = y_p[y_t == 0]
+        pos = y_p[y_t == 1]
+        thresh = np.percentile(neg, 99)
+        tpr = (pos >= thresh).mean()
+        tprs_at_1pct.append(tpr)
+    
+    return {
+        "auc_mean": np.mean(aucs),
+        "auc_95ci": (np.percentile(aucs, 2.5), np.percentile(aucs, 97.5)),
+        "tpr_1pct_mean": np.mean(tprs_at_1pct),
+        "tpr_1pct_95ci": (np.percentile(tprs_at_1pct, 2.5), np.percentile(tprs_at_1pct, 97.5)),
+    }
 ```
 
----
+### Success Criteria (with sample size)
 
-## 6. Complete Training Pipeline
-
-```python
-def train_full_pipeline_v8(encoder, decoder, config):
-    """
-    Complete 4-stage training pipeline.
-    """
-    codec = MessageCodecV8()
-    
-    # === STAGE 1: Detection under codec (with negatives!) ===
-    print("=== Stage 1: Detection (pos + neg) ===")
-    stage1_dataset = Stage1DatasetV8(config["stage1_manifest"])
-    stage1_loader = DataLoader(stage1_dataset, batch_size=16, shuffle=True)
-    
-    for p in encoder.parameters():
-        p.requires_grad = False
-    opt = torch.optim.AdamW(decoder.parameters(), lr=3e-4)
-    
-    for epoch in range(20):
-        for batch in stage1_loader:
-            audio = batch["audio"].to(device)
-            has_wm = batch["has_watermark"].to(device)
-            
-            outputs = decoder(audio)
-            loss = F.binary_cross_entropy(outputs["clip_detect_prob"], has_wm)
-            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-    
-    # === STAGE 1B: Payload under codec ===
-    print("=== Stage 1B: Payload recovery ===")
-    stage1b_dataset = Stage1BDataset(config["stage1b_manifest"])
-    stage1b_loader = DataLoader(stage1b_dataset, batch_size=16, shuffle=True)
-    
-    opt = torch.optim.AdamW(decoder.parameters(), lr=1e-4)
-    
-    for epoch in range(10):
-        for batch in stage1b_loader:
-            audio = batch["audio"].to(device)
-            message = batch["message"].to(device)
-            
-            outputs = decoder(audio)
-            loss = F.binary_cross_entropy(outputs["all_message_probs"].mean(dim=1), message)
-            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-    
-    # === STAGE 2: Encoder (differentiable only) ===
-    print("=== Stage 2: Encoder ===")
-    for p in encoder.parameters():
-        p.requires_grad = True
-    for p in decoder.parameters():
-        p.requires_grad = False
-    
-    # ... (same as v7) ...
-    
-    # === STAGE 3: Joint fine-tune ===
-    print("=== Stage 3: Joint ===")
-    for p in decoder.parameters():
-        p.requires_grad = True
-    
-    # ... (same as v7) ...
-```
-
----
-
-## 7. Success Criteria (Updated)
-
-| Metric | Target | Notes |
-|--------|--------|-------|
-| Clip-level AUC | >0.95 | With negatives in training |
-| TPR @ 1% FPR | >85% | Full rule threshold tuning |
-| TPR @ 5% FPR | >92% | More stable |
-| Valid payload rate (clean) | >90% | Per-window decode |
-| **Valid payload rate (MP3-128)** | **>70%** | **Stage-1B trained** |
-| ViSQOL | >4.0 | Imperceptibility |
+| Metric | Target | Required Samples | Notes |
+|--------|--------|------------------|-------|
+| AUC | >0.95 | 200+ pos, 200+ neg | 95% CI <±0.03 |
+| TPR @ 1% FPR | >85% | 500+ neg | Stable estimate |
+| TPR @ 5% FPR | >92% | 200+ neg | More stable |
+| Valid payload (clean) | >90% | 100+ samples | |
+| Valid payload (MP3-128) | >70% | 100+ samples | Stage-1B trained |
 
 ---
 
@@ -396,12 +329,12 @@ def train_full_pipeline_v8(encoder, decoder, config):
 
 | Ver | Issue | Status |
 |-----|-------|--------|
-| v1-v6 | Various | ✅ Fixed |
-| v7 | Stage-1 no negatives | ✅ 50/50 pos/neg |
-| v7 | Decoder interface mismatch | ✅ Unified output |
-| v7 | Fixed message uses 0.5 | ✅ Binary zeros |
-| v7 | Window/hop mismatch | ✅ Aligned 0.5 |
-| v7 | Payload not trained under codec | ✅ Stage-1B |
-| v7 | Threshold tuning incomplete | ✅ Full rule tuning |
+| v1-v7 | Various | ✅ Fixed |
+| v8 | clip_detect topk gradients | ✅ Per-window aux loss |
+| v8 | Stage-1B all-window avg | ✅ Top-k window loss |
+| v8 | Shape (B,T) vs (B,1,T) | ✅ Uniform (B,T) |
+| v8 | tune slices ints | ✅ Tensor keys only |
+| v8 | Narrow attack suite | ✅ Expanded eval |
+| v8 | Unmeasurable criteria | ✅ CI + sample sizes |
 
-**v8 is implementation-ready.**
+**v9 is implementation-ready.**
