@@ -1,499 +1,503 @@
-# FYP Project Plan v4: Audio Watermarking (Final)
+# FYP Project Plan v5: Audio Watermarking (Final)
 
-> **Production-Ready Version** — All ChatGPT critiques addressed
+> **All ChatGPT critiques resolved** — Ready for implementation
 
 ---
 
-## v4 Fixes Summary
+## v5 Fixes Summary
 
-| v3 Issue | v4 Fix |
+| v4 Issue | v5 Fix |
 |----------|--------|
-| CRC is not ECC | **Repetition coding** (3× majority vote) |
-| 4-bit sync too weak | **16-bit preamble** (pseudo-random, keyed) |
-| Boundary artifacts | **Overlap-add** with Hann window blending |
-| Slow Python loops | **Vectorized** batch window processing |
-| Attribution claimed as "secure" | Clarified as **"decodable, not authenticated"** |
-
-**Final Rating Target: 9/10 plan, 8/10 implementation spec**
-
----
-
-## 1. Complete Architecture (v4)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           EMBEDDING PIPELINE                                │
-│                                                                             │
-│  Audio ─► Split windows ─► FiLM Encoder ─► Overlap-Add blend ─► Watermarked│
-│                │                                                            │
-│            Message: [16-bit preamble | 16-bit payload (3× repeated)]       │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           DETECTION PIPELINE                                │
-│                                                                             │
-│  Audio ─► Sliding windows (vectorized) ─► Decoder ─► Vote across windows   │
-│                                                   │                         │
-│                                         [Preamble check → Majority decode]  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| OR-logic in "majority vote" | **Soft-averaging**: `(p1+p2)/2 > 0.5` |
+| "3× repetition" but only 2 copies | Fixed documentation: **2× with soft-average** |
+| 14/16 preamble too loose | Tightened to **15/16 match** |
+| `max` aggregation inflates FPR | **Noisy-or**: `1 - prod(1 - p_i)` |
+| Non-differentiable Stage 2 augments | **Differentiable-only** for encoder training |
+| Python loop in overlap-add | **Tensorized** with `F.fold` |
+| "10 bits effective" wrong | Corrected to **7 bits** (3+4) |
 
 ---
 
-## 2. Message Format with Real Redundancy
-
-### Structure (32 bits total, effective payload = 10 bits)
-
-```
-Bits 0-15:   Preamble (16-bit pseudo-random, keyed)
-Bits 16-18:  Model ID (3 bits, 0-7)
-Bits 19-22:  Version (4 bits, 0-15)
-Bits 23-25:  Model ID repeated (for error correction)
-Bits 26-29:  Version repeated
-Bits 30-31:  Reserved
-
-Total: 32 bits
-  - 16 bits: Sync/preamble
-  - 7 bits × 2 repetitions = 14 bits: Payload with 2× redundancy
-  - 2 bits: Reserved
-```
-
-### Implementation
+## 1. Fixed Message Codec (Soft-Averaging)
 
 ```python
-import hashlib
-
-class MessageCodec:
-    """Encode/decode with 16-bit preamble + repetition coding."""
-    
+class MessageCodecV5:
+    """
+    Fixed codec with:
+    - 16-bit preamble (keyed)
+    - 7-bit payload (3 model_id + 4 version)
+    - 2× redundancy with SOFT-AVERAGING (not OR logic)
+    """
     def __init__(self, key: str = "fyp2026"):
-        # Generate deterministic 16-bit preamble from key
+        import hashlib
         h = hashlib.sha256(key.encode()).digest()
-        self.preamble = torch.tensor([int(b) for b in format(int.from_bytes(h[:2], 'big'), '016b')], dtype=torch.float)
+        self.preamble = torch.tensor(
+            [int(b) for b in format(int.from_bytes(h[:2], 'big'), '016b')],
+            dtype=torch.float
+        )
     
     def encode(self, model_id: int, version: int = 1) -> torch.Tensor:
-        """Create 32-bit message with preamble + repeated payload."""
-        msg = torch.zeros(32)
+        """
+        32-bit message:
+        - Bits 0-15:  Preamble (16 bits)
+        - Bits 16-18: Model ID (3 bits)
+        - Bits 19-22: Version (4 bits)
+        - Bits 23-25: Model ID copy 2
+        - Bits 26-29: Version copy 2
+        - Bits 30-31: Reserved
         
-        # Preamble (bits 0-15)
+        Effective payload: 7 bits with 2× redundancy
+        """
+        msg = torch.zeros(32)
         msg[0:16] = self.preamble
         
-        # Payload (bits 16-22): model_id (3 bits) + version (4 bits)
+        # Payload copy 1
         for i in range(3):
             msg[16 + i] = (model_id >> i) & 1
         for i in range(4):
             msg[19 + i] = (version >> i) & 1
         
-        # Repeated payload (bits 23-29): same bits for majority vote
-        msg[23:26] = msg[16:19]  # model_id repeated
-        msg[26:30] = msg[19:23]  # version repeated
+        # Payload copy 2 (for soft-average redundancy)
+        msg[23:26] = msg[16:19]
+        msg[26:30] = msg[19:23]
         
         return msg
     
-    def decode(self, probs: torch.Tensor, threshold: float = 0.5) -> dict:
-        """Decode with preamble check + majority vote."""
-        bits = (probs > threshold).int()
+    def decode(self, probs: torch.Tensor) -> dict:
+        """
+        Decode with:
+        - Strict preamble check (15/16 required)
+        - Soft-averaging for payload (NOT OR logic)
+        """
+        # STRICT preamble check: require 15/16 match
+        preamble_bits = (probs[0:16] > 0.5).int()
+        preamble_match = (preamble_bits == self.preamble.int()).sum().item()
         
-        # Check preamble (require >= 14/16 bits match)
-        preamble_match = (bits[0:16] == self.preamble.int()).sum()
-        if preamble_match < 14:
-            return {"valid": False, "reason": f"preamble_mismatch ({preamble_match}/16)"}
+        if preamble_match < 15:  # Tightened from 14
+            return {"valid": False, "reason": f"preamble ({preamble_match}/16)"}
         
-        # Majority vote on model_id
-        model_bits_1 = bits[16:19]
-        model_bits_2 = bits[23:26]
-        model_bits = ((model_bits_1 + model_bits_2) >= 1).int()  # Majority
+        # SOFT-AVERAGE for payload (fixes OR-logic bug)
+        # Average the probabilities, THEN threshold
+        model_probs_avg = (probs[16:19] + probs[23:26]) / 2
+        ver_probs_avg = (probs[19:23] + probs[26:30]) / 2
+        
+        model_bits = (model_probs_avg > 0.5).int()
+        ver_bits = (ver_probs_avg > 0.5).int()
+        
         model_id = model_bits[0] + 2*model_bits[1] + 4*model_bits[2]
-        
-        # Majority vote on version
-        ver_bits_1 = bits[19:23]
-        ver_bits_2 = bits[26:30]
-        ver_bits = ((ver_bits_1 + ver_bits_2) >= 1).int()
         version = ver_bits[0] + 2*ver_bits[1] + 4*ver_bits[2] + 8*ver_bits[3]
         
-        # Confidence = average probability of payload bits
-        confidence = probs[16:30].mean().item()
+        # Confidence = average probability of all payload bits
+        confidence = torch.cat([model_probs_avg, ver_probs_avg]).mean().item()
         
         return {
             "valid": True,
             "model_id": model_id.item(),
             "version": version.item(),
-            "preamble_score": preamble_match.item() / 16,
+            "preamble_score": preamble_match / 16,
             "confidence": confidence,
         }
 ```
 
 ---
 
-## 3. Overlap-Add Encoder (Fixes Boundary Artifacts)
+## 2. Noisy-OR Aggregation (Fixes FPR Inflation)
 
 ```python
-class OverlapAddEncoder(nn.Module):
+class ClipLevelDecoder(nn.Module):
     """
-    Embeds watermark using overlap-add to avoid boundary discontinuities.
-    Vectorized for efficiency on Mac.
+    Clip-level detection using noisy-or aggregation.
+    Fixes the multiple-comparisons FPR inflation from max().
     """
-    def __init__(self, base_encoder, window_samples: int = 16000, hop_ratio: float = 0.5):
-        super().__init__()
-        self.encoder = base_encoder
-        self.window = window_samples
-        self.hop = int(window_samples * hop_ratio)  # 50% overlap
-        
-        # Hann window for smooth blending
-        self.register_buffer('hann', torch.hann_window(window_samples))
-    
-    def forward(self, audio: torch.Tensor, message: torch.Tensor) -> torch.Tensor:
-        """
-        Vectorized overlap-add embedding.
-        audio: (B, 1, T)
-        message: (B, 32)
-        """
-        B, C, T = audio.shape
-        device = audio.device
-        
-        # Calculate number of windows
-        n_windows = max(1, (T - self.window) // self.hop + 1)
-        
-        # Pad audio to fit exact windows
-        pad_len = (n_windows - 1) * self.hop + self.window - T
-        if pad_len > 0:
-            audio = F.pad(audio, (0, pad_len))
-            T = audio.shape[-1]
-        
-        # Extract overlapping windows: (B, n_windows, window)
-        windows = audio.unfold(dimension=2, size=self.window, step=self.hop)  # (B, 1, n_windows, window)
-        windows = windows.squeeze(1)  # (B, n_windows, window)
-        
-        # Reshape for batch processing: (B * n_windows, 1, window)
-        B_eff = B * n_windows
-        windows_flat = windows.reshape(B_eff, 1, self.window)
-        
-        # Expand message for all windows: (B * n_windows, 32)
-        message_expanded = message.unsqueeze(1).expand(-1, n_windows, -1).reshape(B_eff, -1)
-        
-        # Encode all windows in one batch
-        wm_windows_flat = self.encoder(windows_flat, message_expanded)  # (B_eff, 1, window)
-        
-        # Reshape back: (B, n_windows, window)
-        wm_windows = wm_windows_flat.squeeze(1).reshape(B, n_windows, self.window)
-        
-        # Apply Hann window for smooth overlap
-        wm_windows = wm_windows * self.hann.unsqueeze(0).unsqueeze(0)
-        
-        # Overlap-add reconstruction
-        output = torch.zeros(B, T, device=device)
-        normalizer = torch.zeros(T, device=device)
-        
-        for i in range(n_windows):
-            start = i * self.hop
-            end = start + self.window
-            output[:, start:end] += wm_windows[:, i, :]
-            normalizer[start:end] += self.hann
-        
-        # Normalize by window sum
-        normalizer = normalizer.clamp(min=1e-8)
-        output = output / normalizer
-        
-        # Remove padding
-        output = output[:, :T - pad_len] if pad_len > 0 else output
-        
-        return output.unsqueeze(1)  # (B, 1, T)
-```
-
----
-
-## 4. Vectorized Sliding Window Decoder
-
-```python
-class VectorizedDecoder(nn.Module):
-    """
-    Vectorized sliding-window decoding with voting.
-    Much faster than Python loops.
-    """
-    def __init__(self, base_decoder, window_samples: int = 16000, hop_ratio: float = 0.25):
+    def __init__(self, base_decoder, window_samples=16000, hop_ratio=0.25):
         super().__init__()
         self.decoder = base_decoder
         self.window = window_samples
         self.hop = int(window_samples * hop_ratio)
     
     def forward(self, audio: torch.Tensor) -> dict:
-        """
-        audio: (B, T) - raw waveform
-        Returns aggregated predictions across windows.
-        """
         B, T = audio.shape
-        device = audio.device
         
-        # Handle short audio
         if T < self.window:
             audio = F.pad(audio, (0, self.window - T))
             T = self.window
         
-        # Calculate windows
         n_windows = (T - self.window) // self.hop + 1
         
-        # Extract windows using unfold: (B, n_windows, window)
-        windows = audio.unfold(dimension=1, size=self.window, step=self.hop)
-        
-        # Reshape for batch: (B * n_windows, window)
-        B_eff = B * n_windows
-        windows_flat = windows.reshape(B_eff, self.window)
+        # Vectorized window extraction
+        windows = audio.unfold(1, self.window, self.hop)  # (B, n_win, window)
+        windows_flat = windows.reshape(-1, self.window)   # (B*n_win, window)
         
         # Decode all windows
         outputs = self.decoder(windows_flat)
         
-        # Reshape outputs: (B, n_windows, ...)
-        detect_prob = outputs["detect_prob"].reshape(B, n_windows, -1)
-        message_prob = outputs["message_prob"].reshape(B, n_windows, -1)
-        model_logits = outputs["model_logits"].reshape(B, n_windows, -1)
+        # Reshape: (B, n_windows, ...)
+        detect = outputs["detect_prob"].reshape(B, n_windows, -1).squeeze(-1)
+        message = outputs["message_prob"].reshape(B, n_windows, -1)
+        model = outputs["model_logits"].reshape(B, n_windows, -1)
         
-        # Aggregate: max for detection, mean for message/model
-        agg_detect = detect_prob.max(dim=1)[0]
-        agg_message = message_prob.mean(dim=1)
-        agg_model = model_logits.mean(dim=1)
+        # NOISY-OR aggregation (fixes max() FPR inflation)
+        # P(at least one) = 1 - prod(1 - p_i)
+        noisy_or = 1 - torch.prod(1 - detect, dim=1, keepdim=True)
+        
+        # For message/model: weight by detection probability
+        weights = F.softmax(detect, dim=1).unsqueeze(-1)
+        weighted_message = (message * weights).sum(dim=1)
+        weighted_model = (model * weights).sum(dim=1)
         
         return {
-            "detect_prob": agg_detect,
-            "message_prob": agg_message,
-            "model_logits": agg_model,
+            "detect_prob": noisy_or,
+            "message_prob": weighted_message,
+            "model_logits": weighted_model,
             "n_windows": n_windows,
+            "per_window_detect": detect,  # For debugging
         }
 ```
 
 ---
 
-## 5. Updated Encoder with FiLM + GroupNorm
+## 3. Tensorized Overlap-Add (No Python Loop)
 
 ```python
-class WatermarkEncoderV4(nn.Module):
+class TensorizedOverlapAddEncoder(nn.Module):
     """
-    Final encoder with:
-    - FiLM conditioning (message actually encodes bits)
-    - GroupNorm (stable on Mac with small batches)
-    - Bounded output (Tanh + learnable alpha)
+    Fully tensorized overlap-add using F.fold.
+    No Python loops in reconstruction.
     """
-    def __init__(self, msg_bits: int = 32, hidden: int = 32, groups: int = 4):
+    def __init__(self, base_encoder, window_samples=16000, hop_ratio=0.5):
+        super().__init__()
+        self.encoder = base_encoder
+        self.window = window_samples
+        self.hop = int(window_samples * hop_ratio)
+        self.register_buffer('hann', torch.hann_window(window_samples))
+    
+    def forward(self, audio: torch.Tensor, message: torch.Tensor) -> torch.Tensor:
+        B, C, T = audio.shape
+        
+        # Pad to fit windows
+        n_windows = max(1, (T - self.window) // self.hop + 1)
+        out_len = (n_windows - 1) * self.hop + self.window
+        pad_len = out_len - T
+        if pad_len > 0:
+            audio = F.pad(audio, (0, pad_len))
+        
+        # Extract windows: (B, 1, n_win, window)
+        windows = audio.unfold(2, self.window, self.hop)
+        B, C, n_win, W = windows.shape
+        
+        # Reshape for batch encoding: (B * n_win, 1, window)
+        windows_flat = windows.permute(0, 2, 1, 3).reshape(B * n_win, 1, W)
+        message_exp = message.unsqueeze(1).expand(-1, n_win, -1).reshape(B * n_win, -1)
+        
+        # Encode all windows
+        wm_flat = self.encoder(windows_flat, message_exp)  # (B*n_win, 1, W)
+        
+        # Apply Hann window
+        wm_flat = wm_flat * self.hann.view(1, 1, -1)
+        
+        # Reshape: (B, n_win, window) -> (B, window, n_win) for fold
+        wm = wm_flat.squeeze(1).reshape(B, n_win, W).permute(0, 2, 1)
+        
+        # TENSORIZED overlap-add using F.fold (no Python loop!)
+        output = F.fold(
+            wm,
+            output_size=(1, out_len),
+            kernel_size=(1, self.window),
+            stride=(1, self.hop)
+        ).squeeze(2)  # (B, 1, out_len)
+        
+        # Compute normalizer (sum of overlapping Hann windows)
+        ones = torch.ones(B, n_win, W, device=audio.device)
+        ones = ones * self.hann.view(1, 1, -1)
+        ones = ones.permute(0, 2, 1)
+        normalizer = F.fold(
+            ones,
+            output_size=(1, out_len),
+            kernel_size=(1, self.window),
+            stride=(1, self.hop)
+        ).squeeze(2).clamp(min=1e-8)
+        
+        output = output / normalizer
+        
+        # Remove padding
+        if pad_len > 0:
+            output = output[:, :, :-pad_len]
+        
+        return output
+```
+
+---
+
+## 4. Differentiable-Only Stage 2 Augmentations
+
+```python
+class DifferentiableAugmenter(nn.Module):
+    """
+    Augmentations that preserve gradient flow for Stage 2 encoder training.
+    NON-differentiable (MP3, FFmpeg) used ONLY in decoder training + eval.
+    """
+    def __init__(self):
         super().__init__()
         
-        # FiLM layers (message → gamma, beta per conv layer)
-        self.film1 = nn.Linear(msg_bits, hidden * 2)
-        self.film2 = nn.Linear(msg_bits, hidden * 2)
-        self.film3 = nn.Linear(msg_bits, hidden * 2)
-        
-        # Conv layers with GroupNorm
-        self.conv1 = nn.Conv1d(1, hidden, 7, padding=3)
-        self.gn1 = nn.GroupNorm(groups, hidden)
-        
-        self.conv2 = nn.Conv1d(hidden, hidden, 5, padding=2)
-        self.gn2 = nn.GroupNorm(groups, hidden)
-        
-        self.conv3 = nn.Conv1d(hidden, hidden, 3, padding=1)
-        self.gn3 = nn.GroupNorm(groups, hidden)
-        
-        self.out = nn.Conv1d(hidden, 1, 3, padding=1)
-        
-        # Learnable strength, clamped for imperceptibility
-        self.alpha = nn.Parameter(torch.tensor(0.02))
-        
-    def _film(self, x, params):
-        g, b = params.chunk(2, dim=1)
-        return g.unsqueeze(-1) * x + b.unsqueeze(-1)
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """All transforms here are differentiable through PyTorch."""
+        transform = random.choice([
+            self.add_noise,
+            self.apply_eq,
+            self.resample_diff,
+            self.volume_change,
+            self.identity,
+        ])
+        return transform(audio)
     
-    def forward(self, audio, message):
-        x = self.conv1(audio)
-        x = self._film(self.gn1(x), self.film1(message))
-        x = F.relu(x)
+    def identity(self, x):
+        return x
+    
+    def add_noise(self, x, snr_range=(20, 40)):
+        """Differentiable Gaussian noise."""
+        snr = random.uniform(*snr_range)
+        signal_power = x.pow(2).mean()
+        noise_power = signal_power / (10 ** (snr / 10))
+        noise = torch.randn_like(x) * noise_power.sqrt()
+        return x + noise
+    
+    def apply_eq(self, x):
+        """Differentiable EQ via 1D conv (lowpass/highpass)."""
+        kernel_size = random.choice([3, 5, 7])
+        kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        return F.conv1d(x, kernel, padding=kernel_size//2).squeeze(1)
+    
+    def resample_diff(self, x, factors=[(0.9, 1.1), (0.95, 1.05)]):
+        """Differentiable approximate resampling via interpolation."""
+        factor = random.uniform(*random.choice(factors))
+        orig_len = x.shape[-1]
+        new_len = int(orig_len * factor)
         
-        x = self.conv2(x)
-        x = self._film(self.gn2(x), self.film2(message))
-        x = F.relu(x)
-        
-        x = self.conv3(x)
-        x = self._film(self.gn3(x), self.film3(message))
-        x = F.relu(x)
-        
-        watermark = torch.tanh(self.out(x))
-        alpha = torch.clamp(self.alpha, 0.01, 0.1)
-        
-        return audio + alpha * watermark
+        # Use interpolate (differentiable)
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        resampled = F.interpolate(x, size=new_len, mode='linear', align_corners=False)
+        # Resample back to original length
+        resampled = F.interpolate(resampled, size=orig_len, mode='linear', align_corners=False)
+        return resampled.squeeze(1)
+    
+    def volume_change(self, x, range_db=(-6, 6)):
+        """Differentiable volume scaling."""
+        db = random.uniform(*range_db)
+        scale = 10 ** (db / 20)
+        return x * scale
+
+
+class NonDifferentiableAugmenter:
+    """
+    For decoder training and evaluation ONLY.
+    These break gradients - never use in Stage 2 encoder training!
+    """
+    def __call__(self, audio_path: str, transform: str) -> str:
+        # MP3, AAC, Opus via FFmpeg - returns path to transformed file
+        # Used in dataloader, not in training loop
+        ...
 ```
 
 ---
 
-## 6. Stage-2 Domain Gap Fix
+## 5. Fixed Training Pipeline
 
 ```python
-def train_stage2_mixed(encoder, decoder, loader, device, config):
+def train_full_pipeline(encoder, decoder, train_loader, device, config):
     """
-    Stage 2 with mixed embeddings to prevent domain gap.
-    70% learned encoder, 30% spread-spectrum (annealed).
+    3-stage training with correct augmentation domains.
     """
+    diff_aug = DifferentiableAugmenter()
+    codec = MessageCodecV5(key=config["key"])
+    
+    # ===========================================
+    # STAGE 1: Decoder with spread-spectrum (20 epochs)
+    # Augmentations: ANY (differentiable not required)
+    # ===========================================
+    print("=== Stage 1: Decoder Training ===")
     spread_spectrum = SpreadSpectrumEmbedder()
-    optimizer = torch.optim.AdamW(encoder.parameters(), lr=config["lr"])
+    for p in encoder.parameters():
+        p.requires_grad = False
     
-    for epoch in range(config["stage2_epochs"]):
-        # Anneal: start with 30% SS, decrease to 10%
-        ss_ratio = 0.3 - 0.2 * (epoch / config["stage2_epochs"])
-        
-        for batch in loader:
+    opt = torch.optim.AdamW(decoder.parameters(), lr=3e-4)
+    
+    for epoch in range(20):
+        for batch in train_loader:
+            audio = batch["audio"].to(device)
+            message = codec.encode(batch["model_id"], batch["version"]).to(device)
+            
+            wm = spread_spectrum(audio, message)
+            # Can use ANY augmentation here (non-diff OK)
+            aug = diff_aug(wm)  # Or load pre-augmented from disk
+            
+            out = decoder(aug)
+            loss = compute_decoder_loss(out, message)
+            
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    
+    # ===========================================
+    # STAGE 2: Encoder with frozen decoder (20 epochs)
+    # Augmentations: DIFFERENTIABLE ONLY!
+    # ===========================================
+    print("=== Stage 2: Encoder Training (DIFFERENTIABLE AUG ONLY) ===")
+    for p in encoder.parameters():
+        p.requires_grad = True
+    for p in decoder.parameters():
+        p.requires_grad = False
+    
+    opt = torch.optim.AdamW(encoder.parameters(), lr=3e-4)
+    
+    for epoch in range(20):
+        for batch in train_loader:
             audio = batch["audio"].unsqueeze(1).to(device)
-            message = batch["message"].to(device)
+            message = codec.encode(batch["model_id"], batch["version"]).to(device)
             
-            # Mixed embedding
-            use_ss = torch.rand(audio.shape[0]) < ss_ratio
+            wm = encoder(audio, message)
             
-            watermarked = audio.clone()
-            if (~use_ss).sum() > 0:
-                watermarked[~use_ss] = encoder(audio[~use_ss], message[~use_ss])
-            if use_ss.sum() > 0:
-                watermarked[use_ss] = spread_spectrum(audio[use_ss], message[use_ss])
+            # ONLY differentiable augmentations! Gradients must flow!
+            aug = diff_aug(wm.squeeze(1))
             
-            # Rest of training...
-            augmented = augmenter(watermarked.squeeze(1))
-            outputs = decoder(augmented)
-            # ...
+            out = decoder(aug)
+            
+            loss_qual = compute_stft_loss(audio.squeeze(1), wm.squeeze(1))
+            loss_det = compute_decoder_loss(out, message)
+            loss = loss_det + 10.0 * loss_qual
+            
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    
+    # ===========================================
+    # STAGE 3: Joint fine-tune (10 epochs)
+    # Low LR, differentiable augmentations
+    # ===========================================
+    print("=== Stage 3: Joint Fine-tune ===")
+    for p in decoder.parameters():
+        p.requires_grad = True
+    
+    opt = torch.optim.AdamW(
+        list(encoder.parameters()) + list(decoder.parameters()),
+        lr=1e-5
+    )
+    
+    for epoch in range(10):
+        # Same as Stage 2 but both models update
+        ...
 ```
 
 ---
 
-## 7. Attribution Claim Clarification
-
-> [!WARNING]
-> **Attribution is DECODABLE, not AUTHENTICATED**
->
-> Without a secret key or MAC, anyone with encoder access can watermark arbitrary audio and claim any model_id. This system proves *presence* and *decodes payload*, but does NOT cryptographically authenticate origin.
->
-> **Threat model:**
-> - Benign setting (no spoofing): ✅ Works
-> - Adversarial setting (attacker has encoder): ❌ Spoofing possible
->
-> **Future work:** Add HMAC over payload with secret key for authenticated attribution.
-
----
-
-## 8. Evaluation Additions
-
-### FPR/TPR Reporting (Benchmark-Style)
+## 6. Clip-Level Evaluation Metrics
 
 ```python
-def compute_detection_metrics(y_true, y_probs):
-    """Benchmark-style metrics."""
+def evaluate_clip_level(encoder, decoder, test_loader, codec, device):
+    """
+    Report CLIP-LEVEL metrics (not window-level).
+    Proper FPR/TPR at clip granularity.
+    """
+    clip_probs = []
+    clip_labels = []
+    payload_results = []
+    
+    for batch in test_loader:
+        audio = batch["audio"].to(device)
+        is_watermarked = batch["is_watermarked"]
+        
+        # Get clip-level detection (noisy-or aggregated)
+        outputs = decoder(audio)
+        clip_prob = outputs["detect_prob"].cpu().numpy()
+        
+        clip_probs.extend(clip_prob.flatten())
+        clip_labels.extend(is_watermarked.numpy())
+        
+        # Payload decoding
+        for i, prob in enumerate(outputs["message_prob"]):
+            result = codec.decode(prob)
+            result["ground_truth_model"] = batch["model_id"][i].item()
+            payload_results.append(result)
+    
+    # Clip-level metrics
     from sklearn.metrics import roc_curve, roc_auc_score
     
-    fpr, tpr, thresholds = roc_curve(y_true, y_probs)
-    auc = roc_auc_score(y_true, y_probs)
+    fpr, tpr, thresh = roc_curve(clip_labels, clip_probs)
+    auc = roc_auc_score(clip_labels, clip_probs)
     
-    # TPR at specific FPR levels
-    def tpr_at_fpr(target_fpr):
-        idx = np.searchsorted(fpr, target_fpr)
+    def tpr_at_fpr(target):
+        idx = np.searchsorted(fpr, target)
         return tpr[min(idx, len(tpr)-1)]
     
+    valid_payloads = [r for r in payload_results if r.get("valid")]
+    
     return {
-        "auc": auc,
+        "clip_auc": auc,
         "tpr_at_0.1%_fpr": tpr_at_fpr(0.001),
         "tpr_at_1%_fpr": tpr_at_fpr(0.01),
         "tpr_at_5%_fpr": tpr_at_fpr(0.05),
+        "valid_payload_rate": len(valid_payloads) / len(payload_results),
+        "n_clips": len(clip_labels),
     }
 ```
 
-### Valid Payload Rate
+---
 
-```python
-def compute_payload_metrics(decoder_outputs, codec):
-    """Measure how often we get valid, decodable payloads."""
-    valid_count = 0
-    total_count = len(decoder_outputs)
-    
-    for probs in decoder_outputs:
-        result = codec.decode(probs)
-        if result["valid"]:
-            valid_count += 1
-    
-    return {
-        "valid_payload_rate": valid_count / total_count,
-        "invalid_rate": 1 - valid_count / total_count,
-    }
+## 7. Final Architecture Summary
+
 ```
+ENCODER (FiLM + GroupNorm):
+  Audio + Message → FiLM-conditioned convs → Tanh watermark → α-scaled addition
 
-### Neural Codec Stress Test (Exploratory)
+EMBEDDING (Tensorized Overlap-Add):
+  Audio → unfold windows → batch encode → F.fold with Hann → smooth output
 
-```python
-def test_neural_codec(encoder, decoder, audio, message):
-    """
-    Single EnCodec pass as stress test (marked exploratory).
-    """
-    try:
-        from encodec import EncodecModel
-        encodec = EncodecModel.encodec_model_24khz()
-        
-        watermarked = encoder(audio, message)
-        
-        # Resample to 24kHz for EnCodec
-        wm_24k = torchaudio.functional.resample(watermarked, 16000, 24000)
-        
-        # Encode-decode through neural codec
-        with torch.no_grad():
-            codes = encodec.encode(wm_24k.unsqueeze(0))
-            reconstructed = encodec.decode(codes)
-        
-        # Back to 16kHz
-        recon_16k = torchaudio.functional.resample(reconstructed.squeeze(0), 24000, 16000)
-        
-        outputs = decoder(recon_16k.squeeze(0))
-        
-        return {
-            "detect_prob": outputs["detect_prob"].item(),
-            "note": "Exploratory - neural codec stress test",
-        }
-    except ImportError:
-        return {"skipped": True, "reason": "encodec not installed"}
+DECODER (Clip-Level Noisy-OR):
+  Audio → unfold windows → batch decode → noisy-or detection → weighted message/model
+
+MESSAGE (2× Soft-Average):
+  16-bit preamble (keyed) + 7-bit payload (2× redundancy) → soft-average decode
 ```
 
 ---
 
-## 9. Final Success Criteria
+## 8. Success Criteria (Realistic)
 
-| Metric | Target | Type |
-|--------|--------|------|
-| Detection (clean) | >95% | Hypothesis |
-| Detection (MP3-128) | >85% | Hypothesis |
-| Detection (cropped 50%) | >75% | Hypothesis |
-| Valid payload rate (clean) | >90% | Hypothesis |
-| Valid payload rate (MP3-128) | >70% | Hypothesis |
-| TPR @ 1% FPR | >85% | Benchmark metric |
-| ViSQOL | >4.0 | Quality |
-| SNR | >30 dB | Quality |
+| Metric | Target | Notes |
+|--------|--------|-------|
+| Clip-level AUC | >0.95 | Noisy-or aggregation |
+| TPR @ 1% FPR | >85% | Clip-level |
+| Valid payload rate (clean) | >90% | 15/16 preamble + soft-avg |
+| Valid payload rate (MP3-128) | >70% | Degradation expected |
+| ViSQOL | >4.0 | Imperceptibility |
+| SNR | >30 dB | Quality constraint |
 
 ---
 
-## 10. Final Timeline
+## 9. Acknowledged Limitations
 
-| Week | Tasks | Deliverable |
-|------|-------|-------------|
-| 1 | Implement encoder/decoder v4, message codec | E2E works |
-| 2 | Dataset (600+ samples), 2-stage training setup | Stage 1 complete |
-| 3 | Full training, overlap-add tested | Both stages done |
-| 4 | Evaluation suite, all transforms + forgery | Metrics table |
-| 5 | Integration, report, neural codec stress test | Final submission |
+- **Attribution not authenticated**: HMAC future work
+- **Neural codecs not in scope**: EnCodec stress test exploratory only
+- **7-bit effective payload**: Sufficient for 8 models + 16 versions
 
 ---
 
-## Appendix: All ChatGPT Critiques Addressed
+## Appendix: All Critiques Resolved
 
-| Version | Issue | Status |
-|---------|-------|--------|
-| v1 | Pipeline contradiction | ✅ Fixed (on-the-fly) |
-| v1 | MPS incompatibility | ✅ Fixed (pure-torch) |
-| v1 | Wrong label logic | ✅ Fixed (masked loss) |
-| v1 | No quality constraint | ✅ Fixed (STFT loss) |
-| v2 | Encoder doesn't encode bits | ✅ Fixed (FiLM) |
-| v2 | No sync for cropping | ✅ Fixed (repeated embed) |
-| v2 | Training collapse risk | ✅ Fixed (2-stage) |
-| v3 | CRC is not ECC | ✅ Fixed (repetition) |
-| v3 | 4-bit sync too weak | ✅ Fixed (16-bit preamble) |
-| v3 | Boundary artifacts | ✅ Fixed (overlap-add) |
-| v3 | Slow Python loops | ✅ Fixed (vectorized) |
-| v3 | Attribution claimed secure | ✅ Clarified (decodable only) |
-| v3 | Stage-1 domain gap | ✅ Fixed (mixed training) |
+| Ver | Issue | Status |
+|-----|-------|--------|
+| v1 | Pipeline contradiction | ✅ On-the-fly |
+| v1 | MPS incompatibility | ✅ Pure-torch |
+| v2 | Encoder doesn't encode bits | ✅ FiLM |
+| v2 | No sync for cropping | ✅ Repeated embed |
+| v3 | CRC is not ECC | ✅ 2× redundancy |
+| v3 | 4-bit sync weak | ✅ 16-bit preamble |
+| v4 | OR-logic in decode | ✅ Soft-average |
+| v4 | 14/16 preamble loose | ✅ 15/16 |
+| v4 | max() inflates FPR | ✅ Noisy-or |
+| v4 | Non-diff Stage 2 | ✅ Diff-only augments |
+| v4 | Python loop in fold | ✅ Tensorized F.fold |
 
-**Plan is now research-aligned and implementation-ready.**
+**Plan is now implementation-ready.**
