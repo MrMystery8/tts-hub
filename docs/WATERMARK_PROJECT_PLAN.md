@@ -776,10 +776,15 @@ class DifferentiableAugmenter:
         return x * 10**(db/20)
 
 
-def train_stage2(encoder, decoder, loader, device, epochs=20):
-    """Train encoder with differentiable augments only."""
+def train_stage2(encoder, decoder, loader, device, epochs=20, top_k=3):
+    """
+    Train encoder with differentiable augments only.
     
+    FIX: Use TOP-K windows for loss (matches inference objective!)
+    Previous: mean(all windows) - trained different objective than inference
+    """
     aug = DifferentiableAugmenter()
+    stft_loss = CachedSTFTLoss(device)  # Use cached version!
     
     for p in decoder.parameters():
         p.requires_grad = False
@@ -796,18 +801,37 @@ def train_stage2(encoder, decoder, loader, device, epochs=20):
             
             outputs = decoder(augmented)
             
-            # Quality loss
-            loss_qual = compute_stft_loss(audio.squeeze(1), wm.squeeze(1))
+            # Quality loss (cached STFT)
+            loss_qual = stft_loss(audio.squeeze(1), wm.squeeze(1))
             
-            # Detection loss
+            # FIX: Use TOP-K windows for detection/message loss!
+            # This matches the inference objective (top-k aggregation)
+            detect = outputs["all_window_probs"]  # (B, n_win)
+            detect_logits = outputs["all_window_logits"]  # (B, n_win)
+            msg_logits = outputs["all_message_logits"]  # (B, n_win, 32)
+            
+            B, n_win = detect.shape
+            k = min(top_k, n_win)
+            
+            # Get top-k indices by detection probability
+            _, top_idx = torch.topk(detect, k, dim=1)
+            
+            # Gather top-k detection logits
+            top_det_logits = torch.gather(detect_logits, 1, top_idx)  # (B, k)
+            
+            # Detection loss on top-k (target = 1 for watermarked)
             loss_det = F.binary_cross_entropy_with_logits(
-                outputs["all_window_logits"].mean(dim=1),
-                torch.ones(audio.size(0), device=device)
+                top_det_logits.mean(dim=1),
+                torch.ones(B, device=device)
             )
             
-            # Message loss
+            # Gather top-k message logits
+            top_idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, msg_logits.shape[-1])
+            top_msg_logits = torch.gather(msg_logits, 1, top_idx_exp)  # (B, k, 32)
+            
+            # Message loss on top-k
             loss_msg = F.binary_cross_entropy_with_logits(
-                outputs["all_message_logits"].mean(dim=1),
+                top_msg_logits.mean(dim=1),  # (B, 32)
                 message
             )
             
@@ -818,10 +842,47 @@ def train_stage2(encoder, decoder, loader, device, epochs=20):
             opt.step()
 ```
 
-## 5.5 Quality Loss (Multi-Resolution STFT)
+## 5.5 Quality Loss (Multi-Resolution STFT - CACHED)
 
 ```python
+class CachedSTFTLoss(nn.Module):
+    """
+    Multi-resolution STFT loss with CACHED windows.
+    
+    FIX: Windows registered as buffers, not created every forward!
+    Much faster on MPS.
+    """
+    def __init__(self, device, fft_sizes=[512, 1024, 2048]):
+        super().__init__()
+        self.fft_sizes = fft_sizes
+        
+        # Cache windows as buffers (avoids creation in forward!)
+        for n_fft in fft_sizes:
+            self.register_buffer(f'window_{n_fft}', torch.hann_window(n_fft))
+    
+    def forward(self, original: torch.Tensor, watermarked: torch.Tensor) -> torch.Tensor:
+        total = 0.0
+        
+        for n_fft in self.fft_sizes:
+            hop = n_fft // 4
+            window = getattr(self, f'window_{n_fft}')  # Use cached window!
+            
+            orig_spec = torch.stft(original, n_fft, hop, window=window, return_complex=True)
+            wm_spec = torch.stft(watermarked, n_fft, hop, window=window, return_complex=True)
+            
+            orig_mag, wm_mag = orig_spec.abs(), wm_spec.abs()
+            
+            sc_loss = torch.norm(orig_mag - wm_mag, p='fro') / (torch.norm(orig_mag, p='fro') + 1e-8)
+            log_loss = F.l1_loss(torch.log(wm_mag + 1e-8), torch.log(orig_mag + 1e-8))
+            
+            total = total + sc_loss + log_loss
+        
+        return total / len(self.fft_sizes)
+
+
+# Legacy function kept for reference
 def compute_stft_loss(original, watermarked):
+    """DEPRECATED: Use CachedSTFTLoss instead for better performance."""
     total = 0.0
     for n_fft in [512, 1024, 2048]:
         hop = n_fft // 4
