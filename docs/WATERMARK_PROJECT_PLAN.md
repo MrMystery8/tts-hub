@@ -1,10 +1,13 @@
 # FYP Project Plan: Audio Watermarking with Trained Classifier
 
-## Final Version (v12) — Comprehensive Reference Document
+## Final Version (v16) — Comprehensive Standalone Reference
 
-> **Status**: Implementation-ready within stated threat model
+> **Status**: Implementation-ready within stated threat model (benign/no-box transforms)
 > 
-> This document consolidates 12 iterations of refinement based on extensive critique. It includes the complete architecture, all lessons learned, and implementation-ready code.
+> This document consolidates **16 iterative refinements** based on extensive AI-assisted critique. It is designed to be **fully self-contained**: any AI or human reading this document should be able to understand and implement the complete system without additional context.
+
+> [!NOTE]
+> **How to read this document**: Start with the Executive Summary, then Architecture Overview. The "Why" sections explain rationale. Complete implementation code is in Section 4. Training pipeline in Section 5. Lessons Learned (Section 7) documents pitfalls that were caught during design—**do not skip this section**.
 
 ---
 
@@ -31,22 +34,25 @@ A complete audio watermarking system trained from scratch:
 - **Decoder**: CNN-based detector that identifies watermarks and attributes source model
 - **Robust to**: MP3, AAC, noise, resampling, reverb, time-stretch (non-adversarial)
 
-## Key Design Decisions
+## Key Design Decisions (with Rationale)
 
-| Decision | Rationale |
-|----------|-----------|
-| Train encoder from scratch | Stronger FYP claim than using pre-trained |
-| FiLM conditioning | Message actually modulates watermark content (not just amplitude) |
-| Sliding window + voting | Robust to cropping and misalignment |
-| 2-stage training | Prevents encoder-decoder collapse |
-| Top-k aggregation | Avoids "garbage averaging" and noisy-OR miscalibration |
+| Decision | Rationale | Alternatives Rejected |
+|----------|-----------|----------------------|
+| Train encoder from scratch | Stronger FYP claim than using pre-trained; full control over architecture | Use AudioSeal/WavMark pre-trained (weaker claim) |
+| FiLM conditioning | Message creates (γ, β) that modulate conv features—different messages produce different watermark shapes, not just amplitude scaling | Concatenate message to input (less expressive); Amplitude scaling only (trivially removable) |
+| Sliding window + voting | Robust to cropping and time-shift; works on arbitrary-length audio | Single-pass (fails on cropped audio); Fixed-length only (not practical) |
+| 2-stage training | Train decoder first (Stage 1), then encoder (Stage 2). Prevents collapse where encoder outputs zeros and decoder always predicts "watermarked" | Joint training from start (prone to collapse) |
+| Top-k aggregation | Average only the K most confident windows. Avoids "garbage averaging" where low-confidence windows dilute the signal | Mean over all windows (noisy); Max (inflates FPR); Noisy-OR (miscalibrated probabilities) |
+| Preamble + payload | 16-bit known preamble enables sync detection; 7-bit payload with 2× redundancy for model attribution | CRC (overkill for 7 bits); Single-copy payload (no error tolerance) |
+| BCEWithLogitsLoss | More numerically stable than sigmoid + BCE (uses log-sum-exp trick internally) | BCE on probabilities (less stable) |
+| GroupNorm | Stable on small batch sizes typical for Mac/MPS training | BatchNorm (unstable on small batches) |
 
 ## FYP Deliverables
 
-1. Trained encoder model (PyTorch)
-2. Trained decoder/classifier (PyTorch)
-3. Dataset generation pipeline
-4. Evaluation report with metrics
+1. Trained encoder model (PyTorch, ~50K params)
+2. Trained decoder/classifier (PyTorch, CNN-based)
+3. Dataset generation pipeline with codec precomputation
+4. Evaluation report with AUC, TPR@FPR, ViSQOL
 5. Integrated TTS Hub demo
 
 ---
@@ -88,6 +94,51 @@ HOP_RATIO = 0.5         # 50% overlap
 MSG_BITS = 32
 PREAMBLE_BITS = 16
 PAYLOAD_BITS = 7  # 3 model_id + 4 version
+```
+
+## Data Requirements
+
+### Minimum Dataset Size
+- **Stage 1 (Detection)**: 500+ watermarked clips, 500+ unwatermarked clips
+- **Stage 1B/2 (Payload/Encoder)**: 1000+ watermarked clips with known model_id
+- **Evaluation**: 200+ per attack type
+
+### Manifest Format (JSON)
+
+```json
+[
+  {"path": "/path/to/audio.wav", "has_watermark": 1, "model_id": 3, "version": 1, "source_idx": 0},
+  {"path": "/path/to/clean.wav", "has_watermark": 0, "model_id": null, "version": null, "source_idx": 1}
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Absolute path to audio file |
+| `has_watermark` | int | 1 = watermarked, 0 = clean |
+| `model_id` | int/null | 0-7 for watermarked |
+| `source_idx` | int | Unique ID for train/test splitting |
+
+### File Structure
+
+```
+watermark/
+├── config.py           # Constants
+├── models/
+│   ├── encoder.py      # WatermarkEncoder, OverlapAddEncoder
+│   ├── decoder.py      # WatermarkDecoder, SlidingWindowDecoder
+│   └── codec.py        # MessageCodec
+├── training/
+│   ├── dataset.py      # WatermarkDataset, collate_fn
+│   ├── stage1.py       # Detection training
+│   ├── stage1b.py      # Payload with curriculum
+│   ├── stage2.py       # Encoder training
+│   └── losses.py       # CachedSTFTLoss
+├── evaluation/
+│   ├── attacks.py      # apply_attack_safe
+│   └── metrics.py      # AUC, TPR@FPR
+└── scripts/
+    └── train_full.py   # End-to-end training
 ```
 
 ---
@@ -1138,9 +1189,86 @@ def compute_visqol_aligned(original, degraded, sr=16000):
 | v6 | Per-window decode, top-k voting |
 | v7 | Stage-1 negatives, unified decoder interface |
 | v8 | Stage-1B for payload, aligned hop |
-| v9 | Fixed-length, BCEWithLogitsLoss |
+| v9 | Fixed-length segments, BCEWithLogitsLoss |
 | v10 | Curriculum warmup, FWER framing |
 | v11 | Reproducibility, acceptance criteria |
 | v12 | AAC containers, GroupShuffleSplit, log-likelihood warmup |
+| v13 | Dataset message generation, residual overlap-add |
+| v14 | Duplicate decode fix, optimizer persistence |
+| v15 | CachedSTFTLoss device handling, post-attack crop/pad |
+| v16 | ViSQOL imports, Stage 1B freeze/optimizer order, comprehensive docs |
 
-**This document represents the final, research-defensible design.**
+---
+
+# Appendix: End-to-End Training Script
+
+```python
+#!/usr/bin/env python3
+"""
+Complete training pipeline for audio watermarking.
+Usage: python train_full.py --manifest /path/to/manifest.json --output ./checkpoints
+"""
+import torch
+from pathlib import Path
+from torch.utils.data import DataLoader
+
+# Import from watermark package (assumes you've implemented the modules)
+from watermark.config import SAMPLE_RATE, SEGMENT_SAMPLES, DEVICE
+from watermark.models.codec import MessageCodec
+from watermark.models.encoder import WatermarkEncoder, OverlapAddEncoder
+from watermark.models.decoder import WatermarkDecoder, SlidingWindowDecoder
+from watermark.training.dataset import WatermarkDataset, collate_fn
+from watermark.training.stage1 import train_stage1
+from watermark.training.stage1b import train_stage1b
+from watermark.training.stage2 import train_stage2
+
+
+def main():
+    # Configuration
+    manifest_path = Path("data/manifest.json")
+    output_dir = Path("checkpoints")
+    output_dir.mkdir(exist_ok=True)
+    
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    
+    # Initialize codec
+    codec = MessageCodec(key="fyp2026")
+    
+    # Initialize models
+    base_encoder = WatermarkEncoder(msg_bits=32)
+    encoder = OverlapAddEncoder(base_encoder, window=16000, hop_ratio=0.5)
+    
+    base_decoder = WatermarkDecoder(msg_bits=32)
+    decoder = SlidingWindowDecoder(base_decoder, window=16000, hop_ratio=0.5, top_k=3)
+    
+    encoder.to(device)
+    decoder.to(device)
+    
+    # Create dataset
+    dataset = WatermarkDataset(manifest_path, codec=codec, training=True)
+    loader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
+    
+    # === STAGE 1: Detection ===
+    print("=== Stage 1: Detection Training ===")
+    train_stage1(decoder, loader, device, epochs=20)
+    torch.save(decoder.state_dict(), output_dir / "decoder_stage1.pt")
+    
+    # === STAGE 1B: Payload (with curriculum) ===
+    print("=== Stage 1B: Payload Training ===")
+    train_stage1b(decoder, loader, device, preamble=codec.preamble, epochs=10, warmup=3)
+    torch.save(decoder.state_dict(), output_dir / "decoder_stage1b.pt")
+    
+    # === STAGE 2: Encoder ===
+    print("=== Stage 2: Encoder Training ===")
+    train_stage2(encoder, decoder, loader, device, epochs=20)
+    torch.save(encoder.state_dict(), output_dir / "encoder_stage2.pt")
+    
+    print("Training complete!")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**This document represents the final, research-defensible, implementation-ready design (v16).**
+
