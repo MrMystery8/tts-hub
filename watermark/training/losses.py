@@ -3,7 +3,7 @@ Watermark Losses Module
 
 Contains:
 - CachedSTFTLoss: Multi-resolution spectral loss with cached windows for performance.
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, section 5.5.
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 5.5.
 """
 import torch
 import torch.nn as nn

@@ -5,7 +5,7 @@ Contains:
 - WatermarkEncoder: FiLM-conditioned CNN that embeds watermarks
 - OverlapAddEncoder: Tensorized wrapper for full-length audio
 
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, sections 4.2-4.3
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, sections 4.2-4.3
 """
 import torch
 import torch.nn as nn
@@ -119,16 +119,33 @@ class OverlapAddEncoder(nn.Module):
             (B, 1, T) watermarked audio (same length as input)
         """
         B, C, T = audio.shape
+        T_orig = T
         
-        # Pad to fit windows
-        n_win = max(1, (T - self.window) // self.hop + 1)
+        # Calculate windows needed to cover FULL length
+        # We need n_win such that (n_win-1)*hop + window >= T
+        # (n_win-1)*hop >= T - window
+        # n_win-1 >= (T - window)/hop
+        # n_win >= (T - window)/hop + 1
+        # Use ceil to cover end
+        import math
+        n_win = math.ceil((T - self.window) / self.hop) + 1
+        
+        # FIX: Ensure at least 1 window if T < window
+        if n_win < 1: n_win = 1
+        
         out_len = (n_win - 1) * self.hop + self.window
-        pad = out_len - T
-        if pad > 0:
-            audio = F.pad(audio, (0, pad))
         
-        # Unfold: (B, 1, n_win, window)
-        windows = audio.unfold(2, self.window, self.hop)
+        # Pad to fit windows AND ensure minimum size of window
+        pad = out_len - T
+        
+        # Always pad to fit windows
+        if pad > 0:
+            audio_padded = F.pad(audio, (0, pad))
+        else:
+            audio_padded = audio
+            
+        # Unfold from PADDED audio
+        windows = audio_padded.unfold(2, self.window, self.hop)
         B, C, N, W = windows.shape
         
         # Batch encode all windows
@@ -137,13 +154,7 @@ class OverlapAddEncoder(nn.Module):
         wm_flat = self.encoder(flat, msg_exp) * self.hann
         
         # FIX: Compute residual explicitly BEFORE folding to avoid double-counting audio!
-        # wm_flat contains (audio + watermark) * hann
-        # We need (watermark only) * hann
-        
-        # Reconstruct flat audio (un-watermarked) * hann
         audio_flat = flat * self.hann.view(1, 1, -1)
-        
-        # Compute residual: (wm_flat - audio_flat) is pure watermark * hann
         residual_flat = wm_flat - audio_flat
         residual = residual_flat.squeeze(1).reshape(B, N, W).permute(0, 2, 1)
         
@@ -167,10 +178,8 @@ class OverlapAddEncoder(nn.Module):
         
         watermark_residual = watermark_residual / normalizer
         
-        # Remove padding
-        if pad > 0:
-            audio = audio[:, :, :-pad]  # Original audio (unpadded)
-            watermark_residual = watermark_residual[:, :, :-pad]
+        # Crop back to original T
+        watermark_residual = watermark_residual[:, :, :T_orig]
         
-        # Add residual to original audio
+        # Add residual to original audio (not padded)
         return audio + watermark_residual

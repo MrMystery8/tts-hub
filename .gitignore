@@ -42,3 +42,9 @@ checkpoints/
 dataset/raw/
 dataset/augmented/
 dataset/references/
+
+# Local benchmark artifacts (too large / generated)
+mini_benchmark_data/
+mini_benchmark_*.json
+mini_benchmark_output.txt
+dev-clean.tar.gz

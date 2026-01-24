@@ -7,7 +7,7 @@ Contains:
 - ClipDecisionRule: Clip-level decision with majority voting
 - decide_batch: Helper for batched inference
 
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, sections 4.4-4.6
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, sections 4.4-4.6
 """
 import torch
 import torch.nn as nn
@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from watermark.config import (
     MSG_BITS,
     N_MODELS,
+    N_VERSIONS,
     DECODER_N_FFT,
     DECODER_N_MELS,
     SAMPLE_RATE,
@@ -46,6 +47,7 @@ class WatermarkDecoder(nn.Module):
         self, 
         msg_bits: int = MSG_BITS, 
         n_models: int = N_MODELS, 
+        n_versions: int = N_VERSIONS,
         n_fft: int = DECODER_N_FFT,
         sample_rate: int = SAMPLE_RATE
     ):
@@ -84,6 +86,8 @@ class WatermarkDecoder(nn.Module):
         self.head_detect = nn.Linear(feat_dim, 1)
         self.head_message = nn.Linear(feat_dim, msg_bits)
         self.head_model = nn.Linear(feat_dim, n_models + 1)  # +1 for unknown
+        self.head_version = nn.Linear(feat_dim, n_versions + 1)  # +1 for unknown
+        self.head_pair = nn.Linear(feat_dim, (n_models * n_versions))
     
     def _create_mel_filterbank(self) -> torch.Tensor:
         """Create mel filterbank matrix (pure numpy, MPS-safe)."""
@@ -126,7 +130,7 @@ class WatermarkDecoder(nn.Module):
         Detect watermark in audio.
         
         Args:
-            audio: (B, T) input audio
+            audio: (B, T) or (B, 1, T) input audio
         
         Returns:
             dict with LOGITS and probs:
@@ -136,6 +140,10 @@ class WatermarkDecoder(nn.Module):
                 - detect_prob: (B, 1) sigmoid of detect_logit
                 - message_probs: (B, 32) sigmoid of message_logits
         """
+        # Adapter for Canonical (B, 1, T) -> (B, T) for STFT
+        if audio.dim() == 3 and audio.shape[1] == 1:
+            audio = audio.squeeze(1)
+            
         mel = self._compute_mel(audio)
         
         # MPS FIX: AdaptiveAvgPool2d((4, 4)) requires input dims to be divisible by 4.
@@ -157,6 +165,8 @@ class WatermarkDecoder(nn.Module):
             "detect_logit": detect_logit,
             "message_logits": message_logits,
             "model_logits": self.head_model(features),
+            "version_logits": self.head_version(features),
+            "pair_logits": self.head_pair(features),
             
             # Probs for inference (computed once, not twice!)
             "detect_prob": torch.sigmoid(detect_logit),
@@ -190,11 +200,15 @@ class SlidingWindowDecoder(nn.Module):
         Detect watermark with sliding window aggregation.
         
         Args:
-            audio: (B, T) input audio
+            audio: (B, T) or (B, 1, T) input audio
         
         Returns:
             dict with clip-level and per-window outputs
         """
+        # Adapter for Canonical (B, 1, T) -> (B, T)
+        if audio.dim() == 3 and audio.shape[1] == 1:
+            audio = audio.squeeze(1)
+            
         B, T = audio.shape
         
         # Handle short audio
@@ -212,6 +226,10 @@ class SlidingWindowDecoder(nn.Module):
         detect = outputs["detect_prob"].reshape(B, n_win)
         message = outputs["message_probs"].reshape(B, n_win, -1)
         model = outputs["model_logits"].reshape(B, n_win, -1)
+        version = outputs["version_logits"].reshape(B, n_win, -1)
+        pair = outputs.get("pair_logits")
+        if pair is not None:
+            pair = pair.reshape(B, n_win, -1)
         
         detect_logits = outputs["detect_logit"].reshape(B, n_win)
         message_logits = outputs["message_logits"].reshape(B, n_win, -1)
@@ -221,20 +239,52 @@ class SlidingWindowDecoder(nn.Module):
         top_vals, top_idx = torch.topk(detect, k, dim=1)
         clip_detect_prob = top_vals.mean(dim=1)
         
-        # BUG FIX: Also aggregate LOGITS for training!
         # Gather top-k logits and average (for BCEWithLogitsLoss)
         top_logits = torch.gather(detect_logits, 1, top_idx)
         clip_detect_logit = top_logits.mean(dim=1)
         
-        return {
+        # Gather top-k message logits
+        # top_idx is (B, K), message_logits is (B, n_win, 32)
+        bits = message_logits.shape[-1]
+        top_msg_idx = top_idx.unsqueeze(-1).expand(-1, -1, bits)
+        top_msg_logits = torch.gather(message_logits, 1, top_msg_idx)
+        avg_message_logits = top_msg_logits.mean(dim=1)
+        
+        # Probs for inference
+        avg_message_probs = torch.sigmoid(avg_message_logits)
+
+        # Gather top-k model/version logits for attribution
+        n_model_classes = model.shape[-1]
+        top_model_idx = top_idx.unsqueeze(-1).expand(-1, -1, n_model_classes)
+        top_model_logits = torch.gather(model, 1, top_model_idx)
+        avg_model_logits = top_model_logits.mean(dim=1)
+
+        n_version_classes = version.shape[-1]
+        top_ver_idx = top_idx.unsqueeze(-1).expand(-1, -1, n_version_classes)
+        top_version_logits = torch.gather(version, 1, top_ver_idx)
+        avg_version_logits = top_version_logits.mean(dim=1)
+
+        avg_pair_logits = None
+        if pair is not None:
+            n_pair_classes = pair.shape[-1]
+            top_pair_idx = top_idx.unsqueeze(-1).expand(-1, -1, n_pair_classes)
+            top_pair_logits = torch.gather(pair, 1, top_pair_idx)
+            avg_pair_logits = top_pair_logits.mean(dim=1)
+        
+        out = {
             # Clip-level (BOTH prob and logit!)
             "clip_detect_prob": clip_detect_prob,
-            "clip_detect_logit": clip_detect_logit,  # FIX: For BCEWithLogitsLoss!
+            "clip_detect_logit": clip_detect_logit,
+            "avg_message_logits": avg_message_logits,
+            "avg_message_probs": avg_message_probs,
+            "avg_model_logits": avg_model_logits,
+            "avg_version_logits": avg_version_logits,
             
             # Per-window (for decision rule)
             "all_window_probs": detect,
             "all_message_probs": message,
             "all_model_logits": model,
+            "all_version_logits": version,
             
             # Logits (for training)
             "all_window_logits": detect_logits,
@@ -243,6 +293,10 @@ class SlidingWindowDecoder(nn.Module):
             "n_windows": n_win,
             "top_k_idx": top_idx,
         }
+        if pair is not None:
+            out["avg_pair_logits"] = avg_pair_logits
+            out["all_pair_logits"] = pair
+        return out
 
 
 class ClipDecisionRule:
@@ -290,6 +344,9 @@ class ClipDecisionRule:
         # FIX: Explicitly handle per-window indexing
         window_probs = outputs["all_window_probs"]  # (n_win,)
         message_probs = outputs["all_message_probs"]  # (n_win, 32)
+        model_logits = outputs.get("all_model_logits")  # (n_win, n_models+1) optional
+        version_logits = outputs.get("all_version_logits")  # (n_win, n_versions+1) optional
+        pair_logits = outputs.get("all_pair_logits")  # (n_win, n_pairs) optional
         
         n_win = window_probs.shape[0]
         
@@ -307,10 +364,39 @@ class ClipDecisionRule:
             if result["preamble_score"] * 16 < self.preamble_min:
                 continue
             
+            # Prefer classification heads for attribution if present; fallback to bit-decode.
+            if pair_logits is not None:
+                w_pair_logits = pair_logits[w_idx]
+                pred_pair = int(torch.argmax(w_pair_logits).item())
+                pair_conf = float(F.softmax(w_pair_logits, dim=0)[pred_pair].item())
+                pred_model = int(pred_pair % N_MODELS)
+                pred_version = int(pred_pair // N_MODELS)
+                model_conf = pair_conf
+                version_conf = pair_conf
+            elif model_logits is not None:
+                w_model_logits = model_logits[w_idx]
+                pred_model = int(torch.argmax(w_model_logits).item())
+                model_conf = float(F.softmax(w_model_logits, dim=0)[pred_model].item())
+            else:
+                pred_model = result["model_id"]
+                model_conf = result["confidence"]
+
+            pred_version = None
+            version_conf = None
+            if pair_logits is not None:
+                # Already set above.
+                pass
+            elif version_logits is not None:
+                w_ver_logits = version_logits[w_idx]
+                pred_version = int(torch.argmax(w_ver_logits).item())
+                version_conf = float(F.softmax(w_ver_logits, dim=0)[pred_version].item())
+
             valid_windows.append({
                 "idx": w_idx,
-                "model_id": result["model_id"],
-                "confidence": result["confidence"],
+                "model_id": pred_model,
+                "model_conf": model_conf,
+                "version": pred_version,
+                "version_conf": version_conf,
             })
         
         if len(valid_windows) == 0:
@@ -319,6 +405,12 @@ class ClipDecisionRule:
         # Majority vote
         votes = Counter([w["model_id"] for w in valid_windows])
         best_model, count = votes.most_common(1)[0]
+
+        # Optional version vote
+        versions = [w["version"] for w in valid_windows if w["version"] is not None]
+        best_version = None
+        if versions:
+            best_version = Counter(versions).most_common(1)[0][0]
         
         return {
             "positive": True,
@@ -326,6 +418,7 @@ class ClipDecisionRule:
             "vote_count": count,
             "valid_windows": len(valid_windows),
             "clip_detect_prob": clip_prob,
+            "version": best_version,
         }
 
 
@@ -350,6 +443,12 @@ def decide_batch(outputs: dict, codec: 'MessageCodec', rule: ClipDecisionRule) -
             "all_window_probs": outputs["all_window_probs"][b],
             "all_message_probs": outputs["all_message_probs"][b],
         }
+        if "all_model_logits" in outputs:
+            single["all_model_logits"] = outputs["all_model_logits"][b]
+        if "all_version_logits" in outputs:
+            single["all_version_logits"] = outputs["all_version_logits"][b]
+        if "all_pair_logits" in outputs:
+            single["all_pair_logits"] = outputs["all_pair_logits"][b]
         decisions.append(rule.decide(single, codec))
     
     return decisions

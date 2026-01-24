@@ -1,7 +1,7 @@
 # Watermark Implementation Progress
 
 > **Started**: 2026-01-23
-> **Reference**: [WATERMARK_PROJECT_PLAN.md](./WATERMARK_PROJECT_PLAN.md) (v16)
+> **Reference**: [WATERMARK_PROJECT_PLAN.md](./WATERMARK_PROJECT_PLAN.md) (v17)
 
 ---
 
@@ -92,8 +92,21 @@ Implementation phases 1-6 are complete. The system is ready for training on real
 
 ---
 
-## Phase 7: TTS Hub Integration
+## Phase 7: Benchmarking & Estimation
 
+### Status: ✅ Complete
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `watermark/scripts/benchmark.py` | ✅ Done | Validated on-the-fly embedding logic & performance |
+| **Gate B Check** | ✅ PASSED | **AUC 1.00**, Payload 88.7% (Real Speech) |
+| **Logic Updates** | ✅ Done | S2: Aux Loss + Reduced Quality Weight (1.0). S1: On-the-fly. |
+| **Result** | ✅ Done | LJSpeech (24h) est. ~4.0h on MPS |
+
+---
+ 
+## Phase 8: TTS Hub Integration
+ 
 ### Status: ⏳ Pending
 
 ---
@@ -108,6 +121,6 @@ Implementation phases 1-6 are complete. The system is ready for training on real
 
 ## Notes & Observations
 
-- Project plan is v16 (final), comprehensive and implementation-ready
+- Project plan is v17 (final), comprehensive and implementation-ready
 - All code should be MPS-safe for Mac M4 development
 - Key design decisions documented in project plan Section 7 (Lessons Learned)

@@ -2,7 +2,7 @@
 Watermark Attacks Module
 
 Implements audio degradations for evaluation and robustness testing.
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, section 6.2.
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 6.2.
 """
 import torch
 import torch.nn.functional as F
@@ -20,39 +20,53 @@ def register_attack(name):
         return func
     return decorator
 
-def apply_attack_safe(audio: torch.Tensor, attack_fn: Callable) -> torch.Tensor:
-    """
-    Apply attack and restore to SEGMENT_SAMPLES.
-    Handles length-changing attacks (time-stretch, codecs).
-    Assumes audio is (T,) or (channels, T).
-    """
-    # Force cpu for some torchaudio transforms if needed, but simplest is to just apply
-    # and fix length.
-    
-    try:
-        attacked = attack_fn(audio)
-    except Exception as e:
-        print(f"Attack failed: {e}")
-        return audio
-    
-    # FIX: Enforce length post-attack!
-    # Ensure we work on last dim
-    T = attacked.shape[-1]
-    if T > SEGMENT_SAMPLES:
-        # Crop center
-        diff = T - SEGMENT_SAMPLES
-        start = diff // 2
-        attacked = attacked[..., start : start + SEGMENT_SAMPLES]
-    elif T < SEGMENT_SAMPLES:
-        # Pad at end
-        attacked = F.pad(attacked, (0, SEGMENT_SAMPLES - T))
-    
-    return attacked
-
-
 @register_attack("clean")
 def attack_clean(audio: torch.Tensor) -> torch.Tensor:
     return audio
+
+def apply_attack_safe(audio: torch.Tensor, attack_fn: Callable) -> torch.Tensor:
+    """
+    Apply attack with strict engineering contract:
+    - Input: (1, T) or (F, T) - we assume audio is (1, T)
+    - Execution: CPU only (to prevent MPS buffer bugs)
+    - Output: (1, T) same length as input
+    """
+    # 1. Validation
+    assert audio.dim() == 2, f"Input must be (C, T), got {audio.shape}"
+    T_orig = audio.shape[-1]
+    original_device = audio.device
+    
+    # 2. Force CPU for safety
+    audio_cpu = audio.cpu()
+    
+    # 3. Apply Attack
+    try:
+        attacked = attack_fn(audio_cpu)
+    except Exception as e:
+        print(f"Attack failed: {e}")
+        return audio # Fallback to identity
+        
+    # 4. Enforce Contract (Shape & Logic)
+    # Ensure it's still (C, T)
+    if attacked.dim() == 1:
+        attacked = attacked.unsqueeze(0)
+        
+    # Enforce Length (Crop/Pad)
+    T_new = attacked.shape[-1]
+    if T_new > T_orig:
+        # Crop center
+        diff = T_new - T_orig
+        start = diff // 2
+        attacked = attacked[..., start : start + T_orig]
+    elif T_new < T_orig:
+        # Pad at end
+        attacked = F.pad(attacked, (0, T_orig - T_new))
+        
+    # 5. Final check
+    assert attacked.shape == audio.shape, f"Shape mismatch: {attacked.shape} vs {audio.shape}"
+    assert torch.isfinite(attacked).all(), "Attack produced NaN/Inf"
+    
+    return attacked.to(original_device)
 
 @register_attack("noise_white_20db")
 def attack_noise_white(audio: torch.Tensor, snr_db: float = 20.0) -> torch.Tensor:
@@ -137,3 +151,46 @@ def attack_aac_128k(audio: torch.Tensor) -> torch.Tensor:
     # Actually torchaudio save format "mp4" is safer for AAC
     attacker.format = "mp4" 
     return attacker(audio)
+
+@register_attack("reverb")
+def attack_reverb(audio: torch.Tensor) -> torch.Tensor:
+    """Simulate reverb via convolution with decaying noise."""
+    # Simple RIR: decaying white noise
+    rir_len = int(SAMPLE_RATE * 0.3) # 0.3s reverb
+    t = torch.linspace(0, 1, rir_len, device=audio.device)
+    decay = torch.exp(-5 * t)
+    rir = torch.randn(rir_len, device=audio.device) * decay
+    rir = rir / rir.norm(p=2) # Normalize energy
+    
+    # Convolve
+    # Convolve
+    # audio: (channels, T) or (T,)
+    # Input to conv1d must be (B, C, T)
+    # We treat channels as batch here? No, reverb applies to channel.
+    # audio is (C, T). 
+    
+    # Let's assume audio is (1, T) from our contract.
+    C, T = audio.shape
+    
+    # (B=C, In=1, T)
+    x = audio.unsqueeze(1) 
+    
+    # Kernel (Out=1, In=1, K)
+    k = rir.view(1, 1, -1)
+    
+    # Padding='same' is easiest if available, else classic calc
+    # P = (K-1)//2 for same if K is odd. K=4800 is even.
+    # Let's use simple padding and crop
+    pad = rir_len - 1
+    out = F.conv1d(x, k, padding=pad)
+    
+    # Crop to original length (remove head/tail tails)
+    # Align peak? Reverb usually starts at t=0.
+    # So we pad at end (convolution does this naturally without padding start)
+    # Actually standard reverb: y[n] = x[n]*h[0] + ...
+    # So output starts at 0.
+    # We want valid part + tail?
+    # Let's just crop to T
+    out = out[..., :T]
+    
+    return out.squeeze(1)

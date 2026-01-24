@@ -2,7 +2,7 @@
 Watermark Configuration Constants
 
 All constants used across the watermarking system.
-Matches WATERMARK_PROJECT_PLAN.md v16 specifications.
+Matches WATERMARK_PROJECT_PLAN.md v17 specifications.
 """
 import torch
 
@@ -27,6 +27,7 @@ MSG_BITS = 32
 PREAMBLE_BITS = 16  # Known sync pattern
 PAYLOAD_BITS = 7  # 3 model_id + 4 version
 N_MODELS = 8  # Maximum number of model IDs (3 bits)
+N_VERSIONS = 16  # Maximum number of versions (4 bits)
 
 # =============================================================================
 # Top-K Aggregation

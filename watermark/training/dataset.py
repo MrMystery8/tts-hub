@@ -2,7 +2,7 @@
 Watermark Dataset Module
 
 Handles loading audio, on-the-fly watermarking, and message generation.
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, section 5.1.
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 5.1.
 """
 import json
 import torch
@@ -19,24 +19,15 @@ if TYPE_CHECKING:
     from watermark.models.codec import MessageCodec
 
 
+from watermark.utils.io import load_audio
+
 class WatermarkDataset(Dataset):
     """
     Dataset for watermarking training/eval.
-    
-    Features:
-    - Fixed length segments (3s)
-    - Random crop (train) / Center crop (eval)
-    - On-the-fly message generation via Codec
-    - Resampling to target SAMPLE_RATE
+    Now uses robust load_audio for canonical (1, T) format.
     """
     
     def __init__(self, manifest_path: str, codec: 'MessageCodec', training: bool = True):
-        """
-        Args:
-            manifest_path: Path to JSON manifest file.
-            codec: MessageCodec instance for message generation.
-            training: If True, uses random cropping. Else, uses center cropping.
-        """
         with open(manifest_path, 'r') as f:
             self.samples = json.load(f)
         
@@ -48,36 +39,19 @@ class WatermarkDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
+        path = item["path"]
         
-        # Load audio (mono)
         try:
-            # Try loading with soundfile backend explicitly to avoid torchcodec issues
-            try:
-                audio, sr = torchaudio.load(item["path"], backend="soundfile")
-            except Exception:
-                 # Fallback to soundfile direct load if backend arg fails
-                import soundfile as sf
-                data, sr = sf.read(item["path"])
-                audio = torch.from_numpy(data).float()
-                if audio.dim() == 2:
-                    audio = audio.t() # (channels, time)
-                else:
-                    audio = audio.unsqueeze(0) # (1, time)
-
-            audio = audio.mean(dim=0)  # Mono
+            # Canonical load: (1, T) @ 16k
+            audio = load_audio(path, target_sr=SAMPLE_RATE)
         except Exception as e:
-            # Fallback for missing/corrupt files (should filter before training, but safety here)
-            # Create silence if file fails
-            print(f"Error loading {item.get('path')}: {e}")
-            audio = torch.zeros(SEGMENT_SAMPLES)
-            sr = SAMPLE_RATE
+            print(f"Error loading {path}: {e}")
+            audio = torch.zeros(1, SEGMENT_SAMPLES)
         
-        # Resample if needed
-        if sr != SAMPLE_RATE:
-            audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
-        
+        # Audio is (1, T)
         # Crop/Pad to fixed length
-        T = audio.shape[0]
+        T = audio.shape[-1]
+        
         if T >= SEGMENT_SAMPLES:
             if self.training:
                 # Random crop
@@ -85,26 +59,36 @@ class WatermarkDataset(Dataset):
             else:
                 # Center crop
                 start = (T - SEGMENT_SAMPLES) // 2
-            audio = audio[start : start + SEGMENT_SAMPLES]
+            audio = audio[..., start : start + SEGMENT_SAMPLES]
         else:
-            # Pad
+            # Pad at end
             audio = F.pad(audio, (0, SEGMENT_SAMPLES - T))
         
+
+        
         # Metadata parsing
-        model_id = int(item.get("model_id", 0)) if item.get("model_id") is not None else 0
-        version = int(item.get("version", 1)) if item.get("version") is not None else 1
+        raw_model_id = item.get("model_id", None)
+        raw_version = item.get("version", None)
+        model_id = int(raw_model_id) if raw_model_id is not None else -1
+        version = int(raw_version) if raw_version is not None else -1
         has_watermark = float(item.get("has_watermark", 0))
+        has_labels = (model_id >= 0) and (version >= 0)
         
         # Generate MESSAGE tensor on-the-fly
         # Even if clean (has_watermark=0), we generate a message so tensors have constant shape.
         # Loss will ignore message for negative samples if implemented correctly.
-        message = self.codec.encode(model_id, version).float()
+        if has_labels:
+            message = self.codec.encode(model_id, version).float()
+        else:
+            # Placeholder (training code may override targets/messages for unlabeled positives).
+            message = self.codec.encode(0, 0).float()
         
         return {
             "audio": audio,
             "has_watermark": torch.tensor(has_watermark, dtype=torch.float32),
             "model_id": torch.tensor(model_id, dtype=torch.long),
             "version": torch.tensor(version, dtype=torch.long),
+            "has_labels": torch.tensor(has_labels, dtype=torch.bool),
             "message": message 
         }
 

@@ -6,7 +6,7 @@ Implements evaluation metrics:
 - TPR @ FPR
 - Payload Accuracy
 
-Implementation follows WATERMARK_PROJECT_PLAN.md v16, section 6.1.
+Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 6.1.
 """
 import torch
 import numpy as np

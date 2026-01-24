@@ -48,7 +48,8 @@ class TestWatermarkDataset:
             
             item = dataset[0]
             assert "audio" in item
-            assert item["audio"].shape == (48000,)  # Default segment samples
+            # Canonical audio contract is (C, T) where C=1 (mono).
+            assert item["audio"].shape == (1, 48000)  # Default segment samples
             assert item["message"].shape == (32,)
             assert item["has_watermark"].item() == 1.0
             assert item["model_id"].item() == 3
