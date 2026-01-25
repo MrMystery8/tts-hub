@@ -987,6 +987,121 @@ def _summarize_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _render_run_report_md(*, sess: dict[str, Any], summary: dict[str, Any]) -> str:
+    meta = summary.get("meta") if isinstance(summary.get("meta"), dict) else {}
+    cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+    targets = meta.get("targets") if isinstance(meta.get("targets"), dict) else {}
+    best_probe = summary.get("best_probe") if isinstance(summary.get("best_probe"), dict) else {}
+    latest_probe = summary.get("latest_probe") if isinstance(summary.get("latest_probe"), dict) else {}
+
+    def fmt(v: Any) -> str:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            return f"{float(v):.6g}"
+        if v is None:
+            return "—"
+        return str(v)
+
+    def metric_line(key: str, src: dict[str, Any]) -> str:
+        v = src.get(key)
+        t = targets.get(key)
+        if t is None:
+            return f"- `{key}`: `{fmt(v)}`"
+        return f"- `{key}`: `{fmt(v)}` (target `{fmt(t)}`)"
+
+    started = sess.get("started_ts") or sess.get("created_ts")
+    ended = sess.get("ended_ts")
+    lines: list[str] = []
+    lines.append("# Watermark run report")
+    lines.append("")
+    lines.append("## Run")
+    lines.append(f"- `id`: `{fmt(sess.get('id'))}`")
+    lines.append(f"- `kind`: `{fmt(sess.get('kind'))}`")
+    lines.append(f"- `status`: `{fmt(sess.get('status'))}`")
+    lines.append(f"- `returncode`: `{fmt(sess.get('returncode'))}`")
+    lines.append(f"- `run_dir`: `{fmt(sess.get('run_dir'))}`")
+    lines.append(f"- `metrics_path`: `{fmt(sess.get('metrics_path'))}`")
+    lines.append(f"- `started_ts`: `{fmt(started)}`")
+    lines.append(f"- `ended_ts`: `{fmt(ended)}`")
+    lines.append("")
+    if cfg:
+        lines.append("## Config (selected)")
+        for k in (
+            "num_clips",
+            "epochs_s1",
+            "epochs_s1b",
+            "epochs_s2",
+            "epochs_s1b_post",
+            "neg_weight",
+            "neg_preamble_target",
+            "unknown_ce_weight",
+            "model_ce_weight",
+            "version_ce_weight",
+            "pair_ce_weight",
+            "msg_weight",
+            "reverb_prob",
+            "stage2_payload_on_all",
+            "log_steps_every",
+            "batch_size",
+        ):
+            if k in cfg:
+                lines.append(f"- `{k}`: `{fmt(cfg.get(k))}`")
+        lines.append("")
+
+    if best_probe:
+        lines.append("## Best probe (by `payload_exact_acc_cls`)")
+        lines.append(f"- `stage`: `{fmt(best_probe.get('stage'))}`")
+        lines.append(f"- `epoch`: `{fmt(best_probe.get('epoch'))}`")
+        for k in (
+            "mini_auc",
+            "tpr_at_fpr_1pct",
+            "mini_auc_reverb",
+            "tpr_at_fpr_1pct_reverb",
+            "preamble_pos_avg",
+            "preamble_neg_avg",
+            "model_id_acc_cls",
+            "version_acc_cls",
+            "pair_acc_cls",
+            "payload_exact_acc_cls",
+            "payload_exact_acc_cls_cond_1pct",
+        ):
+            if k in best_probe:
+                lines.append(metric_line(k, best_probe))
+        lines.append("")
+
+    if latest_probe:
+        lines.append("## Latest probe")
+        lines.append(f"- `stage`: `{fmt(latest_probe.get('stage'))}`")
+        lines.append(f"- `epoch`: `{fmt(latest_probe.get('epoch'))}`")
+        for k in (
+            "mini_auc",
+            "tpr_at_fpr_1pct",
+            "preamble_neg_avg",
+            "model_id_acc_cls",
+            "version_acc_cls",
+            "pair_acc_cls",
+            "payload_exact_acc_cls",
+            "payload_exact_acc_cls_cond_1pct",
+        ):
+            if k in latest_probe:
+                lines.append(metric_line(k, latest_probe))
+        lines.append("")
+
+    if targets:
+        lines.append("## Targets")
+        lines.append("- These are the dashboard’s “expected results” guide-lines for this run.")
+        for k, v in sorted(targets.items(), key=lambda kv: kv[0]):
+            lines.append(f"- `{k}`: `{fmt(v)}`")
+        lines.append("")
+
+    lines.append("## Notes")
+    lines.append("- If `mini_auc` is high but attribution metrics are near chance, prioritize payload supervision (Stage 1B) and message-friendly Stage 2 settings (e.g. `stage2_payload_on_all`).")
+    lines.append("- Use the dashboard’s confusion matrices to spot class-collapse (predicting only a few IDs).")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _estimate_seconds_for_quick_voice(
     *,
     runs_dir: Path,
@@ -1294,6 +1409,11 @@ def _make_controller_app(runs_dir: Path):
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             except Exception:
                 pass
+            try:
+                report_path = Path(sess.get("run_dir", "")) / "report.md"
+                report_path.write_text(_render_run_report_md(sess=sess, summary=summ), encoding="utf-8")
+            except Exception:
+                pass
 
     def monitor_loop() -> None:
         while True:
@@ -1433,77 +1553,113 @@ def _make_controller_app(runs_dir: Path):
           </div>
           <div style="height:10px"></div>
 
-          <div id="formQuickVoice">
-            <div class="grid2">
-              <div><label>source_dir</label><input class="input" id="q_source_dir" value="mini_benchmark_data" /></div>
-              <div><label>num_clips</label><input class="input" id="q_num_clips" value="512" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>epochs_s1</label><input class="input" id="q_epochs_s1" value="6" /></div>
-              <div><label>epochs_s1b</label><input class="input" id="q_epochs_s1b" value="1" /></div>
-              <div><label>epochs_s2</label><input class="input" id="q_epochs_s2" value="12" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>epochs_s1b_post</label><input class="input" id="q_epochs_s1b_post" value="12" /></div>
-              <div><label>probe_clips</label><input class="input" id="q_probe_clips" value="1024" /></div>
-              <div><label>reverb_prob</label><input class="input" id="q_reverb_prob" value="0.0" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>unknown_ce_weight</label><input class="input" id="q_unknown_ce_weight" value="1" /></div>
-              <div><label>model_ce_weight</label><input class="input" id="q_model_ce_weight" value="4" /></div>
-              <div><label>pair_ce_weight</label><input class="input" id="q_pair_ce_weight" value="4" /></div>
-            </div>
+	          <div id="formQuickVoice">
+	            <div class="grid2">
+	              <div><label>source_dir</label><input class="input" id="q_source_dir" value="mini_benchmark_data" /></div>
+	              <div><label>num_clips</label><input class="input" id="q_num_clips" value="512" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>epochs_s1</label><input class="input" id="q_epochs_s1" value="6" /></div>
+	              <div><label>epochs_s1b</label><input class="input" id="q_epochs_s1b" value="1" /></div>
+	              <div><label>epochs_s2</label><input class="input" id="q_epochs_s2" value="12" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>epochs_s1b_post</label><input class="input" id="q_epochs_s1b_post" value="12" /></div>
+	              <div><label>probe_clips</label><input class="input" id="q_probe_clips" value="1024" /></div>
+	              <div><label>reverb_prob</label><input class="input" id="q_reverb_prob" value="0.0" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>msg_weight</label><input class="input" id="q_msg_weight" value="1.0" /></div>
+	              <div>
+	                <label>stage2_payload_on_all</label>
+	                <select id="q_stage2_payload_on_all">
+	                  <option value="0" selected>0</option>
+	                  <option value="1">1</option>
+	                </select>
+	              </div>
+	              <div></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>unknown_ce_weight</label><input class="input" id="q_unknown_ce_weight" value="1" /></div>
+	              <div><label>model_ce_weight</label><input class="input" id="q_model_ce_weight" value="4" /></div>
+	              <div><label>pair_ce_weight</label><input class="input" id="q_pair_ce_weight" value="4" /></div>
+	            </div>
             <div style="height:10px"></div>
             <div class="grid3">
               <div><label>version_ce_weight</label><input class="input" id="q_version_ce_weight" value="2" /></div>
               <div><label>neg_weight</label><input class="input" id="q_neg_weight" value="5" /></div>
               <div><label>neg_preamble_target</label><input class="input" id="q_neg_preamble_target" value="0.5" /></div>
             </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>seed</label><input class="input" id="q_seed" value="1337" /></div>
-              <div><label>probe_every</label><input class="input" id="q_probe_every" value="1" /></div>
-              <div><label>probe_reverb_every</label><input class="input" id="q_probe_reverb_every" value="999999" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <label>extra_args (optional)</label>
-            <input class="input" id="q_extra_args" placeholder="e.g. --profile large --msg_weight 1" />
-          </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>seed</label><input class="input" id="q_seed" value="1337" /></div>
+	              <div><label>probe_every</label><input class="input" id="q_probe_every" value="1" /></div>
+	              <div><label>probe_reverb_every</label><input class="input" id="q_probe_reverb_every" value="999999" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>log_steps_every</label><input class="input" id="q_log_steps_every" value="25" /></div>
+	              <div></div>
+	              <div></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <label>extra_args (optional)</label>
+	            <input class="input" id="q_extra_args" placeholder="e.g. --profile large --msg_weight 1" />
+	          </div>
 
-          <div id="formTrainFull" style="display:none;">
-            <label>manifest</label>
-            <input class="input" id="t_manifest" placeholder="e.g. mini_benchmark_train.json" />
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>epochs_s1</label><input class="input" id="t_epochs_s1" value="20" /></div>
-              <div><label>epochs_s1b</label><input class="input" id="t_epochs_s1b" value="10" /></div>
-              <div><label>warmup_s1b</label><input class="input" id="t_warmup_s1b" value="3" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>epochs_s2</label><input class="input" id="t_epochs_s2" value="20" /></div>
-              <div><label>epochs_s1b_post</label><input class="input" id="t_epochs_s1b_post" value="0" /></div>
-              <div><label>reverb_prob</label><input class="input" id="t_reverb_prob" value="0.25" /></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="grid3">
-              <div><label>unknown_ce_weight</label><input class="input" id="t_unknown_ce_weight" value="0.0" /></div>
-              <div><label>model_ce_weight</label><input class="input" id="t_model_ce_weight" value="1.0" /></div>
-              <div><label>pair_ce_weight</label><input class="input" id="t_pair_ce_weight" value="2.0" /></div>
-            </div>
+	          <div id="formTrainFull" style="display:none;">
+	            <label>manifest</label>
+	            <input class="input" id="t_manifest" placeholder="e.g. mini_benchmark_train.json" />
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>epochs_s1</label><input class="input" id="t_epochs_s1" value="20" /></div>
+	              <div><label>epochs_s1b</label><input class="input" id="t_epochs_s1b" value="10" /></div>
+	              <div><label>warmup_s1b</label><input class="input" id="t_warmup_s1b" value="3" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>epochs_s2</label><input class="input" id="t_epochs_s2" value="20" /></div>
+	              <div><label>epochs_s1b_post</label><input class="input" id="t_epochs_s1b_post" value="0" /></div>
+	              <div><label>reverb_prob</label><input class="input" id="t_reverb_prob" value="0.25" /></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>msg_weight</label><input class="input" id="t_msg_weight" value="1.0" /></div>
+	              <div>
+	                <label>stage2_payload_on_all</label>
+	                <select id="t_stage2_payload_on_all">
+	                  <option value="0" selected>0</option>
+	                  <option value="1">1</option>
+	                </select>
+	              </div>
+	              <div></div>
+	            </div>
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>unknown_ce_weight</label><input class="input" id="t_unknown_ce_weight" value="0.0" /></div>
+	              <div><label>model_ce_weight</label><input class="input" id="t_model_ce_weight" value="1.0" /></div>
+	              <div><label>pair_ce_weight</label><input class="input" id="t_pair_ce_weight" value="2.0" /></div>
+	            </div>
             <div style="height:10px"></div>
             <div class="grid3">
               <div><label>version_ce_weight</label><input class="input" id="t_version_ce_weight" value="1.0" /></div>
               <div><label>probe_clips</label><input class="input" id="t_probe_clips" value="1024" /></div>
               <div><label>probe_every</label><input class="input" id="t_probe_every" value="1" /></div>
             </div>
-            <div style="height:10px"></div>
-            <label>extra_args (optional)</label>
-            <input class="input" id="t_extra_args" placeholder="e.g. --msg_weight 1 --neg_weight 0.4" />
-          </div>
+	            <div style="height:10px"></div>
+	            <label>extra_args (optional)</label>
+	            <input class="input" id="t_extra_args" placeholder="e.g. --msg_weight 1 --neg_weight 0.4" />
+	            <div style="height:10px"></div>
+	            <div class="grid3">
+	              <div><label>log_steps_every</label><input class="input" id="t_log_steps_every" value="100" /></div>
+	              <div></div>
+	              <div></div>
+	            </div>
+	          </div>
 
           <div style="height:12px"></div>
           <div class="tiny" id="etaBox"></div>
@@ -1516,20 +1672,37 @@ def _make_controller_app(runs_dir: Path):
           <div class="mono tiny" id="cmdPreview"></div>
         </div>
 
-        <h2>Paste command</h2>
-        <div class="panel" id="pastePanel">
-          <div class="tiny">Paste a full command for <code class="mono">quick_voice_smoke_train</code> or <code class="mono">train_full</code>. Output/log paths are auto-overridden to the session folder.</div>
-          <div style="height:8px"></div>
-          <textarea class="input mono" id="rawCmd" rows="5" style="width:100%; resize:vertical;"
-            placeholder="./.venv/bin/python -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 2048 --epochs_s1 6 --epochs_s1b 1 --epochs_s2 12 --epochs_s1b_post 12 --model_ce_weight 4 --version_ce_weight 2 --pair_ce_weight 4 --unknown_ce_weight 1 --neg_weight 5 --neg_preamble_target 0.5 --reverb_prob 0.0 --probe_clips 1024 --probe_every 1 --probe_reverb_every 999999 --out outputs/ignored"></textarea>
-          <div style="height:8px"></div>
-          <div class="row">
-            <button class="btn btnPrimary" id="runRawBtn">Run pasted command</button>
-          </div>
-          <div style="height:8px"></div>
-          <div class="mono tiny" id="rawCmdNote"></div>
-        </div>
-      </div>
+	        <h2>Paste command</h2>
+	        <div class="panel" id="pastePanel">
+	          <div class="tiny">Paste a full command for <code class="mono">quick_voice_smoke_train</code> or <code class="mono">train_full</code>. Output/log paths are auto-overridden to the session folder.</div>
+	          <div style="height:8px"></div>
+	          <textarea class="input mono" id="rawCmd" rows="5" style="width:100%; resize:vertical;"
+	            placeholder="./.venv/bin/python -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 2048 --epochs_s1 6 --epochs_s1b 1 --epochs_s2 12 --epochs_s1b_post 12 --model_ce_weight 4 --version_ce_weight 2 --pair_ce_weight 4 --unknown_ce_weight 1 --neg_weight 5 --neg_preamble_target 0.5 --reverb_prob 0.0 --probe_clips 1024 --probe_every 1 --probe_reverb_every 999999 --out outputs/ignored"></textarea>
+	          <div style="height:8px"></div>
+	          <div class="row">
+	            <button class="btn btnPrimary" id="runRawBtn">Run pasted command</button>
+	          </div>
+	          <div style="height:8px"></div>
+	          <div class="mono tiny" id="rawCmdNote"></div>
+	        </div>
+
+	        <h2>Attach log</h2>
+	        <div class="panel" id="attachPanel">
+	          <div class="tiny">Attach an existing run by pointing at its <code class="mono">metrics.jsonl</code> (terminal runs included). No rerun required.</div>
+	          <div style="height:8px"></div>
+	          <label>metrics.jsonl path</label>
+	          <input class="input mono" id="attachPath" placeholder="outputs/quick_voice_smoke_2k_dashboard/metrics.jsonl" />
+	          <div style="height:8px"></div>
+	          <label>Name (optional)</label>
+	          <input class="input" id="attachName" placeholder="e.g. terminal_2k_run" />
+	          <div style="height:8px"></div>
+	          <div class="row">
+	            <button class="btn btnPrimary" id="attachBtn">Attach</button>
+	          </div>
+	          <div style="height:8px"></div>
+	          <div class="mono tiny" id="attachNote"></div>
+	        </div>
+	      </div>
 
       <div class="main">
         <div class="row" style="justify-content:space-between; align-items:flex-start;">
@@ -1580,17 +1753,22 @@ def _make_controller_app(runs_dir: Path):
 	        </div>
 
         <div style="height:12px"></div>
-        <div class="grid2">
-          <div class="panel">
-            <h2 style="margin:0 0 8px;">Stdout (tail)</h2>
-            <pre id="stdout" class="mono tiny">—</pre>
-          </div>
-          <div class="panel">
-            <h2 style="margin:0 0 8px;">Decode report</h2>
-            <pre id="decode" class="mono tiny">—</pre>
-          </div>
-        </div>
-      </div>
+	        <div class="grid2">
+	          <div class="panel">
+	            <h2 style="margin:0 0 8px;">Stdout (tail)</h2>
+	            <pre id="stdout" class="mono tiny">—</pre>
+	          </div>
+	          <div class="panel">
+	            <h2 style="margin:0 0 8px;">Decode report</h2>
+	            <pre id="decode" class="mono tiny">—</pre>
+	          </div>
+	        </div>
+	        <div style="height:12px"></div>
+	        <div class="panel">
+	          <h2 style="margin:0 0 8px;">Run report</h2>
+	          <pre id="report" class="mono tiny">—</pre>
+	        </div>
+	      </div>
     </div>
 
     <script>
@@ -1609,6 +1787,7 @@ def _make_controller_app(runs_dir: Path):
       function statusCls(st) {
         if (st === "running") return "warn";
         if (st === "completed") return "ok";
+        if (st === "external") return "ok";
         if (st === "failed" || st === "stopped") return "bad";
         return "";
       }
@@ -1743,20 +1922,23 @@ def _make_controller_app(runs_dir: Path):
 
       function formKind() { return document.getElementById("kind").value; }
 
-      function readQuickVoiceArgs() {
-        const args = {
-          source_dir: document.getElementById("q_source_dir").value,
-          num_clips: parseInt(document.getElementById("q_num_clips").value, 10),
-          epochs_s1: parseInt(document.getElementById("q_epochs_s1").value, 10),
-          epochs_s1b: parseInt(document.getElementById("q_epochs_s1b").value, 10),
-          epochs_s2: parseInt(document.getElementById("q_epochs_s2").value, 10),
-          epochs_s1b_post: parseInt(document.getElementById("q_epochs_s1b_post").value, 10),
-          probe_clips: parseInt(document.getElementById("q_probe_clips").value, 10),
-          probe_every: parseInt(document.getElementById("q_probe_every").value, 10),
-          probe_reverb_every: parseInt(document.getElementById("q_probe_reverb_every").value, 10),
-          reverb_prob: parseFloat(document.getElementById("q_reverb_prob").value),
-          unknown_ce_weight: parseFloat(document.getElementById("q_unknown_ce_weight").value),
-          model_ce_weight: parseFloat(document.getElementById("q_model_ce_weight").value),
+	      function readQuickVoiceArgs() {
+	        const args = {
+	          source_dir: document.getElementById("q_source_dir").value,
+	          num_clips: parseInt(document.getElementById("q_num_clips").value, 10),
+	          epochs_s1: parseInt(document.getElementById("q_epochs_s1").value, 10),
+	          epochs_s1b: parseInt(document.getElementById("q_epochs_s1b").value, 10),
+	          epochs_s2: parseInt(document.getElementById("q_epochs_s2").value, 10),
+	          epochs_s1b_post: parseInt(document.getElementById("q_epochs_s1b_post").value, 10),
+	          msg_weight: parseFloat(document.getElementById("q_msg_weight").value),
+	          stage2_payload_on_all: (document.getElementById("q_stage2_payload_on_all").value === "1"),
+		          probe_clips: parseInt(document.getElementById("q_probe_clips").value, 10),
+		          probe_every: parseInt(document.getElementById("q_probe_every").value, 10),
+		          probe_reverb_every: parseInt(document.getElementById("q_probe_reverb_every").value, 10),
+		          log_steps_every: parseInt(document.getElementById("q_log_steps_every").value, 10),
+		          reverb_prob: parseFloat(document.getElementById("q_reverb_prob").value),
+	          unknown_ce_weight: parseFloat(document.getElementById("q_unknown_ce_weight").value),
+	          model_ce_weight: parseFloat(document.getElementById("q_model_ce_weight").value),
           version_ce_weight: parseFloat(document.getElementById("q_version_ce_weight").value),
           pair_ce_weight: parseFloat(document.getElementById("q_pair_ce_weight").value),
           neg_weight: parseFloat(document.getElementById("q_neg_weight").value),
@@ -1767,25 +1949,28 @@ def _make_controller_app(runs_dir: Path):
         return args;
       }
 
-      function readTrainFullArgs() {
-        const args = {
-          manifest: document.getElementById("t_manifest").value,
-          epochs_s1: parseInt(document.getElementById("t_epochs_s1").value, 10),
-          epochs_s1b: parseInt(document.getElementById("t_epochs_s1b").value, 10),
-          warmup_s1b: parseInt(document.getElementById("t_warmup_s1b").value, 10),
-          epochs_s2: parseInt(document.getElementById("t_epochs_s2").value, 10),
-          epochs_s1b_post: parseInt(document.getElementById("t_epochs_s1b_post").value, 10),
-          reverb_prob: parseFloat(document.getElementById("t_reverb_prob").value),
-          unknown_ce_weight: parseFloat(document.getElementById("t_unknown_ce_weight").value),
-          model_ce_weight: parseFloat(document.getElementById("t_model_ce_weight").value),
-          version_ce_weight: parseFloat(document.getElementById("t_version_ce_weight").value),
-          pair_ce_weight: parseFloat(document.getElementById("t_pair_ce_weight").value),
-          probe_clips: parseInt(document.getElementById("t_probe_clips").value, 10),
-          probe_every: parseInt(document.getElementById("t_probe_every").value, 10),
-          extra_args: document.getElementById("t_extra_args").value || null,
-        };
-        return args;
-      }
+	      function readTrainFullArgs() {
+	        const args = {
+	          manifest: document.getElementById("t_manifest").value,
+	          epochs_s1: parseInt(document.getElementById("t_epochs_s1").value, 10),
+	          epochs_s1b: parseInt(document.getElementById("t_epochs_s1b").value, 10),
+	          warmup_s1b: parseInt(document.getElementById("t_warmup_s1b").value, 10),
+	          epochs_s2: parseInt(document.getElementById("t_epochs_s2").value, 10),
+	          epochs_s1b_post: parseInt(document.getElementById("t_epochs_s1b_post").value, 10),
+	          reverb_prob: parseFloat(document.getElementById("t_reverb_prob").value),
+	          msg_weight: parseFloat(document.getElementById("t_msg_weight").value),
+	          stage2_payload_on_all: (document.getElementById("t_stage2_payload_on_all").value === "1"),
+	          unknown_ce_weight: parseFloat(document.getElementById("t_unknown_ce_weight").value),
+	          model_ce_weight: parseFloat(document.getElementById("t_model_ce_weight").value),
+	          version_ce_weight: parseFloat(document.getElementById("t_version_ce_weight").value),
+	          pair_ce_weight: parseFloat(document.getElementById("t_pair_ce_weight").value),
+		          probe_clips: parseInt(document.getElementById("t_probe_clips").value, 10),
+		          probe_every: parseInt(document.getElementById("t_probe_every").value, 10),
+		          extra_args: document.getElementById("t_extra_args").value || null,
+		          log_steps_every: parseInt(document.getElementById("t_log_steps_every").value, 10),
+		        };
+	        return args;
+	      }
 
       function updateFormVisibility() {
         const k = formKind();
@@ -1815,20 +2000,31 @@ def _make_controller_app(runs_dir: Path):
         await selectSession(sess.id);
       }
 
-      async function runPasted() {
-        const command = document.getElementById("rawCmd").value || "";
-        const name = document.getElementById("name").value || null;
-        const r = await api("/api/sessions/raw", { method:"POST", headers:{\"Content-Type\":\"application/json\"}, body: JSON.stringify({ name, command }) });
-        const sess = await r.json();
-        document.getElementById("rawCmdNote").textContent = "Started.";
-        await refreshSessions();
-        await selectSession(sess.id);
-      }
+	      async function runPasted() {
+	        const command = document.getElementById("rawCmd").value || "";
+	        const name = document.getElementById("name").value || null;
+	        const r = await api("/api/sessions/raw", { method:"POST", headers:{\"Content-Type\":\"application/json\"}, body: JSON.stringify({ name, command }) });
+	        const sess = await r.json();
+	        document.getElementById("rawCmdNote").textContent = "Started.";
+	        await refreshSessions();
+	        await selectSession(sess.id);
+	      }
 
-      async function stopSelected() {
-        if (!selected) return;
-        await api(`/api/sessions/${selected.id}/stop`, { method:"POST" });
-        await refreshSelected();
+	      async function attachLog() {
+	        const metrics_path = document.getElementById("attachPath").value || "";
+	        const name = document.getElementById("attachName").value || null;
+	        if (!metrics_path.trim()) { document.getElementById("attachNote").textContent = "Missing path."; return; }
+	        const r = await api("/api/sessions/attach", { method:"POST", headers:{\"Content-Type\":\"application/json\"}, body: JSON.stringify({ name, metrics_path }) });
+	        const sess = await r.json();
+	        document.getElementById("attachNote").textContent = "Attached.";
+	        await refreshSessions();
+	        await selectSession(sess.id);
+	      }
+
+	      async function stopSelected() {
+	        if (!selected) return;
+	        await api(`/api/sessions/${selected.id}/stop`, { method:"POST" });
+	        await refreshSelected();
         await refreshSessions();
       }
 
@@ -1937,13 +2133,15 @@ def _make_controller_app(runs_dir: Path):
 	            solid("loss_pair_ce", "#34d399", s2.map(e => e.loss_pair_ce ?? null)),
 	          ]);
 
-	          const outR = await api(`/api/sessions/${id}/stdout?tail=120`);
-	          document.getElementById("stdout").textContent = await outR.text();
-	          const decR = await api(`/api/sessions/${id}/decode_report`);
-	          document.getElementById("decode").textContent = (await decR.text()) || "—";
-	        } catch (e) {
-	          document.getElementById("stdout").textContent = `Dashboard refresh error: ${e}`;
-	        } finally {
+		          const outR = await api(`/api/sessions/${id}/stdout?tail=120`);
+		          document.getElementById("stdout").textContent = await outR.text();
+		          const decR = await api(`/api/sessions/${id}/decode_report`);
+		          document.getElementById("decode").textContent = (await decR.text()) || "—";
+		          const repR = await api(`/api/sessions/${id}/report`);
+		          document.getElementById("report").textContent = (await repR.text()) || "—";
+		        } catch (e) {
+		          document.getElementById("stdout").textContent = `Dashboard refresh error: ${e}`;
+		        } finally {
 	          refreshing = false;
 	        }
 	      }
@@ -1953,6 +2151,7 @@ def _make_controller_app(runs_dir: Path):
       document.getElementById("estimateBtn").addEventListener("click", () => estimate());
       document.getElementById("startBtn").addEventListener("click", () => startRun());
       document.getElementById("runRawBtn").addEventListener("click", () => runPasted());
+      document.getElementById("attachBtn").addEventListener("click", () => attachLog());
       document.getElementById("stopBtn").addEventListener("click", () => stopSelected());
       document.getElementById("kind").addEventListener("change", updateFormVisibility);
 
@@ -2094,9 +2293,19 @@ def _make_controller_app(runs_dir: Path):
 
         current_stage = None
         current_epoch = None
+        current_batch = None
+        current_n_batches = None
         done_by_stage: dict[str, int] = {}
+        done_by_stage_float: dict[str, float] = {}
         if mp.exists():
             events = _read_tail_jsonl(mp, max_lines=20000)
+
+            def _ts(ev: dict[str, Any]) -> float:
+                try:
+                    return float(ev.get("ts") or 0.0)
+                except Exception:
+                    return 0.0
+
             epochs = [
                 e
                 for e in events
@@ -2104,24 +2313,64 @@ def _make_controller_app(runs_dir: Path):
                 and isinstance(e.get("stage"), str)
                 and isinstance(e.get("epoch"), (int, float))
             ]
-            if epochs:
-                epochs.sort(key=lambda e: float(e.get("ts") or 0.0))
-                last = epochs[-1]
-                current_stage = str(last.get("stage"))
-                current_epoch = int(float(last.get("epoch")))
-                for e in epochs:
-                    st = str(e.get("stage"))
-                    ep = int(float(e.get("epoch")))
-                    done_by_stage[st] = max(done_by_stage.get(st, 0), ep)
+            epochs.sort(key=_ts)
+            for e in epochs:
+                st = str(e.get("stage"))
+                ep = int(float(e.get("epoch")))
+                done_by_stage[st] = max(done_by_stage.get(st, 0), ep)
+
+            for st, ep in done_by_stage.items():
+                done_by_stage_float[st] = float(ep)
+
+            steps = [
+                e
+                for e in events
+                if e.get("type") == "step"
+                and isinstance(e.get("stage"), str)
+                and isinstance(e.get("epoch"), (int, float))
+                and isinstance(e.get("batch"), (int, float))
+            ]
+            steps.sort(key=_ts)
+
+            last_epoch = epochs[-1] if epochs else None
+            last_step = steps[-1] if steps else None
+
+            use_step = False
+            if last_step is not None and (last_epoch is None or _ts(last_step) > _ts(last_epoch)):
+                use_step = True
+
+            if use_step:
+                st = str(last_step.get("stage"))
+                ep = int(float(last_step.get("epoch")))
+                b = int(float(last_step.get("batch")))
+                nb = last_step.get("n_batches")
+                nb_i = int(nb) if isinstance(nb, (int, float)) and int(nb) > 0 else None
+                current_stage = st
+                current_epoch = ep
+                current_batch = b
+                current_n_batches = nb_i
+
+                # Compute fractional epoch progress if we know the batch count.
+                completed = int(done_by_stage.get(st, 0))
+                base = completed
+                if ep > completed:
+                    base = ep - 1
+                frac = 0.0
+                if nb_i is not None and nb_i > 0:
+                    frac = min(1.0, max(0.0, float(b + 1) / float(nb_i)))
+                done_by_stage_float[st] = max(done_by_stage_float.get(st, float(completed)), float(base) + frac)
+            elif last_epoch is not None:
+                current_stage = str(last_epoch.get("stage"))
+                current_epoch = int(float(last_epoch.get("epoch")))
 
         stage_order = ["s1", "s1b", "s2", "s1b_post"]
-        done_epochs = 0
+        done_epochs = 0.0
         for st in stage_order:
             pe = int(planned.get(st, 0))
             if pe <= 0:
                 continue
-            de = int(done_by_stage.get(st, 0))
-            done_epochs += min(pe, max(0, de))
+            de = float(done_by_stage_float.get(st, float(done_by_stage.get(st, 0))))
+            done_epochs += min(float(pe), max(0.0, de))
         progress = (float(done_epochs) / float(planned_total)) if planned_total > 0 else 0.0
 
         est_total = None
@@ -2153,9 +2402,15 @@ def _make_controller_app(runs_dir: Path):
             eta_text = f"Finished in {_fmt_dur(elapsed)}"
 
         if current_stage and current_epoch is not None and planned_total > 0:
-            prog_text = f"Progress: {current_stage} e{current_epoch} · epochs {done_epochs}/{planned_total} ({progress*100:.1f}%)"
+            if current_batch is not None and current_n_batches is not None:
+                prog_text = (
+                    f"Progress: {current_stage} e{current_epoch} b{current_batch + 1}/{current_n_batches}"
+                    f" · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
+                )
+            else:
+                prog_text = f"Progress: {current_stage} e{current_epoch} · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
         elif planned_total > 0:
-            prog_text = f"Progress: epochs {done_epochs}/{planned_total} ({progress*100:.1f}%)"
+            prog_text = f"Progress: epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
         else:
             prog_text = "Progress: —"
 
@@ -2205,6 +2460,8 @@ def _make_controller_app(runs_dir: Path):
                 str(int(args.get("epochs_s2", 12))),
                 "--epochs_s1b_post",
                 str(int(args.get("epochs_s1b_post", 12))),
+                "--msg_weight",
+                str(float(args.get("msg_weight", 1.0))),
                 "--model_ce_weight",
                 str(float(args.get("model_ce_weight", 4.0))),
                 "--version_ce_weight",
@@ -2225,11 +2482,15 @@ def _make_controller_app(runs_dir: Path):
                 str(int(args.get("probe_every", 1))),
                 "--probe_reverb_every",
                 str(int(args.get("probe_reverb_every", 999999))),
+                "--log_steps_every",
+                str(int(args.get("log_steps_every", 25))),
                 "--log_metrics",
                 str(metrics_path),
                 "--out",
                 str(sdir),
             ]
+            if bool(args.get("stage2_payload_on_all")):
+                cmd.append("--stage2_payload_on_all")
             extra = args.get("extra_args")
             if isinstance(extra, str) and extra.strip():
                 cmd.extend(shlex.split(extra))
@@ -2277,9 +2538,13 @@ def _make_controller_app(runs_dir: Path):
                 str(int(args.get("probe_every", 1))),
                 "--probe_reverb_every",
                 "999999",
+                "--log_steps_every",
+                str(int(args.get("log_steps_every", 100))),
                 "--log_metrics",
                 str(metrics_path),
             ]
+            if bool(args.get("stage2_payload_on_all")):
+                cmd.append("--stage2_payload_on_all")
             extra = args.get("extra_args")
             if isinstance(extra, str) and extra.strip():
                 cmd.extend(shlex.split(extra))
@@ -2362,6 +2627,56 @@ def _make_controller_app(runs_dir: Path):
             raise HTTPException(status_code=500, detail=str(e))
         return {"id": sid}
 
+    @app.post("/api/sessions/attach")
+    def attach_session(payload: dict[str, Any]):
+        name = payload.get("name")
+        metrics_path = payload.get("metrics_path")
+        if not isinstance(metrics_path, str) or not metrics_path.strip():
+            raise HTTPException(status_code=400, detail="missing metrics_path")
+
+        mp = Path(metrics_path.strip()).expanduser()
+        if not mp.is_absolute():
+            mp = (REPO_ROOT / mp).resolve()
+        if not mp.exists():
+            raise HTTPException(status_code=404, detail=f"metrics.jsonl not found: {mp}")
+
+        meta = _read_first_meta(mp) or {}
+        run_name = meta.get("run_name")
+        kind = "attached"
+        if run_name == "quick_voice_smoke_train":
+            kind = "quick_voice_smoke_train"
+        elif run_name == "train_full":
+            kind = "train_full"
+
+        run_dir_raw = payload.get("run_dir")
+        if isinstance(run_dir_raw, str) and run_dir_raw.strip():
+            rd = Path(run_dir_raw.strip()).expanduser()
+            if not rd.is_absolute():
+                rd = (REPO_ROOT / rd).resolve()
+            run_dir = rd
+        else:
+            run_dir = mp.parent
+
+        sid = f"{int(time.time())}_{secrets.token_hex(3)}"
+        sdir = (runs_dir / sid).resolve()
+        sdir.mkdir(parents=True, exist_ok=True)
+
+        sess = {
+            "id": sid,
+            "kind": kind,
+            "name": name,
+            "created_ts": time.time(),
+            "status": "external",
+            "run_dir": str(run_dir),
+            "metrics_path": str(mp),
+            "stdout_path": str((run_dir / "stdout.log").resolve()),
+            "cmd": [],
+            "pid": None,
+            "returncode": None,
+        }
+        save_session(sess)
+        return {"id": sid}
+
     @app.post("/api/sessions/{sid}/stop")
     def stop(sid: str):
         sess = load_sessions().get(sid)
@@ -2372,6 +2687,14 @@ def _make_controller_app(runs_dir: Path):
             return {"ok": True}
         sess["status"] = "stopping"
         save_session(sess)
+        try:
+            mp = Path(sess.get("metrics_path", ""))
+            if mp:
+                mp.parent.mkdir(parents=True, exist_ok=True)
+                with mp.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"type": "control", "action": "stop_requested", "ts": time.time()}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
         with lock:
             p = procs.get(sid)
         if p:
@@ -2433,6 +2756,35 @@ def _make_controller_app(runs_dir: Path):
         sp = Path(sess["stdout_path"])
         return PlainTextResponse(_tail_text(sp, max_lines=tail), status_code=200)
 
+    @app.get("/api/sessions/{sid}/report")
+    def report(sid: str):
+        sess = load_sessions().get(sid)
+        if not sess:
+            raise HTTPException(status_code=404, detail="session not found")
+        sdir = Path(sess["run_dir"])
+        rp = sdir / "report.md"
+        if not rp.exists():
+            try:
+                mp = Path(sess.get("metrics_path", ""))
+                events = _read_tail_jsonl(mp, max_lines=200000)
+                if not any(e.get("type") == "meta" for e in events):
+                    meta = _read_first_meta(mp)
+                    if meta is not None:
+                        events = [meta, *events]
+                summ = _summarize_metrics(events)
+                text = _render_run_report_md(sess=sess, summary=summ)
+                try:
+                    rp.write_text(text, encoding="utf-8")
+                except Exception:
+                    pass
+                return PlainTextResponse(text, status_code=200)
+            except Exception:
+                return PlainTextResponse("", status_code=200)
+        try:
+            return PlainTextResponse(rp.read_text(encoding="utf-8"), status_code=200)
+        except Exception:
+            return PlainTextResponse("", status_code=200)
+
     @app.get("/api/sessions/{sid}/decode_report")
     def decode_report(sid: str):
         sess = load_sessions().get(sid)
@@ -2453,6 +2805,7 @@ def _make_controller_app(runs_dir: Path):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Live dashboard for watermark metrics.jsonl")
     parser.add_argument("--log", type=str, default=None, help="Path to metrics.jsonl (single-log mode)")
+    parser.add_argument("--metrics", dest="log", type=str, default=None, help="Alias for --log")
     parser.add_argument(
         "--runs_dir",
         type=str,

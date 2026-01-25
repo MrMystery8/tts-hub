@@ -93,6 +93,8 @@ def train_stage1b(
     loader: DataLoader,
     device: torch.device,
     preamble: torch.Tensor,
+    *,
+    stage: str = "s1b",
     epochs: int = 10,
     warmup: int = 3,
     top_k: int = 3,
@@ -109,6 +111,8 @@ def train_stage1b(
     model_id_weight: float = 2.0,
     version_weight: float = 0.5,
     log_interval: int = 10,
+    step_interval: int = 0,
+    on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
 ):
     """
@@ -174,6 +178,10 @@ def train_stage1b(
         total_loss_unknown_model_ce = 0.0
         total_loss_unknown_version_ce = 0.0
         batches = 0
+        try:
+            n_batches = int(len(loader))
+        except Exception:
+            n_batches = None
         
         for i, batch in enumerate(loader):
             has_wm = batch["has_watermark"].bool()
@@ -338,6 +346,28 @@ def train_stage1b(
             if loss_unk_version_ce is not None:
                 total_loss_unknown_version_ce += loss_unk_version_ce.item()
             batches += 1
+
+            if on_step is not None and int(step_interval) > 0 and (i % int(step_interval) == 0):
+                on_step(
+                    {
+                        "type": "step",
+                        "stage": str(stage),
+                        "epoch": epoch + 1,
+                        "batch": int(i),
+                        "n_batches": n_batches,
+                        "in_warmup": bool(in_warmup),
+                        "loss": float(loss.item()) if loss is not None else None,
+                        "loss_msg_bits": float(loss_msg_bits.item()) if loss_msg_bits is not None else None,
+                        "loss_model_ce": float(loss_model_ce.item()) if loss_model_ce is not None else None,
+                        "loss_version_ce": float(loss_version_ce.item()) if loss_version_ce is not None else None,
+                        "loss_pair_ce": float(loss_pair_ce.item()) if loss_pair_ce is not None else None,
+                        "loss_neg_preamble": float(loss_neg_preamble.item()) if loss_neg_preamble is not None else None,
+                        "loss_unknown_model_ce": float(loss_unk_model_ce.item()) if loss_unk_model_ce is not None else None,
+                        "loss_unknown_version_ce": float(loss_unk_version_ce.item()) if loss_unk_version_ce is not None else None,
+                        "n_pos": int(pos_mask.sum().item()),
+                        "n_neg": int(neg_mask.sum().item()),
+                    }
+                )
             
             if i % log_interval == 0:
                 print(f"Epoch {epoch+1}/{epochs} | Batch {i} | Loss: {loss.item():.4f}")
@@ -350,7 +380,7 @@ def train_stage1b(
             on_epoch_end(
                 {
                     "type": "epoch",
-                    "stage": "s1b",
+                    "stage": str(stage),
                     "epoch": epoch + 1,
                     "in_warmup": bool(in_warmup),
                     "loss": avg_loss,

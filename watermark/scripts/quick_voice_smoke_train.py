@@ -7,6 +7,7 @@ and saves clean/watermarked WAVs for listening.
 """
 import argparse
 import json
+import math
 import random
 import time
 from pathlib import Path
@@ -124,6 +125,7 @@ def main() -> int:
     parser.add_argument("--probe_every", type=int, default=1, help="Run probe every N epochs (Stage 2 + post-Stage1B)")
     parser.add_argument("--probe_clips", type=int, default=256, help="Number of probe clips (cached in RAM once)")
     parser.add_argument("--probe_reverb_every", type=int, default=1, help="Compute reverb probe every N probe runs")
+    parser.add_argument("--log_steps_every", type=int, default=25, help="Log step events every N batches (0 disables)")
     parser.add_argument("--epochs_s1", type=int, default=None, help="Stage 1 epochs")
     parser.add_argument("--epochs_s1b", type=int, default=None, help="Stage 1B epochs")
     parser.add_argument("--epochs_s2", type=int, default=None, help="Stage 2 epochs")
@@ -135,6 +137,11 @@ def main() -> int:
     parser.add_argument("--version_ce_weight", type=float, default=None, help="Stage 1B/2 version CE weight")
     parser.add_argument("--pair_ce_weight", type=float, default=None, help="Stage 1B/2 (model_id,version) joint CE weight")
     parser.add_argument("--msg_weight", type=float, default=None, help="Stage 2 message loss weight")
+    parser.add_argument(
+        "--stage2_payload_on_all",
+        action="store_true",
+        help="Stage 2: apply payload/ID losses on all carriers (ignores has_watermark gating)",
+    )
     parser.add_argument("--reverb_prob", type=float, default=None, help="Stage 2 differentiable reverb probability")
     args = parser.parse_args()
 
@@ -162,6 +169,7 @@ def main() -> int:
     version_ce_weight = 1.0 if args.version_ce_weight is None else args.version_ce_weight
     pair_ce_weight = 2.0 if args.pair_ce_weight is None else args.pair_ce_weight
     msg_weight = 1.0 if args.msg_weight is None else args.msg_weight
+    stage2_payload_on_all = bool(args.stage2_payload_on_all)
     reverb_prob = 0.25 if args.reverb_prob is None else args.reverb_prob
 
     print(f"[QuickVoice] Using device: {DEVICE}")
@@ -198,7 +206,8 @@ def main() -> int:
     decoder = SlidingWindowDecoder(WatermarkDecoder(msg_bits=32)).to(DEVICE)
 
     dataset = WatermarkDataset(str(manifest_path), codec=codec, training=True)
-    loader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
+    batch_size = 4
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     # ---- Live metrics + probe cache (optional but default-on via out/metrics.jsonl) ----
     metrics_path = Path(args.log_metrics) if args.log_metrics else (out_dir / "metrics.jsonl")
@@ -292,9 +301,13 @@ def main() -> int:
                     "pair_ce_weight": pair_ce_weight,
                     "msg_weight": msg_weight,
                     "reverb_prob": reverb_prob,
+                    "stage2_payload_on_all": stage2_payload_on_all,
                     "probe_n": probe_n,
                     "probe_every": probe_every,
                     "probe_reverb_every": probe_reverb_every,
+                    "log_steps_every": int(args.log_steps_every),
+                    "batch_size": int(batch_size),
+                    "steps_per_epoch": int(math.ceil(len(selected) / float(batch_size))),
                 },
             },
         )
@@ -307,6 +320,8 @@ def main() -> int:
             DEVICE,
             epochs=epochs_s1,
             log_interval=999,
+            step_interval=int(args.log_steps_every),
+            on_step=lambda e: log_event(mlog, e),
             on_epoch_end=lambda e: log_event(mlog, e),
         )
 
@@ -317,6 +332,7 @@ def main() -> int:
             loader,
             DEVICE,
             codec.preamble,
+            stage="s1b",
             epochs=epochs_s1b,
             warmup=1,
             neg_weight=neg_weight,
@@ -326,6 +342,8 @@ def main() -> int:
             version_ce_weight=version_ce_weight,
             pair_ce_weight=pair_ce_weight,
             log_interval=999,
+            step_interval=int(args.log_steps_every),
+            on_step=lambda e: log_event(mlog, e),
             on_epoch_end=lambda e: log_event(mlog, e),
         )
 
@@ -341,7 +359,10 @@ def main() -> int:
             version_ce_weight=version_ce_weight,
             pair_ce_weight=pair_ce_weight,
             reverb_prob=reverb_prob,
+            payload_pos_only=(not stage2_payload_on_all),
             log_interval=999,
+            step_interval=int(args.log_steps_every),
+            on_step=lambda e: log_event(mlog, e),
             on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, stage="s2", epoch=e["epoch"])),
         )
 
@@ -355,6 +376,7 @@ def main() -> int:
                 loader,
                 DEVICE,
                 codec.preamble,
+                stage="s1b_post",
                 epochs=epochs_s1b_post,
                 warmup=epochs_s1b_post,
                 neg_weight=neg_weight,
@@ -364,10 +386,9 @@ def main() -> int:
                 version_ce_weight=version_ce_weight,
                 pair_ce_weight=pair_ce_weight,
                 log_interval=999,
-                on_epoch_end=lambda e: (
-                    log_event(mlog, {**e, "stage": "s1b_post"}),
-                    maybe_probe(mlog, stage="s1b_post", epoch=e["epoch"]),
-                ),
+                step_interval=int(args.log_steps_every),
+                on_step=lambda e: log_event(mlog, e),
+                on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, stage="s1b_post", epoch=e["epoch"])),
             )
 
         # Final probe snapshot (always with reverb) for the dashboard

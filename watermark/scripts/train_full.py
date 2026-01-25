@@ -37,11 +37,17 @@ def main():
     parser.add_argument("--version_ce_weight", type=float, default=1.0, help="Stage 1B/2 version CE weight")
     parser.add_argument("--pair_ce_weight", type=float, default=2.0, help="Stage 1B/2 (model_id,version) joint CE weight")
     parser.add_argument("--msg_weight", type=float, default=1.0, help="Stage 2 message loss weight")
+    parser.add_argument(
+        "--stage2_payload_on_all",
+        action="store_true",
+        help="Stage 2: apply payload/ID losses on all carriers (ignores has_watermark gating)",
+    )
     parser.add_argument("--reverb_prob", type=float, default=0.25, help="Stage 2 differentiable reverb probability")
     parser.add_argument("--log_metrics", type=str, default=None, help="Write JSONL metrics for live dashboard")
     parser.add_argument("--probe_every", type=int, default=1, help="Run probe every N epochs (Stage 2 + post-Stage1B)")
     parser.add_argument("--probe_clips", type=int, default=256, help="Number of probe clips (cached in RAM once)")
     parser.add_argument("--probe_reverb_every", type=int, default=1, help="Compute reverb probe every N probe runs")
+    parser.add_argument("--log_steps_every", type=int, default=100, help="Log step events every N batches (0 disables)")
     args = parser.parse_args()
     
     output_dir = Path(args.output)
@@ -64,7 +70,8 @@ def main():
     
     # Create dataset
     dataset = WatermarkDataset(args.manifest, codec=codec, training=True)
-    loader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
+    batch_size = 16
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     # Probe cache (center crop, deterministic)
     probe_items: list[ProbeItem] = []
@@ -165,17 +172,29 @@ def main():
                     "version_ce_weight": args.version_ce_weight,
                     "pair_ce_weight": args.pair_ce_weight,
                     "msg_weight": args.msg_weight,
+                    "stage2_payload_on_all": bool(args.stage2_payload_on_all),
                     "reverb_prob": args.reverb_prob,
                     "probe_n": probe_n,
                     "probe_every": probe_every,
                     "probe_reverb_every": probe_reverb_every,
+                    "log_steps_every": int(args.log_steps_every),
+                    "batch_size": int(batch_size),
                 },
             }
         )
 
         # === STAGE 1: Detection ===
         print("\n=== Stage 1: Detection Training ===")
-        train_stage1(decoder, encoder, loader, DEVICE, epochs=args.epochs_s1, on_epoch_end=mlog.log)
+        train_stage1(
+            decoder,
+            encoder,
+            loader,
+            DEVICE,
+            epochs=args.epochs_s1,
+            step_interval=int(args.log_steps_every),
+            on_step=mlog.log,
+            on_epoch_end=mlog.log,
+        )
         torch.save(decoder.state_dict(), output_dir / "decoder_stage1.pt")
         
         # === STAGE 1B: Payload (with curriculum) ===
@@ -186,6 +205,7 @@ def main():
             loader,
             DEVICE,
             preamble=codec.preamble,
+            stage="s1b",
             epochs=args.epochs_s1b,
             warmup=args.warmup_s1b,
             neg_weight=args.neg_weight,
@@ -194,6 +214,8 @@ def main():
             model_ce_weight=args.model_ce_weight,
             version_ce_weight=args.version_ce_weight,
             pair_ce_weight=args.pair_ce_weight,
+            step_interval=int(args.log_steps_every),
+            on_step=mlog.log,
             on_epoch_end=mlog.log,
         )
         torch.save(decoder.state_dict(), output_dir / "decoder_stage1b.pt")
@@ -211,6 +233,9 @@ def main():
             version_ce_weight=args.version_ce_weight,
             pair_ce_weight=args.pair_ce_weight,
             reverb_prob=args.reverb_prob,
+            payload_pos_only=(not bool(args.stage2_payload_on_all)),
+            step_interval=int(args.log_steps_every),
+            on_step=mlog.log,
             on_epoch_end=lambda e: (
                 mlog.log(e),
                 maybe_save_best(
@@ -232,6 +257,7 @@ def main():
                 loader,
                 DEVICE,
                 preamble=codec.preamble,
+                stage="s1b_post",
                 epochs=args.epochs_s1b_post,
                 warmup=args.epochs_s1b_post,
                 neg_weight=args.neg_weight,
@@ -240,8 +266,10 @@ def main():
                 model_ce_weight=args.model_ce_weight,
                 version_ce_weight=args.version_ce_weight,
                 pair_ce_weight=args.pair_ce_weight,
+                step_interval=int(args.log_steps_every),
+                on_step=mlog.log,
                 on_epoch_end=lambda e: (
-                    mlog.log({**e, "stage": "s1b_post"}),
+                    mlog.log(e),
                     maybe_save_best(
                         stage="s1b_post",
                         epoch=e["epoch"],

@@ -170,10 +170,13 @@ def train_stage2(
     model_id_weight: float = 2.0,
     version_weight: float = 0.5,
     payload_on_clean: bool = True,
+    payload_pos_only: bool = True,
     message_mode: str = "random_if_mixed",
     n_models: int = 8,
     n_versions: int = 16,
     log_interval: int = 10,
+    step_interval: int = 0,
+    on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
 ):
     """
@@ -215,6 +218,10 @@ def train_stage2(
         total_loss_pair = 0.0
         total_loss_qual = 0.0
         batches = 0
+        try:
+            n_batches = int(len(loader))
+        except Exception:
+            n_batches = None
         
         for i, batch in enumerate(loader):
             # Train only on samples meant to be watermarked according to manifest?
@@ -224,10 +231,13 @@ def train_stage2(
             audio = batch["audio"].to(device)  # (B, 1, T)
             B = int(audio.shape[0])
 
-            # Stage-2 payload supervision should not backprop through clean negatives.
-            # We still watermark all carriers, but we gate payload losses to true positives
-            # (has_watermark==1) when the field is available.
-            if "has_watermark" in batch:
+            # Stage 2 always watermarks its carriers on-the-fly. When training on a mixed
+            # manifest (watermarked positives + clean negatives for Stage 1), you can:
+            # - `payload_pos_only=True`  : apply payload/ID losses only on labeled positives.
+            # - `payload_pos_only=False` : apply payload/ID losses on all carriers (recommended
+            #   when you want the encoder to strongly learn identity, since all carriers are
+            #   watermarked in Stage 2 anyway).
+            if payload_pos_only and ("has_watermark" in batch):
                 pos_mask = (batch["has_watermark"].to(device) > 0.5)
             else:
                 pos_mask = torch.ones((B,), device=device, dtype=torch.bool)
@@ -384,6 +394,31 @@ def train_stage2(
             total_loss_pair += loss_pair.item()
             total_loss_qual += loss_qual.item()
             batches += 1
+
+            if on_step is not None and int(step_interval) > 0 and (i % int(step_interval) == 0):
+                on_step(
+                    {
+                        "type": "step",
+                        "stage": "s2",
+                        "epoch": epoch + 1,
+                        "batch": int(i),
+                        "n_batches": n_batches,
+                        "loss": float(loss.item()),
+                        "loss_det": float(loss_det.item()),
+                        "loss_aux": float(loss_aux.item()),
+                        "loss_msg": float(loss_msg.item()),
+                        "loss_model_ce": float(loss_model.item()),
+                        "loss_version_ce": float(loss_version.item()),
+                        "loss_pair_ce": float(loss_pair.item()),
+                        "loss_qual": float(loss_qual.item()),
+                        "msg_weight": float(msg_weight),
+                        "model_ce_weight": float(model_ce_weight),
+                        "version_ce_weight": float(version_ce_weight),
+                        "pair_ce_weight": float(pair_ce_weight),
+                        "payload_on_clean": bool(payload_on_clean),
+                        "payload_pos_only": bool(payload_pos_only),
+                    }
+                )
             
             if i % log_interval == 0:
                 print(f"Epoch {epoch+1}/{epochs} | Batch {i} | Loss: {loss.item():.4f} (Qual: {loss_qual.item():.4f}, Det: {loss_det.item():.4f})")
@@ -415,6 +450,7 @@ def train_stage2(
                     "qual_weight": float(qual_weight),
                     "reverb_prob": float(reverb_prob),
                     "payload_on_clean": bool(payload_on_clean),
+                    "payload_pos_only": bool(payload_pos_only),
                     "lr": opt.param_groups[0].get("lr"),
                 }
             )

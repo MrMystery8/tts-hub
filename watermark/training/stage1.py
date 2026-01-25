@@ -22,6 +22,8 @@ def train_stage1(
     epochs: int = 20,
     lr: float = 3e-4,
     log_interval: int = 10,
+    step_interval: int = 0,
+    on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
 ):
     """
@@ -43,7 +45,11 @@ def train_stage1(
         epoch_loss_window = 0.0
         epoch_loss_clip = 0.0
         batch_count = 0
-        
+        try:
+            n_batches = int(len(loader))
+        except Exception:
+            n_batches = None
+
         for i, batch in enumerate(loader):
             audio = batch["audio"].to(device)
             has_wm = batch["has_watermark"].to(device)  # (B,)
@@ -88,11 +94,25 @@ def train_stage1(
             opt.zero_grad()
             loss.backward()
             opt.step()
-            
+
             epoch_loss += loss.item()
             epoch_loss_window += loss_window.item()
             epoch_loss_clip += loss_clip.item()
             batch_count += 1
+
+            if on_step is not None and int(step_interval) > 0 and (i % int(step_interval) == 0):
+                on_step(
+                    {
+                        "type": "step",
+                        "stage": "s1",
+                        "epoch": epoch + 1,
+                        "batch": int(i),
+                        "n_batches": n_batches,
+                        "loss": float(loss.item()),
+                        "loss_window": float(loss_window.item()),
+                        "loss_clip": float(loss_clip.item()),
+                    }
+                )
             
             if i % log_interval == 0:
                 print(f"Epoch {epoch+1}/{epochs} | Batch {i} | Loss: {loss.item():.4f}")
