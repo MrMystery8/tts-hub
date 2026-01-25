@@ -94,8 +94,9 @@ This validates that Stage-2 attribution supervision was a real bottleneck, but i
 if has_labels:
     message = self.codec.encode(model_id, version).float()
 else:
-    # Placeholder (dangerous if training code treats this as truth)
-    message = self.codec.encode(0, 0).float()
+    # Historical footgun: unlabeled positives were mapped to a constant (0,0).
+    # This has since been hardened to avoid a constant payload for unlabeled
+    # watermarked items.
 ```
 
 If Stage 2 (encoder training) implicitly “trains message for every sample,” then **unlabeled/negative items are treated as `(0,0)`**. The encoder/decoder can converge to “presence-only + constant identity.”
@@ -257,4 +258,3 @@ Artifacts and where to look:
 - `.../metrics.jsonl`: charts + conditional metrics
 - `.../audio/decode_report.txt`: single-clip qualitative summary
 - `.../report.md`: summarized “best vs latest” probe stats (controller runs)
-

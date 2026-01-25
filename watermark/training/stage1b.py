@@ -95,6 +95,7 @@ def train_stage1b(
     preamble: torch.Tensor,
     *,
     stage: str = "s1b",
+    heads_only: bool = False,
     epochs: int = 10,
     warmup: int = 3,
     top_k: int = 3,
@@ -151,9 +152,12 @@ def train_stage1b(
         
         # --- Optimizer & Freeze Logic ---
         if epoch == 0 or epoch == warmup:
-            if in_warmup:
-                print(">> WARMUP PHASE: Training message head only")
-                # Freeze everything EXCEPT message head
+            if in_warmup or heads_only:
+                if in_warmup:
+                    print(">> WARMUP PHASE: Training message head only")
+                else:
+                    print(">> HEADS-ONLY PHASE: Freezing decoder backbone/detector")
+                # Freeze everything EXCEPT message/id heads
                 for n, p in decoder.named_parameters():
                     if all(h not in n for h in ("head_message", "head_model", "head_version", "head_pair")):
                         p.requires_grad = False
@@ -161,7 +165,6 @@ def train_stage1b(
                         p.requires_grad = True
             else:
                 print(">> NORMAL PHASE: Unfreezing all parameters")
-                # Unfreeze everything
                 for p in decoder.parameters():
                     p.requires_grad = True
             

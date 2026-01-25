@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--neg_weight", type=float, default=0.4, help="Stage 1B negative preamble weight")
     parser.add_argument("--neg_preamble_target", type=float, default=0.5, help="Stage 1B negative preamble target prob")
     parser.add_argument("--unknown_ce_weight", type=float, default=0.0, help="Stage 1B unknown-class CE weight (negatives)")
+    parser.add_argument("--s1b_heads_only", action="store_true", help="Stage 1B: train only message/id heads (freeze backbone/det head)")
     parser.add_argument("--model_ce_weight", type=float, default=1.0, help="Stage 1B/2 model_id CE weight")
     parser.add_argument("--version_ce_weight", type=float, default=1.0, help="Stage 1B/2 version CE weight")
     parser.add_argument("--pair_ce_weight", type=float, default=2.0, help="Stage 1B/2 (model_id,version) joint CE weight")
@@ -135,11 +136,25 @@ def main():
     def maybe_save_best(*, stage: str, epoch: int, metrics: Optional[dict[str, Any]]) -> None:
         if not metrics:
             return
-        key = "payload_exact_acc_cls"
-        val = metrics.get(key, None)
-        if val is None:
+        # Prefer real-use conditional attribution (detect -> then decode).
+        # Fall back to unconditional metrics if cond metrics are missing.
+        key_candidates = [
+            "pair_acc_cls_cond_1pct",
+            "payload_exact_acc_cls_cond_1pct",
+            "pair_acc_cls",
+            "payload_exact_acc_cls",
+        ]
+        key = None
+        cur = None
+        for k in key_candidates:
+            v = metrics.get(k, None)
+            if isinstance(v, (int, float)):
+                key = k
+                cur = float(v)
+                break
+        if key is None or cur is None:
             return
-        cur = float(val)
+
         prev = float(best_by_payload.get(stage, {}).get(key, -1.0))
         if cur <= prev:
             return
@@ -168,6 +183,7 @@ def main():
                     "neg_weight": args.neg_weight,
                     "neg_preamble_target": args.neg_preamble_target,
                     "unknown_ce_weight": args.unknown_ce_weight,
+                    "s1b_heads_only": bool(args.s1b_heads_only),
                     "model_ce_weight": args.model_ce_weight,
                     "version_ce_weight": args.version_ce_weight,
                     "pair_ce_weight": args.pair_ce_weight,
@@ -206,6 +222,7 @@ def main():
             DEVICE,
             preamble=codec.preamble,
             stage="s1b",
+            heads_only=bool(args.s1b_heads_only),
             epochs=args.epochs_s1b,
             warmup=args.warmup_s1b,
             neg_weight=args.neg_weight,

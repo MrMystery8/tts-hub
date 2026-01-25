@@ -14,6 +14,7 @@ from typing import Dict, List, TYPE_CHECKING
 import random
 
 from watermark.config import SAMPLE_RATE, SEGMENT_SAMPLES
+from watermark.config import N_MODELS, N_VERSIONS
 
 if TYPE_CHECKING:
     from watermark.models.codec import MessageCodec
@@ -80,8 +81,21 @@ class WatermarkDataset(Dataset):
         if has_labels:
             message = self.codec.encode(model_id, version).float()
         else:
-            # Placeholder (training code may override targets/messages for unlabeled positives).
-            message = self.codec.encode(0, 0).float()
+            # IMPORTANT (attribution footgun):
+            # If a manifest contains unlabeled positives and we always map them to a constant
+            # default (0,0), any training path that accidentally supervises on these targets
+            # can collapse into "presence-only + constant identity".
+            #
+            # Keep message shape fixed, but avoid a constant payload for unlabeled watermarked
+            # items by sampling a balanced random ID pair.
+            if has_watermark >= 0.5:
+                rid = random.randrange(int(N_MODELS))
+                rver = random.randrange(int(N_VERSIONS))
+                message = self.codec.encode(rid, rver).float()
+            else:
+                # For clean negatives this value is unused (decoder sees clean audio), but we
+                # still return a tensor for consistent collate.
+                message = self.codec.encode(0, 0).float()
         
         return {
             "audio": audio,
