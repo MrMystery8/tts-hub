@@ -1,7 +1,7 @@
 """
 Strict Verification Scripts
 1. Budget Stress Test: Force high alpha to ensure EnergyBudgetLoss triggers.
-2. Multiclass plumbing test: Encoder/Decoder forward shapes.
+2. Two-head decoder plumbing test: Encoder/Decoder forward shapes.
 """
 import torch
 from watermark.training.losses import EnergyBudgetLoss
@@ -73,8 +73,8 @@ def test_budget():
         print(">> FAILED: Loss activated for compliant input!")
 
 
-def test_multiclass_plumbing():
-    print("\n[Test] Multiclass Encoder/Decoder Plumbing")
+def test_two_head_plumbing():
+    print("\n[Test] Two-head Decoder Plumbing")
 
     encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
     decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
@@ -89,9 +89,11 @@ def test_multiclass_plumbing():
 
     assert out["clip_class_logits"].shape == (2, N_CLASSES)
     assert out["clip_class_probs"].shape == (2, N_CLASSES)
+    assert out["clip_id_logits"].shape == (2, N_CLASSES - 1)
+    assert out["clip_id_probs"].shape == (2, N_CLASSES - 1)
     assert out["clip_wm_prob"].shape == (2,)
     print(">> PASSED: Shapes OK.")
 
 if __name__ == "__main__":
     test_budget()
-    test_multiclass_plumbing()
+    test_two_head_plumbing()

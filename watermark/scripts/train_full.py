@@ -29,6 +29,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Watermark Training Pipeline (Multiclass)")
     parser.add_argument("--manifest", type=str, required=True, help="Path to manifest JSON")
     parser.add_argument("--output", type=str, required=True, help="Output directory for checkpoints")
+    parser.add_argument("--load_encoder", type=str, default=None, help="Optional: path to encoder .pt state_dict")
+    parser.add_argument("--load_decoder", type=str, default=None, help="Optional: path to decoder .pt state_dict")
 
     parser.add_argument("--epochs_s1", type=int, default=20, help="Stage 1 epochs (decoder pretrain)")
     parser.add_argument("--epochs_s1b", type=int, default=0, help="Legacy: folded into Stage 1 epochs")
@@ -37,6 +39,13 @@ def main() -> int:
 
     parser.add_argument("--neg_weight", type=float, default=0.4, help="Stage 3: weight for clean CE regularization")
     parser.add_argument("--reverb_prob", type=float, default=0.25, help="Stage 2/3 differentiable reverb probability")
+    parser.add_argument("--detect_weight", type=float, default=1.0, help="Weight for detect loss")
+    parser.add_argument("--id_weight", type=float, default=2.0, help="Weight for ID loss (positives only)")
+    parser.add_argument(
+        "--freeze_detect_head_in_s3",
+        action="store_true",
+        help="Freeze detect head during finetune to reduce detect/ID interference",
+    )
 
     parser.add_argument("--log_metrics", type=str, default=None, help="Write JSONL metrics for live dashboard")
     parser.add_argument("--probe_every", type=int, default=1, help="Run probe every N epochs (S2 + S3)")
@@ -69,6 +78,20 @@ def main() -> int:
     # Models
     encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
     decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+
+    if args.load_encoder:
+        p = Path(args.load_encoder).expanduser().resolve()
+        ckpt = torch.load(p, map_location="cpu")
+        state = ckpt.get("state_dict") if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        encoder.load_state_dict(state, strict=True)
+        print(f"Loaded encoder weights: {p}")
+
+    if args.load_decoder:
+        p = Path(args.load_decoder).expanduser().resolve()
+        ckpt = torch.load(p, map_location="cpu")
+        state = ckpt.get("state_dict") if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        decoder.load_state_dict(state, strict=True)
+        print(f"Loaded decoder weights: {p}")
 
     # Data
     dataset = WatermarkDataset(str(manifest_path), training=True)
@@ -157,6 +180,8 @@ def main() -> int:
                 loader,
                 DEVICE,
                 epochs=epochs_s1_total,
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
                 step_interval=int(args.log_steps_every),
                 on_step=mlog.log,
                 on_epoch_end=mlog.log,
@@ -173,6 +198,8 @@ def main() -> int:
                 DEVICE,
                 epochs=int(args.epochs_s2),
                 reverb_prob=float(args.reverb_prob),
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
                 step_interval=int(args.log_steps_every),
                 on_step=mlog.log,
                 on_epoch_end=lambda e: (
@@ -195,6 +222,9 @@ def main() -> int:
                 lr=1e-5,
                 reverb_prob=float(args.reverb_prob),
                 neg_weight=float(args.neg_weight),
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
+                freeze_detect_head=bool(args.freeze_detect_head_in_s3),
                 step_interval=int(args.log_steps_every),
                 on_step=mlog.log,
                 on_epoch_end=lambda e: (
@@ -211,4 +241,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

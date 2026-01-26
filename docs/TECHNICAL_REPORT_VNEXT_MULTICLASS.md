@@ -287,33 +287,56 @@ return audio + self.alpha * watermark
 - `WatermarkDecoder`: window classifier
 - `SlidingWindowDecoder`: clip-level wrapper with top-k aggregation
 
+#### 4.5.1 Loc-gated decoder (loc + detect + ID)
+
+The decoder is intentionally **loc-gated** to avoid early collapse to “clean” (class 0) and to stop attribution gradients being diluted by non-watermarked regions:
+
+- `loc` head: localized watermarkness over the window time axis
+- `detect` head: auxiliary global watermark presence (kept for compatibility and optional regularization)
+- `id` head: K-way model attribution using loc-weighted pooling
+
+The combined `(K+1)` distribution is derived as:
+
+```py
+P(clean) = 1 - P(wm_loc)
+P(class=i+1) = P(wm_loc) * P(id=i)
+```
+
+This makes “detection is the major goal” explicit (and tunable via weights), while still enabling attribution once detection is reliable.
+
 Window-level decoder:
 
 - computes STFT + mel filterbank (no librosa; safe on MPS)
 - runs a CNN backbone
-- produces class logits and probabilities
+- produces `loc_logits`, `detect_logit`, and `id_logits`
+- derives `(K+1)` class probabilities/logits for backward compatibility
 
 Clip-level aggregation (`SlidingWindowDecoder`):
 
 - runs the window decoder over all windows
-- computes `wm_prob = 1 - P(clean)`
-- selects top-k windows by watermark probability
-- averages their logits to produce `clip_class_logits`
+- selects top-k windows by **localization pooled watermark probability**
+- averages their logits to produce stable clip-level outputs
 
 Return contract (clip-level):
 
-- `clip_class_logits`: `(B, N_CLASSES)`
-- `clip_class_probs`: `(B, N_CLASSES)`
-- `clip_wm_prob`: `(B,)` where `clip_wm_prob = 1 - P(class0)`
-- `clip_detect_prob`: alias for `clip_wm_prob` (compat for older dashboards/scripts)
+- `clip_detect_logit`: `(B,)`
+- `clip_wm_prob` / `clip_detect_prob`: `(B,)` derived from localization pooling (same value)
+- `clip_id_logits`: `(B, K)`
+- `clip_id_probs`: `(B, K)`
+- `clip_class_probs`: `(B, K+1)` (derived)
+- `clip_class_logits`: `(B, K+1)` (derived log-probs)
+- window-level outputs for training and debugging:
+  - `all_window_detect_logits`: `(B, n_win)`
+  - `all_window_loc_logits`: `(B, n_win, Tloc)`
+  - `all_window_wm_prob_loc`: `(B, n_win)`
+  - `all_window_id_logits`: `(B, n_win, K)`
 
 Snippet:
 
 ```py
-# watermark/models/decoder.py
-wm_probs = 1.0 - class_probs[:, :, CLASS_CLEAN]
-top_vals, top_idx = torch.topk(wm_probs, k, dim=1)
-clip_wm_prob = top_vals.mean(dim=1)
+# watermark/models/decoder.py (clip-level)
+top_wm_probs = torch.gather(wm_prob_loc, 1, top_idx)  # (B, k)
+clip_wm_prob = top_wm_probs.mean(dim=1)
 ```
 
 ---
@@ -337,9 +360,15 @@ Key idea: the dataset contains *clean carriers*, and watermark is applied **on-t
 
 Loss:
 
-- Window CE: cross-entropy over `all_window_class_logits` vs `y_class` (broadcast per window)
-- Clip CE: cross-entropy over `clip_class_logits` vs `y_class`
-- Total: `loss = loss_win + 0.5 * loss_clip`
+- Detect loss (all samples): BCE on per-window + clip `wm_prob_loc` (localization pooled)
+- Optional consistency: MSE between `sigmoid(clip_detect_logit)` and `clip_wm_prob` (helps keep detect head aligned)
+- ID loss (positives only): CE on per-window + clip ID logits
+- Total: `loss = detect_weight * loss_detect + id_weight * loss_id`
+
+This directly matches the product decomposition:
+
+1) detect watermark reliably  
+2) if detected, attribute model ID
 
 ### 5.2 Stage 2/3: encoder training and finetuning (`watermark/training/stage2.py`)
 
@@ -351,14 +380,16 @@ Stage 2 (encoder only):
 Stage 3 (finetune):
 
 - decoder is unfrozen
-- adds an explicit “clean CE” regularizer on negative (clean) samples to keep calibration stable
+- adds an explicit **clean detect** loss on negative (clean) samples to keep calibration stable
+- supports `freeze_detect_head` to prevent detector drift while improving attribution
 
 Core losses:
 
-- `loss_attr`: CE on window + clip logits (positives)
+- `loss_detect`: BCE on window + clip detect logits (positives)
+- `loss_id`: CE on window + clip ID logits (positives)
 - `loss_qual`: `CachedSTFTLoss` (multi-resolution STFT)
 - `loss_budget`: `EnergyBudgetLoss` (hard limit around target dB)
-- (Stage 3 only) `loss_clean`: CE on clean samples
+- (Stage 3 only) `loss_clean_detect`: BCE on clean samples (target=0)
 
 Multi-loss weighting:
 
@@ -402,12 +433,27 @@ The “probe” is a lightweight evaluation run used during training and in dash
 
 Reported metrics (core):
 
-- `mini_auc`: ROC-AUC for watermark presence using `clip_wm_prob`
-- `tpr_at_fpr_1pct`: detection TPR when threshold is set at the 99th percentile of negative scores
-- `attr_acc`: multiclass accuracy across all clips
-- `wm_acc`: multiclass accuracy on watermarked-only subset
-- `p_clean_*`: diagnostics for `P(clean)` distributions
-- `confusion`: confusion matrix as nested lists
+- Detection:
+  - `mini_auc`: ROC-AUC for watermark presence using `clip_wm_prob`
+  - `tpr_at_fpr_1pct`: detection TPR when threshold is set at the 99th percentile of negative scores
+  - `thr_at_fpr_1pct`: that threshold (helps explain “everything predicted clean”)
+- Localization pooled score diagnostics (optional):
+  - `wm_prob_loc_mean`, `wm_prob_loc_pos_mean`, `wm_prob_loc_neg_mean`
+- Attribution:
+  - `id_acc_pos`: ID accuracy on positives (ignores detection threshold; uses argmax over ID head)
+  - `wm_acc`: “product-style” accuracy on positives, after thresholding
+  - `attr_acc`: “product-style” accuracy over all clips, after thresholding
+- Confusions:
+  - `confusion`: full `(K+1)×(K+1)` confusion **after thresholding at FPR=1%**
+  - `confusion_attr`: `K×K` confusion on **watermarked-only** subset (no clean row/col)
+- Calibration signals:
+  - `pred_clean_rate`, `p_clean_pos_mean`, `p_clean_neg_mean`
+
+Important interpretation note:
+
+- If detection is not yet strong at `FPR=1%`, then `thr_at_fpr_1pct` becomes very high.
+- That yields `pred_clean_rate` near 1.0, and `confusion` appears dominated by `0/0`.
+- In that case, use `id_acc_pos` and `confusion_attr` to evaluate attribution independent of the detection threshold.
 
 Optional reverb probe:
 
@@ -445,7 +491,9 @@ This is the main “quick smoke” training flow for watermarking.
 
 Inputs:
 
-- a folder of real audio clips (`--source_dir`, defaults to `mini_benchmark_data`)
+- either:
+  - a folder of real audio clips (`--source_dir`, defaults to `mini_benchmark_data`), or
+  - an existing manifest (`--manifest`)
 
 What it does:
 
@@ -453,9 +501,13 @@ What it does:
 2. Creates a synthetic manifest in `--out/manifest.json` by alternating:
    - positive sample (watermarked): assigns `model_id` round-robin in `[0..N_MODELS-1]`
    - negative sample (clean): `model_id = -1`
+   - If `--manifest` is provided, this step is skipped.
 3. Builds models:
    - `encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES))`
    - `decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES))`
+   - Optionally loads weights:
+     - `--load_encoder /path/to/encoder.pt`
+     - `--load_decoder /path/to/decoder.pt`
 4. Runs stage schedule:
    - Stage 1: decoder pretrain (epochs = `epochs_s1 + epochs_s1b`)
    - Stage 2: encoder train (epochs = `epochs_s2`)
@@ -466,6 +518,9 @@ Important notes:
 
 - Many CLI flags remain for dashboard compatibility (legacy), but multiclass mode only uses a subset (epochs, probe cadence, reverb probability, etc.).
 - Probe clips are cached once (center crop) to make probe evaluation stable across epochs.
+- This script is intended to support a **two-phase workflow**:
+  1) detection-first (focus on `detect_weight`, moderate `epochs_s2`)
+  2) ID-finetune (load prior weights, increase `id_weight`, optionally `--freeze_detect_head_in_s3`)
 
 ---
 
@@ -505,9 +560,13 @@ The server:
 
 Charts/metrics are multiclass-aware:
 
-- detection score is `clip_wm_prob = 1 - P(clean)`
-- attribution metrics shown as `attr_acc` / `wm_acc`
-- legacy chart slots are repurposed to show `p_clean_*` and other stability signals
+- detection score comes from the detect head (`clip_wm_prob`)
+- attribution metrics shown as:
+  - `id_acc_pos` (ID head accuracy on positives, independent of detection threshold)
+  - `attr_acc` / `wm_acc` (thresholded “product-style” metrics)
+- confusion matrices:
+  - default view is `confusion_attr` (watermarked-only, K×K)
+  - optional view is full `confusion` (thresholded, (K+1)×(K+1))
 
 ### 8.3 Controller mode (multi-run launcher)
 
@@ -527,6 +586,7 @@ Safety:
 
 - the controller sanitizes pasted commands and only allows known `-m watermark.scripts.<...>` modules.
 - it strips user-provided `--out/--output/--log_metrics` so it can manage paths under its runs directory.
+- it also strips whitespace-only “positional” tokens from pasted commands (prevents a common paste error where `"\n"` becomes an “unrecognized argument”).
 
 ---
 
@@ -571,9 +631,41 @@ Typical run directory contains:
 
 Current watermark score is:
 
-- `clip_wm_prob = 1 - P(clean)`
+- `clip_wm_prob = sigmoid(clip_detect_logit)` (detect head)
 
-If you need independent calibration, you can add a separate detection head, but the current approach is intentionally minimal.
+This is intentionally decoupled from attribution so you can prioritize Goal 1 (detection) without starving Goal 2 (ID).
+
+---
+
+## 12. Recent Runs (Progress Log)
+
+This section captures “known good / known bad” runs observed during iteration on MPS.
+
+### 12.1 Detection-first runs
+
+- `outputs/dashboard_runs/1769406908_b1389f` (1024 clips; detect-heavy weights + reverb probing)
+  - Best `mini_auc_reverb≈0.896` and `tpr@fpr1%_reverb≈0.562` (S1 e4).
+  - Takeaway: Stage 1 can produce a strong detector quickly; later stages can still regress if encoder training is not well balanced.
+- `outputs/dashboard_runs/1769409052_f961e5` (512 clips; detect-first small)
+  - Best `mini_auc_reverb≈0.892` and `tpr@fpr1%_reverb≈0.461` (S1 e4/e6).
+  - Stage 2/3 reduced detection metrics vs the S1 peak.
+  - Takeaway: decoder learns an easy-to-detect pattern, but encoder training can learn a less robust watermark under the quality/budget constraints.
+
+### 12.2 ID-finetune run (loaded from detection-first)
+
+- `outputs/dashboard_runs/1769409407_ee6038` (S3-only finetune; loaded encoder/decoder + manifest)
+  - `id_acc_pos` improved vs chance (best ≈0.293 where chance is 0.125 for 8 IDs),
+    but detection robustness dropped (best `tpr@fpr1%_reverb≈0.262`).
+  - Takeaway: this run is a valid “Goal 2 attempt”, but Goal 1 degraded; next iterations should keep more detection pressure during finetune and/or increase Stage 2 detection-first epochs before ID finetune.
+
+### 12.3 Known failure mode: thresholded confusion collapses to 0/0
+
+When `thr_at_fpr_1pct` becomes extremely high (because the detector is weak), almost everything is predicted clean:
+
+- `pred_clean_rate → 1.0`
+- full `confusion` dominated by `0/0`
+
+In this regime, prefer `confusion_attr` and `id_acc_pos` to judge attribution signal.
 
 ---
 
@@ -587,4 +679,3 @@ Compatibility shims exist:
 - `watermark/scripts/quick_smoke_train.py` is a stub that points to the new smoke run and the legacy module.
 
 If you are reading older docs or logs that mention “CRC”, “payload bits”, or “preamble bits”, those refer to the legacy path.
-

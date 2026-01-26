@@ -57,6 +57,16 @@ DECODER_N_FFT = 512
 DECODER_N_MELS = 80
 
 # =============================================================================
+# Localization (Loc-Gated) Parameters
+# =============================================================================
+# Loc head outputs a time-axis watermarkness score inside each 1s window.
+# Pooling uses Top-M mean to produce a robust window watermark score.
+LOC_ENABLED = True
+LOC_TOP_M = 8
+LOC_EPS = 1e-6
+LOC_CONSISTENCY_WEIGHT = 0.1  # optional: keep detect head aligned with loc pooling
+
+# =============================================================================
 # Device Detection
 # =============================================================================
 def get_device() -> torch.device:

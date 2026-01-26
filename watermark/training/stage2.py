@@ -5,8 +5,9 @@ Stage 2 (default): train encoder only (decoder frozen).
 Stage 3 (finetune_mode=True): finetune encoder + decoder together.
 
 Loss terms:
-- Attribution CE (window + clip)
-- (optional, finetune only) Clean CE regularization to avoid collapse
+- Detect BCE (window + clip)
+- ID CE (window + clip) on positives only
+- (optional, finetune only) Clean detect regularization to avoid collapse
 - Quality (multi-resolution STFT)
 - Energy budget
 """
@@ -103,7 +104,10 @@ def train_stage2(
     on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
     finetune_mode: bool = False,
-    class_weights: Optional[torch.Tensor] = None,
+    class_weights: Optional[torch.Tensor] = None,  # optional ID class weights (K,)
+    detect_weight: float = 1.0,
+    id_weight: float = 2.0,
+    freeze_detect_head: bool = False,
     # Legacy args (kept for call-site compatibility; unused in multiclass)
     msg_weight: float = 1.0,
     model_ce_weight: float = 1.0,
@@ -119,26 +123,34 @@ def train_stage2(
     Notes:
     - Multiclass labels come from `batch["y_class"]` where 0 is clean.
     - Encoder is only updated from watermarked (y_class != 0) samples.
-    - In `finetune_mode`, a clean CE loss is added to keep the decoder calibrated.
+    - In `finetune_mode`, a clean detect loss is added to keep the decoder calibrated.
     """
     _ = (msg_weight, model_ce_weight, version_ce_weight, pair_ce_weight, unknown_ce_weight, stage2_payload_on_all)
 
     stage_name = "s3_finetune" if finetune_mode else "s2_encoder"
     print(f"Starting {stage_name} for {epochs} epochs")
-    w = class_weights.to(device) if class_weights is not None else None
-    if w is not None:
-        print(f"Using class_weights: shape={tuple(w.shape)}")
+    w_id = None
+    if class_weights is not None:
+        w_id = class_weights.to(device)
+        print(f"Using class_weights: shape={tuple(w_id.shape)}")
 
     aug = DifferentiableAugmenter(device, reverb_prob=reverb_prob)
     stft_loss = CachedSTFTLoss().to(device)
     budget_loss = EnergyBudgetLoss(target_db=-30.0, limit_type="hard").to(device)
 
-    loss_wrapper = UncertaintyLossWrapper(num_losses=(4 if finetune_mode else 3)).to(device)
+    loss_wrapper = UncertaintyLossWrapper(num_losses=(5 if finetune_mode else 4)).to(device)
 
     if finetune_mode:
         decoder.train()
         for p in decoder.parameters():
             p.requires_grad = True
+        if freeze_detect_head:
+            # Best-effort: freeze detect head to prevent the detector from drifting
+            # while improving attribution. Works for SlidingWindowDecoder wrappers.
+            base = getattr(decoder, "decoder", None)
+            if base is not None and hasattr(base, "head_detect"):
+                for p in base.head_detect.parameters():
+                    p.requires_grad = False
     else:
         decoder.eval()
         for p in decoder.parameters():
@@ -153,9 +165,9 @@ def train_stage2(
 
     for epoch in range(int(epochs)):
         epoch_loss = 0.0
-        epoch_stats: dict[str, float] = {"loss_attr": 0.0, "loss_qual": 0.0, "loss_budget": 0.0}
+        epoch_stats: dict[str, float] = {"loss_detect": 0.0, "loss_id": 0.0, "loss_qual": 0.0, "loss_budget": 0.0}
         if finetune_mode:
-            epoch_stats["loss_clean"] = 0.0
+            epoch_stats["loss_clean_detect"] = 0.0
 
         batch_count = 0
         try:
@@ -173,53 +185,96 @@ def train_stage2(
 
             audio_pos = audio[pos]
             y_pos = y_class[pos]
+            y_id_pos = (y_pos - 1).to(dtype=torch.long)
 
             wm_audio_pos = encoder(audio_pos, y_pos)
             aug_wm = aug(wm_audio_pos.squeeze(1)).unsqueeze(1)
 
             out_pos = decoder(aug_wm)
-            win_logits = out_pos["all_window_class_logits"]  # (N, n_win, C)
-            n_pos, n_win, _ = win_logits.shape
-            y_win = y_pos.view(-1, 1).expand(-1, n_win).reshape(-1)
+            # Prefer localization pooled watermarkness for detect training.
+            win_wm_prob = out_pos.get("all_window_wm_prob_loc")
+            if win_wm_prob is None:
+                raise KeyError("decoder output missing all_window_wm_prob_loc (loc-gated decoder expected)")
+            win_id_logits = out_pos["all_window_id_logits"]  # (N, n_win, K)
+            n_pos, n_win = win_wm_prob.shape
 
-            loss_win = F.cross_entropy(win_logits.reshape(n_pos * n_win, -1), y_win, weight=w)
-            loss_clip = F.cross_entropy(out_pos["clip_class_logits"], y_pos, weight=w)
-            loss_attr = loss_win + 0.5 * loss_clip
+            # Detect loss on positives (target=1)
+            y_det_win_pos = torch.ones((n_pos, n_win), device=device, dtype=torch.float32)
+            loss_det_win = F.binary_cross_entropy(win_wm_prob.clamp(1e-6, 1 - 1e-6), y_det_win_pos)
+            y_det_clip_pos = torch.ones((n_pos,), device=device, dtype=torch.float32)
+            clip_wm_prob = out_pos.get("clip_wm_prob")
+            if clip_wm_prob is None:
+                raise KeyError("decoder output missing clip_wm_prob")
+            loss_det_clip = F.binary_cross_entropy(clip_wm_prob.clamp(1e-6, 1 - 1e-6), y_det_clip_pos)
+            loss_detect = loss_det_win + 0.5 * loss_det_clip
 
-            loss_clean = None
+            # ID loss on positives
+            w_use = None
+            if w_id is not None:
+                if int(w_id.numel()) == int(win_id_logits.shape[-1]):
+                    w_use = w_id
+                elif int(w_id.numel()) == int(win_id_logits.shape[-1] + 1):
+                    w_use = w_id[1:]
+            y_id_win = y_id_pos.view(-1, 1).expand(-1, n_win).reshape(-1)
+            loss_id_win = F.cross_entropy(win_id_logits.reshape(n_pos * n_win, -1), y_id_win, weight=w_use)
+            loss_id_clip = F.cross_entropy(out_pos["clip_id_logits"], y_id_pos, weight=w_use)
+            loss_id = loss_id_win + 0.5 * loss_id_clip
+
+            loss_clean_detect = None
             if finetune_mode and float(neg_weight) > 0:
                 neg = (y_class == 0)
                 if neg.any():
                     audio_neg = audio[neg]
-                    y_neg = y_class[neg]  # zeros
                     aug_clean = aug(audio_neg.squeeze(1)).unsqueeze(1)
                     out_neg = decoder(aug_clean)
-                    win_logits_n = out_neg["all_window_class_logits"]
-                    n_neg, n_win_n, _ = win_logits_n.shape
-                    y_win_n = y_neg.view(-1, 1).expand(-1, n_win_n).reshape(-1)
-                    loss_win_n = F.cross_entropy(win_logits_n.reshape(n_neg * n_win_n, -1), y_win_n, weight=w)
-                    loss_clip_n = F.cross_entropy(out_neg["clip_class_logits"], y_neg, weight=w)
-                    loss_clean = (loss_win_n + 0.5 * loss_clip_n) * float(neg_weight)
+                    win_wm_prob_n = out_neg.get("all_window_wm_prob_loc")
+                    if win_wm_prob_n is None:
+                        raise KeyError("decoder output missing all_window_wm_prob_loc on clean batch")
+                    n_neg, n_win_n = win_wm_prob_n.shape
+                    y_det_win_neg = torch.zeros((n_neg, n_win_n), device=device, dtype=torch.float32)
+                    loss_det_win_n = F.binary_cross_entropy(win_wm_prob_n.clamp(1e-6, 1 - 1e-6), y_det_win_neg)
+                    y_det_clip_neg = torch.zeros((n_neg,), device=device, dtype=torch.float32)
+                    clip_wm_prob_n = out_neg.get("clip_wm_prob")
+                    if clip_wm_prob_n is None:
+                        raise KeyError("decoder output missing clip_wm_prob on clean batch")
+                    loss_det_clip_n = F.binary_cross_entropy(clip_wm_prob_n.clamp(1e-6, 1 - 1e-6), y_det_clip_neg)
+                    loss_clean_detect = (loss_det_win_n + 0.5 * loss_det_clip_n) * float(neg_weight)
                 else:
-                    loss_clean = torch.tensor(0.0, device=device)
+                    loss_clean_detect = torch.tensor(0.0, device=device)
 
             loss_qual = stft_loss(audio_pos.squeeze(1), wm_audio_pos.squeeze(1))
             loss_budget = budget_loss(audio_pos, wm_audio_pos)
 
             if finetune_mode:
-                assert loss_clean is not None
-                loss = loss_wrapper([loss_attr, loss_clean, loss_qual, loss_budget])
+                assert loss_clean_detect is not None
+                loss = loss_wrapper(
+                    [
+                        float(detect_weight) * loss_detect,
+                        float(id_weight) * loss_id,
+                        loss_clean_detect,
+                        loss_qual,
+                        loss_budget,
+                    ]
+                )
             else:
-                loss = loss_wrapper([loss_attr, loss_qual, loss_budget])
+                loss = loss_wrapper(
+                    [
+                        float(detect_weight) * loss_detect,
+                        float(id_weight) * loss_id,
+                        loss_qual,
+                        loss_budget,
+                    ]
+                )
 
             opt.zero_grad()
             loss.backward()
             opt.step()
 
             epoch_loss += float(loss.item())
-            epoch_stats["loss_attr"] += float(loss_attr.item())
-            if finetune_mode and loss_clean is not None:
-                epoch_stats["loss_clean"] += float(loss_clean.item())
+            epoch_stats["loss_detect"] += float(loss_detect.item())
+            epoch_stats["loss_id"] += float(loss_id.item())
+            if finetune_mode and loss_clean_detect is not None:
+                epoch_stats["loss_clean_detect"] += float(loss_clean_detect.item())
             epoch_stats["loss_qual"] += float(loss_qual.item())
             epoch_stats["loss_budget"] += float(loss_budget.item())
             batch_count += 1
@@ -233,8 +288,9 @@ def train_stage2(
                         "batch": int(i),
                         "n_batches": n_batches,
                         "loss": float(loss.item()),
-                        "loss_attr": float(loss_attr.item()),
-                        "loss_clean": float(loss_clean.item()) if (finetune_mode and loss_clean is not None) else None,
+                        "loss_detect": float(loss_detect.item()),
+                        "loss_id": float(loss_id.item()),
+                        "loss_clean_detect": float(loss_clean_detect.item()) if (finetune_mode and loss_clean_detect is not None) else None,
                         "loss_qual": float(loss_qual.item()),
                         "loss_budget": float(loss_budget.item()),
                         "sigmas": loss_wrapper.log_vars.detach().exp().cpu().numpy().tolist(),
@@ -262,4 +318,3 @@ def train_stage2(
                     "log_vars": loss_wrapper.log_vars.detach().cpu().numpy().tolist(),
                 }
             )
-

@@ -1,5 +1,5 @@
 """
-Unit tests for WatermarkDecoder (multiclass attribution) and related classes.
+Unit tests for WatermarkDecoder (two-head: detect + id) and related classes.
 """
 
 import torch
@@ -14,6 +14,10 @@ class TestWatermarkDecoder:
         audio = torch.randn(4, 16000)
         outputs = decoder(audio)
 
+        assert outputs["detect_logit"].shape == (4,)
+        assert outputs["detect_prob"].shape == (4,)
+        assert outputs["id_logits"].shape == (4, N_CLASSES - 1)
+        assert outputs["id_probs"].shape == (4, N_CLASSES - 1)
         assert outputs["class_logits"].shape == (4, N_CLASSES)
         assert outputs["class_probs"].shape == (4, N_CLASSES)
         assert outputs["wm_prob"].shape == (4,)
@@ -33,13 +37,16 @@ class TestSlidingWindowDecoder:
         outputs = decoder(audio)
 
         assert outputs["n_windows"] == 5
-        assert outputs["all_window_class_logits"].shape == (2, 5, N_CLASSES)
-        assert outputs["all_window_class_probs"].shape == (2, 5, N_CLASSES)
-        assert outputs["all_window_wm_probs"].shape == (2, 5)
+        assert outputs["all_window_detect_logits"].shape == (2, 5)
+        assert outputs["all_window_detect_probs"].shape == (2, 5)
+        assert outputs["all_window_id_logits"].shape == (2, 5, N_CLASSES - 1)
 
         assert outputs["clip_class_logits"].shape == (2, N_CLASSES)
         assert outputs["clip_class_probs"].shape == (2, N_CLASSES)
+        assert outputs["clip_id_logits"].shape == (2, N_CLASSES - 1)
+        assert outputs["clip_id_probs"].shape == (2, N_CLASSES - 1)
         assert outputs["clip_wm_prob"].shape == (2,)
+        assert outputs["clip_detect_logit"].shape == (2,)
 
     def test_forward_short_audio(self):
         base = WatermarkDecoder(num_classes=N_CLASSES)
@@ -47,28 +54,27 @@ class TestSlidingWindowDecoder:
         audio = torch.randn(2, 8000)
         outputs = decoder(audio)
         assert outputs["n_windows"] == 1
-        assert outputs["all_window_wm_probs"].shape == (2, 1)
+        assert outputs["all_window_detect_probs"].shape == (2, 1)
 
 
 class TestAttributionDecisionRule:
     def test_decision_positive(self):
         rule = AttributionDecisionRule(wm_threshold=0.8)
-        # Pretend the model predicts class 3 with high confidence and low clean prob.
-        logits = torch.zeros(1, N_CLASSES)
-        logits[0, 3] = 5.0
-        outputs = {"clip_wm_prob": torch.tensor(0.95), "clip_class_logits": logits}
+        # Pretend the model predicts id=2 (class=3) with high confidence.
+        id_logits = torch.zeros(1, N_CLASSES - 1)
+        id_logits[0, 2] = 5.0
+        outputs = {"clip_wm_prob": torch.tensor(0.95), "clip_id_logits": id_logits}
         d = rule.decide(outputs)
         assert d["positive"] is True
         assert d["pred_class"] == 3
-        assert d["pred_model_id"] == 2  # class-1
+        assert d["pred_model_id"] == 2
 
     def test_decision_negative(self):
         rule = AttributionDecisionRule(wm_threshold=0.8)
-        logits = torch.zeros(1, N_CLASSES)
-        logits[0, int(CLASS_CLEAN)] = 5.0
-        outputs = {"clip_wm_prob": torch.tensor(0.1), "clip_class_logits": logits}
+        id_logits = torch.zeros(1, N_CLASSES - 1)
+        id_logits[0, 0] = 5.0
+        outputs = {"clip_wm_prob": torch.tensor(0.1), "clip_id_logits": id_logits}
         d = rule.decide(outputs)
         assert d["positive"] is False
         assert d["pred_class"] == int(CLASS_CLEAN)
         assert d["pred_model_id"] is None
-

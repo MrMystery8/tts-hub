@@ -2,7 +2,7 @@
 Watermark Decoder Module
 
 Contains:
-- WatermarkDecoder: Pure-torch mel spectrogram (MPS-safe) multiclass classifier
+- WatermarkDecoder: Pure-torch mel spectrogram (MPS-safe) two-head classifier
 - SlidingWindowDecoder: Sliding-window + top-k aggregation wrapper
 - AttributionDecisionRule: Simple clip-level decision helper
 """
@@ -16,6 +16,8 @@ from watermark.config import (
     DECODER_N_FFT,
     DECODER_N_MELS,
     N_CLASSES,
+    LOC_EPS,
+    LOC_TOP_M,
     SAMPLE_RATE,
     WINDOW_SAMPLES,
     HOP_RATIO,
@@ -25,11 +27,17 @@ from watermark.config import (
 
 class WatermarkDecoder(nn.Module):
     """
-    Decoder with pure-torch mel frontend (MPS-safe) and a single multiclass head.
+    Decoder with pure-torch mel frontend (MPS-safe) and a two-head output:
 
-    Classes:
-      - 0: clean (no watermark)
-      - 1..K: attribution classes (e.g., model IDs)
+    - `detect`: binary watermark presence
+    - `id`: K-way attribution over watermarked samples (model ID)
+
+    The combined (K+1) distribution is derived as:
+      P(clean) = 1 - P(wm)
+      P(class=i+1) = P(wm) * P(id=i)
+
+    This avoids early training collapse where the single softmax head predicts `clean`
+    for everything (dominant class) and starves the attribution signal.
     """
     
     def __init__(
@@ -45,33 +53,53 @@ class WatermarkDecoder(nn.Module):
         self.n_mels = DECODER_N_MELS
         self.sample_rate = sample_rate
         self.num_classes = int(num_classes)
+        if self.num_classes < 2:
+            raise ValueError(f"num_classes must be >= 2, got {self.num_classes}")
+        self.num_ids = self.num_classes - 1
         
         # Register BOTH as buffers
         self.register_buffer('mel_fb', self._create_mel_filterbank())
         self.register_buffer('stft_window', torch.hann_window(n_fft))
         
-        # Backbone (Standard CNN)
+        # Backbone: preserve time axis so we can localize watermarkness per-frame.
+        # Pool only along frequency to keep temporal resolution.
         self.backbone = nn.Sequential(
             nn.Conv2d(1, 32, 3, padding=1),
             nn.GroupNorm(4, 32),
             nn.ReLU(),
-            nn.MaxPool2d(2),
-            
+            nn.MaxPool2d((2, 1)),
+
             nn.Conv2d(32, 64, 3, padding=1),
             nn.GroupNorm(8, 64),
             nn.ReLU(),
-            nn.MaxPool2d(2),
-            
+            nn.MaxPool2d((2, 1)),
+
             nn.Conv2d(64, 128, 3, padding=1),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.MaxPool2d((2, 1)),
         )
+
+        feat_ch = 128
         
-        feat_dim = 128 * 4 * 4
-        
-        # Single multiclass attribution head
-        self.head_class = nn.Linear(feat_dim, self.num_classes)
+        # Two-head outputs:
+        # - detect: watermark present vs clean
+        # - id: model attribution among watermarked samples only
+        self.head_loc = nn.Conv1d(feat_ch, 1, kernel_size=1)
+        self.head_detect = nn.Linear(feat_ch, 1)
+        self.head_id = nn.Linear(feat_ch, self.num_ids)
+
+    @staticmethod
+    def _topm_mean(probs: torch.Tensor, *, m: int) -> torch.Tensor:
+        """
+        Top-M mean pooling over the last dimension.
+        probs: (B, T)
+        """
+        if probs.dim() != 2:
+            raise ValueError(f"expected probs (B,T), got shape={tuple(probs.shape)}")
+        k = min(max(1, int(m)), int(probs.shape[-1]))
+        top, _ = torch.topk(probs, k=k, dim=-1)
+        return top.mean(dim=-1)
     
     def _create_mel_filterbank(self) -> torch.Tensor:
         """Create mel filterbank matrix (pure numpy, MPS-safe)."""
@@ -109,7 +137,7 @@ class WatermarkDecoder(nn.Module):
     
     def forward(self, audio: torch.Tensor) -> dict:
         """
-        Predict class logits for audio.
+        Predict detect + id logits for audio.
         """
         # Adapter for Canonical (B, 1, T) -> (B, T)
         if audio.dim() == 3 and audio.shape[1] == 1:
@@ -123,16 +151,49 @@ class WatermarkDecoder(nn.Module):
         if pad_amt > 0:
             mel = F.pad(mel, (0, pad_amt))
             
-        features = self.backbone(mel).view(mel.size(0), -1)
+        # Backbone feature map: (B, C, F, T)
+        feat2d = self.backbone(mel)
+        # Collapse frequency axis, preserve time: (B, C, T)
+        feat = feat2d.mean(dim=2)
 
-        class_logits = self.head_class(features)
-        class_probs = torch.softmax(class_logits, dim=-1)
-        wm_prob = 1.0 - class_probs[:, int(CLASS_CLEAN)]
+        loc_logits = self.head_loc(feat).squeeze(1)  # (B, T)
+        loc_probs = torch.sigmoid(loc_logits)  # (B, T)
+
+        wm_prob_loc = self._topm_mean(loc_probs, m=int(LOC_TOP_M))  # (B,)
+
+        # Loc-gated pooling for detect/id heads
+        w = loc_probs
+        w_norm = w / (w.sum(dim=-1, keepdim=True) + float(LOC_EPS))
+        feat_pool = (feat * w_norm.unsqueeze(1)).sum(dim=-1)  # (B, C)
+
+        detect_logit = self.head_detect(feat_pool).squeeze(-1)  # (B,)
+        detect_prob = torch.sigmoid(detect_logit)  # (B,)
+
+        id_logits = self.head_id(feat_pool)  # (B, K)
+        id_probs = torch.softmax(id_logits, dim=-1)  # (B, K)
+
+        # Use localization pooled watermarkness as the primary score for detection metrics/aggregation.
+        p_clean = 1.0 - wm_prob_loc
+        p_ids = wm_prob_loc.unsqueeze(-1) * id_probs  # (B, K)
+        class_probs = torch.cat([p_clean.unsqueeze(-1), p_ids], dim=-1)  # (B, K+1)
+        class_logits = torch.log(class_probs.clamp(min=1e-8))
 
         return {
-            "class_logits": class_logits,      # (B, C)
-            "class_probs": class_probs,        # (B, C)
-            "wm_prob": wm_prob,                # (B,)
+            # Primary heads
+            "detect_logit": detect_logit,  # (B,)
+            "detect_prob": detect_prob,  # (B,)
+            "loc_logits": loc_logits,  # (B, T)
+            "loc_probs": loc_probs,  # (B, T)
+            "wm_prob_loc": wm_prob_loc,  # (B,)
+            "id_logits": id_logits,  # (B, K)
+            "id_probs": id_probs,  # (B, K)
+
+            # Derived combined distribution (compat)
+            "class_logits": class_logits,  # (B, K+1) (derived log-probs)
+            "class_probs": class_probs,  # (B, K+1)
+
+            # Alias used throughout the codebase for "watermarkedness"
+            "wm_prob": wm_prob_loc,  # (B,)
         }
 
 
@@ -156,13 +217,15 @@ class SlidingWindowDecoder(nn.Module):
     
     def forward(self, audio: torch.Tensor) -> dict:
         """
-        Sliding-window inference with top-k aggregation by watermark probability.
+        Sliding-window inference with top-k aggregation by detect probability.
 
         Returns:
           - `clip_class_logits`: (B, C)
           - `clip_class_probs`: (B, C)
           - `clip_wm_prob`: (B,) where wm_prob = 1 - P(clean)
           - `clip_detect_prob`: alias for `clip_wm_prob` (compat)
+          - `clip_id_logits`: (B, K)
+          - `clip_id_probs`: (B, K)
           - per-window logits/probs and indices
         """
         if audio.dim() == 3 and audio.shape[1] == 1:
@@ -181,30 +244,57 @@ class SlidingWindowDecoder(nn.Module):
         outputs = self.decoder(flat)
         
         # Reshape to (B, n_win, ...)
-        class_logits = outputs["class_logits"].reshape(B, n_win, -1)  # (B, n_win, C)
-        class_probs = torch.softmax(class_logits, dim=-1)
-        wm_probs = 1.0 - class_probs[:, :, int(CLASS_CLEAN)]  # (B, n_win)
+        detect_logits = outputs["detect_logit"].reshape(B, n_win)  # (B, n_win)
+        detect_probs = torch.sigmoid(detect_logits)  # (B, n_win)
+
+        id_logits = outputs["id_logits"].reshape(B, n_win, -1)  # (B, n_win, K)
+        loc_logits = outputs["loc_logits"]  # (B*n_win, Tloc)
+        t_loc = int(loc_logits.shape[-1])
+        all_window_loc_logits = loc_logits.reshape(B, n_win, t_loc)
+        wm_prob_loc = outputs["wm_prob_loc"].reshape(B, n_win)  # (B, n_win)
 
         # Top-k aggregation (by watermark probability)
         k = min(self.top_k, n_win)
-        top_vals, top_idx = torch.topk(wm_probs, k, dim=1)
-        clip_wm_prob = top_vals.mean(dim=1)
+        _top_probs, top_idx = torch.topk(wm_prob_loc, k, dim=1)
 
-        # Gather top-k class logits and average
-        n_classes = class_logits.shape[-1]
-        top_cls_idx = top_idx.unsqueeze(-1).expand(-1, -1, n_classes)
-        top_cls_logits = torch.gather(class_logits, 1, top_cls_idx)
-        clip_class_logits = top_cls_logits.mean(dim=1)
-        clip_class_probs = torch.softmax(clip_class_logits, dim=-1)
+        # Use mean of top-k detect logits as the clip-level detect logit (for detect-head BCE losses).
+        top_det_logits = torch.gather(detect_logits, 1, top_idx)  # (B, k)
+        clip_detect_logit = top_det_logits.mean(dim=1)  # (B,)
+        clip_detect_prob = torch.sigmoid(clip_detect_logit)  # (B,)
+
+        # Gather top-k ID logits and average
+        n_ids = id_logits.shape[-1]
+        top_id_idx = top_idx.unsqueeze(-1).expand(-1, -1, n_ids)
+        top_id_logits = torch.gather(id_logits, 1, top_id_idx)
+        clip_id_logits = top_id_logits.mean(dim=1)  # (B, K)
+        clip_id_probs = torch.softmax(clip_id_logits, dim=-1)
+
+        # Clip watermark probability from localization pooling.
+        top_wm_probs = torch.gather(wm_prob_loc, 1, top_idx)  # (B, k)
+        clip_wm_prob = top_wm_probs.mean(dim=1)  # (B,)
+
+        # Derived combined probs/logits (compat)
+        p_clean = 1.0 - clip_wm_prob
+        p_ids = clip_wm_prob.unsqueeze(-1) * clip_id_probs
+        clip_class_probs = torch.cat([p_clean.unsqueeze(-1), p_ids], dim=-1)
+        clip_class_logits = torch.log(clip_class_probs.clamp(min=1e-8))
         
         return {
             "clip_class_logits": clip_class_logits,
             "clip_class_probs": clip_class_probs,
+            "clip_id_logits": clip_id_logits,
+            "clip_id_probs": clip_id_probs,
             "clip_wm_prob": clip_wm_prob,
+            "clip_wm_prob_loc": clip_wm_prob,
             "clip_detect_prob": clip_wm_prob,  # compat alias
-            "all_window_class_logits": class_logits,
-            "all_window_class_probs": class_probs,
-            "all_window_wm_probs": wm_probs,
+            "clip_detect_logit": clip_detect_logit,
+
+            # Window-level outputs (for training)
+            "all_window_detect_logits": detect_logits,  # (B, n_win)
+            "all_window_detect_probs": detect_probs,  # (B, n_win)
+            "all_window_loc_logits": all_window_loc_logits,  # (B, n_win, Tloc)
+            "all_window_wm_prob_loc": wm_prob_loc,  # (B, n_win)
+            "all_window_id_logits": id_logits,  # (B, n_win, K)
             "n_windows": n_win,
             "top_k_idx": top_idx,
         }
@@ -231,19 +321,34 @@ class AttributionDecisionRule:
         else:
             clip_wm_prob = float(clip_wm_prob)
 
-        probs = outputs.get("clip_class_probs")
-        logits = outputs.get("clip_class_logits")
-        if probs is None and logits is not None:
-            probs = torch.softmax(logits, dim=-1)
-        if probs is None:
-            raise ValueError("outputs must include clip_class_probs or clip_class_logits")
+        id_probs = outputs.get("clip_id_probs")
+        id_logits = outputs.get("clip_id_logits")
+        if id_probs is None and id_logits is not None:
+            id_probs = torch.softmax(id_logits, dim=-1)
+        if id_probs is None:
+            # fall back to derived class probs if needed
+            class_probs = outputs.get("clip_class_probs")
+            if class_probs is None:
+                raise ValueError("outputs must include clip_id_probs/clip_id_logits or clip_class_probs")
+            if class_probs.dim() == 2:
+                class_probs = class_probs[0]
+            pred_class = int(torch.argmax(class_probs).item())
+            positive = clip_wm_prob >= self.wm_threshold and pred_class != int(CLASS_CLEAN)
+            reason = "wm_low" if not positive else "wm_high"
+            return {
+                "positive": bool(positive),
+                "reason": reason,
+                "clip_wm_prob": float(clip_wm_prob),
+                "pred_class": int(pred_class),
+                "pred_model_id": int(pred_class - 1) if pred_class != int(CLASS_CLEAN) else None,
+            }
 
-        if probs.dim() == 2:
-            # (B, C) -> single clip expected; take first item
-            probs = probs[0]
+        if id_probs.dim() == 2:
+            id_probs = id_probs[0]
 
-        pred_class = int(torch.argmax(probs).item())
-        positive = clip_wm_prob >= self.wm_threshold and pred_class != int(CLASS_CLEAN)
+        pred_id = int(torch.argmax(id_probs).item())
+        pred_class = int(CLASS_CLEAN) if clip_wm_prob < self.wm_threshold else int(pred_id + 1)
+        positive = clip_wm_prob >= self.wm_threshold
         reason = "wm_low" if not positive else "wm_high"
 
         return {
@@ -251,5 +356,5 @@ class AttributionDecisionRule:
             "reason": reason,
             "clip_wm_prob": float(clip_wm_prob),
             "pred_class": int(pred_class),
-            "pred_model_id": int(pred_class - 1) if pred_class != int(CLASS_CLEAN) else None,
+            "pred_model_id": int(pred_id) if pred_class != int(CLASS_CLEAN) else None,
         }

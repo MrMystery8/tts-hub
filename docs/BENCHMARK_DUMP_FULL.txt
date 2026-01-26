@@ -1,0 +1,67 @@
+# Comprehensive Benchmark Dump & Problem Analysis
+Status: CRITICAL FAILURE (Tradeoff Extremes)
+Date: 2026-01-25
+
+## The Problem: "The Binary Trap"
+We are stuck between two catastrophic failure modes. The model is either **Destroying Audio** to hide data OR **Ignoring Data** to save audio. There is no middle ground currently visible.
+
+| Metric | Exp F (Zero Aux) | Exp G (Aux 1.0) | Target |
+| :--- | :--- | :--- | :--- |
+| **Detection AUC** | **91%** (Failed) | **99.6%** (Perfect) | >95% |
+| **Model ID Acc** | **44%** (Learning) | **14.8%** (Chance) | >75% |
+| **Mode** | **Loud Watermark** | **Silent Watermark** | **Robust Watermark** |
+| **Verdict** | **Cheating** | **Giving Up** | **Failure** |
+
+---
+
+## Run History
+
+### 1. Sanity Tests (64 Clips)
+*   **Sanity 1-4**: Failed (1-bit / 25% Flatline).
+*   **Sanity 5**: **Success**.
+    *   **Params**: `epochs_s1b=10` (Safe Unfreeze), `aux_weight=0.0`.
+    *   **Result**: 56% Accuracy (Overfitting).
+    *   **Note**: Worked because dataset was tiny (64 clips). Model could "cheat" effectively.
+
+### 2. Exp F: Mid-Scale (500 Clips) - "The Cheat"
+*   **Command**:
+    ```bash
+    python -m watermark.scripts.quick_voice_smoke_train \
+      --num_clips 500 \
+      --epochs_s1b 10 \
+      --aux_weight 0.0 \
+      --det_ramp 5
+    ```
+*   **Outcome**: **Mode Collapse (Loud)**.
+*   **Data**:
+    *   Model ID climbed to 44%.
+    *   **BUT**: Detection AUC crashed to 91% (Target 95%).
+    *   Version Accuracy dropped.
+*   **Analysis**: Without `aux_weight`, the encoder realized it could hide identity by just adding noise. It sacrificed audio quality for checking the box on identity.
+
+### 3. Exp G: Mid-Scale Correction (500 Clips) - "The Ghost"
+*   **Current Run (Epoch 18)**.
+*   **Command**:
+    ```bash
+    python -m watermark.scripts.quick_voice_smoke_train \
+      --num_clips 500 \
+      --epochs_s1b 10 \
+      --aux_weight 1.0 \
+      --det_ramp 5
+    ```
+*   **Outcome**: **Mode Collapse (Silent)**.
+*   **Data**:
+    *   Detection AUC is **99.6%** (Encoder is doing nothing).
+    *   Model ID Accuracy is **14.8%** (Random Chance is 12.5%).
+*   **Analysis**: `aux_weight=1.0` is too distinct. The penalty for changing the audio is so high the encoder chooses to do **nothing** rather than risk a penalty. It effectively turned itself off.
+
+---
+
+## Conclusion
+The architecture is **brittle**.
+We do not have a working configuration for 500 clips.
+*   Without Aux: It breaks the audio.
+*   With Aux: It learns nothing.
+
+**Next Step Recommendation**:
+We need a **Logarithmic Sweep** of `aux_weight` (e.g., 0.1, 0.01) to find the "Goldilocks Zone", OR we need to accept that the current encoder capacity is insufficient for 500 clips without a stronger carrier signal.

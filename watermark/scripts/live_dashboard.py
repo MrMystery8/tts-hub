@@ -292,8 +292,8 @@ def _make_single_log_app(log_path: Path):
         </div>
 
         <div class="card" style="grid-column: span 12;">
-          <h2>P(clean) Calibration</h2>
-          <div class="tiny">Goal: P(clean) high on clean clips, low on watermarked clips.</div>
+          <h2>Detection Calibration (Localization Pooling)</h2>
+          <div class="tiny">Goal: localization-pooled watermark score high on watermarked clips, low on clean clips.</div>
           <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
         </div>
 
@@ -326,7 +326,16 @@ def _make_single_log_app(log_path: Path):
 
         <div class="card" style="grid-column: span 12;">
           <h2>Attribution Confusion Matrix (Probe)</h2>
-          <div class="tiny">Diagonal dominance means correct attribution; class 0 is clean.</div>
+          <div class="tiny">Diagonal dominance means correct attribution.</div>
+          <div class="row" style="margin-top:8px; gap:10px; align-items:center;">
+            <div class="pill">
+              Matrix
+              <select id="matrixMode">
+                <option value="attr" selected>Attribution-only (K×K, watermarked-only)</option>
+                <option value="full">Thresholded full (K+1×K+1, includes clean)</option>
+              </select>
+            </div>
+          </div>
           <div class="split">
             <div>
               <h3>Classes</h3>
@@ -375,8 +384,11 @@ def _make_single_log_app(log_path: Path):
         wm_acc: 0.70,
         attr_acc_reverb: 0.60,
         wm_acc_reverb: 0.60,
-        p_clean_pos_mean: 0.30,
-        p_clean_neg_mean: 0.90,
+        id_acc_pos: 0.40,
+        wm_prob_loc_pos_mean: 0.70,
+        wm_prob_loc_neg_mean: 0.30,
+        p_clean_pos_mean: 0.30, // legacy calibration signal (derived)
+        p_clean_neg_mean: 0.90, // legacy calibration signal (derived)
         loss_budget: 0.05,
       };
 
@@ -389,6 +401,9 @@ def _make_single_log_app(log_path: Path):
         wm_acc: "gte",
         attr_acc_reverb: "gte",
         wm_acc_reverb: "gte",
+        id_acc_pos: "gte",
+        wm_prob_loc_pos_mean: "gte",
+        wm_prob_loc_neg_mean: "lte",
         p_clean_pos_mean: "lte",
         p_clean_neg_mean: "gte",
         loss_budget: "lte",
@@ -403,8 +418,11 @@ def _make_single_log_app(log_path: Path):
         wm_acc: "Accuracy on watermarked-only probe items (model attribution).",
         attr_acc_reverb: "Overall accuracy under reverb attack.",
         wm_acc_reverb: "Watermarked-only attribution under reverb attack.",
-        p_clean_pos_mean: "Mean P(clean) on watermarked probe items. Lower is better (clean class suppressed).",
-        p_clean_neg_mean: "Mean P(clean) on clean probe items. Higher is better (clean class dominant).",
+        id_acc_pos: "ID-head accuracy on watermarked probe items (ignores detection threshold).",
+        wm_prob_loc_pos_mean: "Mean localization-pooled watermark score on watermarked probe items. Higher is better.",
+        wm_prob_loc_neg_mean: "Mean localization-pooled watermark score on clean probe items. Lower is better.",
+        p_clean_pos_mean: "Mean P(clean) on watermarked probe items (derived from class_probs). Lower is better.",
+        p_clean_neg_mean: "Mean P(clean) on clean probe items (derived from class_probs). Higher is better.",
         loss_budget: "Penalty for exceeding energy budget (-30dB). Should be 0.0.",
       };
 
@@ -477,6 +495,22 @@ def _make_single_log_app(log_path: Path):
       }
 
       let charts = {};
+      const MATRIX_MODE_KEY = "wmDash:matrixMode";
+
+      function initMatrixMode() {
+        const el = document.getElementById("matrixMode");
+        if (!el || el._wmInit) return;
+        el._wmInit = true;
+        const saved = localStorage.getItem(MATRIX_MODE_KEY);
+        if (saved) el.value = saved;
+        el.addEventListener("change", () => localStorage.setItem(MATRIX_MODE_KEY, el.value));
+      }
+
+      function getMatrixMode() {
+        const el = document.getElementById("matrixMode");
+        if (!el) return localStorage.getItem(MATRIX_MODE_KEY) || "attr";
+        return el.value || "attr";
+      }
 
       function ensureCharts() {
         if (!window.Chart) return false;
@@ -542,6 +576,7 @@ def _make_single_log_app(log_path: Path):
       }
 
       async function refresh() {
+        initMatrixMode();
         const tail = parseInt(document.getElementById("tail").value || "5000", 10);
         const startedAt = Date.now();
         let events = [];
@@ -621,8 +656,11 @@ def _make_single_log_app(log_path: Path):
           "mini_auc_reverb",
           "tpr_at_fpr_1pct",
           "tpr_at_fpr_1pct_reverb",
+          "wm_prob_loc_pos_mean",
+          "wm_prob_loc_neg_mean",
           "attr_acc",
           "wm_acc",
+          "id_acc_pos",
           "attr_acc_reverb",
           "wm_acc_reverb",
           "p_clean_pos_mean",
@@ -667,8 +705,8 @@ def _make_single_log_app(log_path: Path):
           const stTpr = metricStatus("tpr_at_fpr_1pct", latestProbe.tpr_at_fpr_1pct, targets).cls;
           const stTprR = metricStatus("tpr_at_fpr_1pct_reverb", latestProbe.tpr_at_fpr_1pct_reverb, targets).cls;
           const stAttr = metricStatus("wm_acc", latestProbe.wm_acc, targets).cls;
-          const stPCleanNeg = metricStatus("p_clean_neg_mean", latestProbe.p_clean_neg_mean, targets).cls;
-          const stPCleanPos = metricStatus("p_clean_pos_mean", latestProbe.p_clean_pos_mean, targets).cls;
+          const stLocNeg = metricStatus("wm_prob_loc_neg_mean", latestProbe.wm_prob_loc_neg_mean, targets).cls;
+          const stLocPos = metricStatus("wm_prob_loc_pos_mean", latestProbe.wm_prob_loc_pos_mean, targets).cls;
 
           if (stAuc === "bad") {
             addRec("Detection AUC is low", "Increase Stage 1/2 training, confirm mixed pos/neg is correct, and verify the probe set contains both classes.");
@@ -682,11 +720,11 @@ def _make_single_log_app(log_path: Path):
           if (stTprR === "bad") {
             addRec("TPR@1%FPR under reverb is low", "The watermark is fragile at strict thresholds. Try lowering `reverb_prob` early then ramping it up, and/or increase Stage 2 epochs.");
           }
-          if (stPCleanNeg === "bad") {
-            addRec("Clean audio looks watermarked", "If P(clean) is low on clean clips, add more clean negatives and (if finetuning) increase `neg_weight` so the decoder stays calibrated.");
+          if (stLocNeg === "bad") {
+            addRec("Clean audio looks watermarked", "If the localization-pooled watermark score is high on clean clips, increase clean regularization (Stage 3 `--neg_weight`) and ensure you have enough clean negatives.");
           }
-          if (stPCleanPos === "bad") {
-            addRec("Watermarked audio looks clean", "If P(clean) stays high on watermarked clips, the encoder watermark may be too weak or undertrained. Increase Stage 2 epochs and consider Stage 3 finetuning.");
+          if (stLocPos === "bad") {
+            addRec("Watermarked audio looks clean", "If the localization-pooled watermark score is low on watermarked clips, the encoder watermark is too weak/undertrained. Increase Stage 2 epochs and/or `detect_weight`.");
           }
           if (stAttr === "bad") {
             addRec("Attribution is low", "If detection is good but wm_acc is near chance, increase Stage 2 (encoder) epochs and consider Stage 3 finetuning to align decision boundaries.");
@@ -748,40 +786,46 @@ def _make_single_log_app(log_path: Path):
         setDatasets(charts.sepClean, probeLabels, bandDatasets("detect"));
         setDatasets(charts.sepReverb, probeLabels, bandDatasets("reverb"));
 
-        // P(clean) calibration
-        const pPos = probes.map(p => maybeNumber(p.p_clean_pos_mean));
-        const pNeg = probes.map(p => maybeNumber(p.p_clean_neg_mean));
-        const pPosT = probeLabels.map(_ => (targets.p_clean_pos_mean !== undefined ? targets.p_clean_pos_mean : DEFAULT_TARGETS.p_clean_pos_mean));
-        const pNegT = probeLabels.map(_ => (targets.p_clean_neg_mean !== undefined ? targets.p_clean_neg_mean : DEFAULT_TARGETS.p_clean_neg_mean));
+        // Localization-pooled calibration
+        const locPos = probes.map(p => maybeNumber(p.wm_prob_loc_pos_mean));
+        const locNeg = probes.map(p => maybeNumber(p.wm_prob_loc_neg_mean));
+        const locPosT = probeLabels.map(_ => (targets.wm_prob_loc_pos_mean !== undefined ? targets.wm_prob_loc_pos_mean : DEFAULT_TARGETS.wm_prob_loc_pos_mean));
+        const locNegT = probeLabels.map(_ => (targets.wm_prob_loc_neg_mean !== undefined ? targets.wm_prob_loc_neg_mean : DEFAULT_TARGETS.wm_prob_loc_neg_mean));
         setDatasets(charts.preamble, probeLabels, [
-          solid("p_clean_pos_mean", "#fb7185", pPos),
-          solid("p_clean_neg_mean", "#34d399", pNeg),
-          dashed("target p_clean_pos", "rgba(251,113,133,0.65)", pPosT),
-          dashed("target p_clean_neg", "rgba(52,211,153,0.65)", pNegT),
+          solid("wm_prob_loc_pos_mean", "#34d399", locPos),
+          solid("wm_prob_loc_neg_mean", "#fb7185", locNeg),
+          dashed("target pos", "rgba(52,211,153,0.65)", locPosT),
+          dashed("target neg", "rgba(251,113,133,0.65)", locNegT),
         ]);
 
         // Attribution accuracy (probe)
         const attrAcc = probes.map(p => maybeNumber(p.attr_acc));
         const wmAcc = probes.map(p => maybeNumber(p.wm_acc));
+        const idAccPos = probes.map(p => maybeNumber(p.id_acc_pos));
         const attrAccR = probes.map(p => maybeNumber(p.attr_acc_reverb));
         const wmAccR = probes.map(p => maybeNumber(p.wm_acc_reverb));
+        const idAccPosR = probes.map(p => maybeNumber(p.id_acc_pos_reverb));
         const attrT = probeLabels.map(_ => (targets.attr_acc !== undefined ? targets.attr_acc : DEFAULT_TARGETS.attr_acc));
         const wmT = probeLabels.map(_ => (targets.wm_acc !== undefined ? targets.wm_acc : DEFAULT_TARGETS.wm_acc));
         setDatasets(charts.id, probeLabels, [
           solid("attr_acc", "#60a5fa", attrAcc),
           solid("wm_acc", "#34d399", wmAcc),
+          solid("id_acc_pos", "#fbbf24", idAccPos),
           solid("attr_acc_reverb", "#c084fc", attrAccR),
           solid("wm_acc_reverb", "#fb7185", wmAccR),
+          solid("id_acc_pos_reverb", "#94a3b8", idAccPosR),
           dashed("target attr", "rgba(96,165,250,0.65)", attrT),
           dashed("target wm", "rgba(52,211,153,0.65)", wmT),
         ]);
 
         // Extra charts (repurpose old CRC/bits slots)
         const predClean = probes.map(p => maybeNumber(p.pred_clean_rate));
-        const pMean = probes.map(p => maybeNumber(p.p_clean_mean));
+        const pPos = probes.map(p => maybeNumber(p.p_clean_pos_mean));
+        const pNeg = probes.map(p => maybeNumber(p.p_clean_neg_mean));
         setDatasets(charts.crc, probeLabels, [
              solid("pred_clean_rate", "#94a3b8", predClean),
-             solid("p_clean_mean", "#fbbf24", pMean),
+             solid("p_clean_pos_mean", "#fbbf24", pPos),
+             solid("p_clean_neg_mean", "#60a5fa", pNeg),
         ]);
 
         setDatasets(charts.bits, probeLabels, [
@@ -793,8 +837,8 @@ def _make_single_log_app(log_path: Path):
         const s1 = epochs.filter(e => e.stage === "s1");
         setDatasets(charts.s1, s1.map(e => `e${e.epoch}`), [
           solid("loss", "#cbd5e1", s1.map(e => maybeNumber(e.loss))),
-          solid("loss_win_ce", "#60a5fa", s1.map(e => maybeNumber(e.loss_win_ce))),
-          solid("loss_clip_ce", "#c084fc", s1.map(e => maybeNumber(e.loss_clip_ce))),
+          solid("loss_detect", "#60a5fa", s1.map(e => maybeNumber(e.loss_detect))),
+          solid("loss_id", "#c084fc", s1.map(e => maybeNumber(e.loss_id))),
         ]);
 
         const s1b = epochs.filter(e => e.stage === "s1b" || e.stage === "s1b_post");
@@ -805,8 +849,9 @@ def _make_single_log_app(log_path: Path):
         const s2 = epochs.filter(e => e.stage === "s2_encoder" || e.stage === "s3_finetune");
         setDatasets(charts.s2, s2.map(e => `${e.stage}/e${e.epoch}`), [
           solid("loss", "#cbd5e1", s2.map(e => maybeNumber(e.loss))),
-          solid("loss_attr", "#60a5fa", s2.map(e => maybeNumber(e.loss_attr))),
-          solid("loss_clean", "#94a3b8", s2.map(e => maybeNumber(e.loss_clean))),
+          solid("loss_detect", "#60a5fa", s2.map(e => maybeNumber(e.loss_detect))),
+          solid("loss_id", "#34d399", s2.map(e => maybeNumber(e.loss_id))),
+          solid("loss_clean_detect", "#94a3b8", s2.map(e => maybeNumber(e.loss_clean_detect))),
           solid("loss_qual", "rgba(255,255,255,0.70)", s2.map(e => maybeNumber(e.loss_qual))),
           solid("loss_budget", "#ef4444", s2.map(e => maybeNumber(e.loss_budget))),
         ]);
@@ -817,8 +862,16 @@ def _make_single_log_app(log_path: Path):
              dashed("target (0.0)", "rgba(255,255,255,0.3)", s2bud.map(_ => 0.0))
         ]);
 
-        // Confusion matrix (multiclass)
-        makeMatrix(document.getElementById("matrix_model"), latestProbe ? latestProbe.confusion : null, "true ", "pred ");
+        // Confusion matrix (toggle: attribution-only vs full)
+        const mm = getMatrixMode();
+        const cm = latestProbe ? ((mm === "full") ? latestProbe.confusion : (latestProbe.confusion_attr || latestProbe.confusion)) : null;
+        const isAttrOnly = (mm !== "full") && latestProbe && latestProbe.confusion_attr;
+        makeMatrix(
+          document.getElementById("matrix_model"),
+          cm,
+          isAttrOnly ? "true_id " : "true ",
+          isAttrOnly ? "pred_id " : "pred "
+        );
         makeMatrix(document.getElementById("matrix_version"), null, "true ", "pred ");
 
         // Recent events table
@@ -1318,6 +1371,12 @@ def _make_controller_app(runs_dir: Path):
             out.append(a)
             if a.startswith("--") and "=" not in a and (i + 1) < len(argv):
                 nxt = argv[i + 1]
+                # Some paste sources inject literal newline tokens like "\n".
+                # Treat whitespace-only tokens as stray positionals and drop them,
+                # otherwise they get incorrectly consumed as a flag value.
+                if not str(nxt).strip():
+                    i += 2
+                    continue
                 if not nxt.startswith("--"):
                     out.append(nxt)
                     i += 2
@@ -1566,6 +1625,12 @@ def _make_controller_app(runs_dir: Path):
           <div style="height:10px"></div>
 
 	          <div id="formQuickVoice">
+              <div class="grid3">
+                <div><label>manifest (optional)</label><input class="input" id="q_manifest" placeholder="e.g. outputs/.../manifest.json" /></div>
+                <div><label>load_encoder (optional)</label><input class="input" id="q_load_encoder" placeholder="e.g. outputs/.../encoder.pt" /></div>
+                <div><label>load_decoder (optional)</label><input class="input" id="q_load_decoder" placeholder="e.g. outputs/.../decoder.pt" /></div>
+              </div>
+              <div style="height:10px"></div>
 	            <div class="grid2">
 	              <div><label>source_dir</label><input class="input" id="q_source_dir" value="mini_benchmark_data" /></div>
 	              <div><label>num_clips</label><input class="input" id="q_num_clips" value="512" /></div>
@@ -1613,6 +1678,18 @@ def _make_controller_app(runs_dir: Path):
 	              <div><label>probe_reverb_every</label><input class="input" id="q_probe_reverb_every" value="999999" /></div>
 	            </div>
 	            <div style="height:10px"></div>
+              <div class="grid3">
+                <div><label>detect_weight</label><input class="input" id="q_detect_weight" value="1.0" /></div>
+                <div><label>id_weight</label><input class="input" id="q_id_weight" value="2.0" /></div>
+                <div>
+                  <label>freeze_detect_head_in_s3</label>
+                  <select id="q_freeze_detect_head_in_s3">
+                    <option value="0" selected>0</option>
+                    <option value="1">1</option>
+                  </select>
+                </div>
+              </div>
+              <div style="height:10px"></div>
 	            <div class="grid3">
 	              <div><label>log_steps_every</label><input class="input" id="q_log_steps_every" value="25" /></div>
 	              <div></div>
@@ -1627,6 +1704,11 @@ def _make_controller_app(runs_dir: Path):
 	            <label>manifest</label>
 	            <input class="input" id="t_manifest" placeholder="e.g. mini_benchmark_train.json" />
 	            <div style="height:10px"></div>
+              <div class="grid2">
+                <div><label>load_encoder (optional)</label><input class="input" id="t_load_encoder" placeholder="e.g. outputs/.../encoder.pt" /></div>
+                <div><label>load_decoder (optional)</label><input class="input" id="t_load_decoder" placeholder="e.g. outputs/.../decoder.pt" /></div>
+              </div>
+              <div style="height:10px"></div>
 	            <div class="grid3">
 	              <div><label>epochs_s1</label><input class="input" id="t_epochs_s1" value="20" /></div>
 	              <div><label>epochs_s1b</label><input class="input" id="t_epochs_s1b" value="10" /></div>
@@ -1639,6 +1721,18 @@ def _make_controller_app(runs_dir: Path):
 	              <div><label>reverb_prob</label><input class="input" id="t_reverb_prob" value="0.25" /></div>
 	            </div>
 	            <div style="height:10px"></div>
+              <div class="grid3">
+                <div><label>detect_weight</label><input class="input" id="t_detect_weight" value="1.0" /></div>
+                <div><label>id_weight</label><input class="input" id="t_id_weight" value="2.0" /></div>
+                <div>
+                  <label>freeze_detect_head_in_s3</label>
+                  <select id="t_freeze_detect_head_in_s3">
+                    <option value="0" selected>0</option>
+                    <option value="1">1</option>
+                  </select>
+                </div>
+              </div>
+              <div style="height:10px"></div>
 	            <div class="grid3">
 	              <div><label>msg_weight</label><input class="input" id="t_msg_weight" value="1.0" /></div>
 	              <div>
@@ -1736,11 +1830,11 @@ def _make_controller_app(runs_dir: Path):
 
         <div style="height:12px"></div>
         <div class="panel">
-          <div class="grid3">
-            <div class="chartWrap"><canvas id="chart_auc"></canvas></div>
-            <div class="chartWrap"><canvas id="chart_tpr"></canvas></div>
-            <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
-          </div>
+	          <div class="grid3">
+	            <div class="chartWrap"><canvas id="chart_auc"></canvas></div>
+	            <div class="chartWrap"><canvas id="chart_tpr"></canvas></div>
+	            <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
+	          </div>
           <div style="height:10px"></div>
           <div class="grid3">
              <div class="chartWrap"><canvas id="chart_id"></canvas></div>
@@ -1759,6 +1853,13 @@ def _make_controller_app(runs_dir: Path):
 	          <div class="panel">
 	            <h2 style="margin:0 0 8px;">Confusion · model</h2>
 	            <div class="tiny">Latest probe event confusion matrix (if available).</div>
+              <div class="row" style="gap:10px; align-items:center; margin-top:8px;">
+                <div class="badge">Matrix</div>
+                <select id="matrixMode" class="input mono" style="max-width: 100%;">
+                  <option value="attr" selected>Attribution-only (K×K)</option>
+                  <option value="full">Thresholded full (K+1×K+1)</option>
+                </select>
+              </div>
 	            <div style="height:8px"></div>
 	            <div id="matrixModel" class="matrixWrap">—</div>
 	          </div>
@@ -1792,6 +1893,22 @@ def _make_controller_app(runs_dir: Path):
     <script>
       let selected = null;
       let charts = {};
+      const MATRIX_MODE_KEY = "wmDash:matrixMode";
+
+      function initMatrixMode() {
+        const el = document.getElementById("matrixMode");
+        if (!el || el._wmInit) return;
+        el._wmInit = true;
+        const saved = localStorage.getItem(MATRIX_MODE_KEY);
+        if (saved) el.value = saved;
+        el.addEventListener("change", () => localStorage.setItem(MATRIX_MODE_KEY, el.value));
+      }
+
+      function getMatrixMode() {
+        const el = document.getElementById("matrixMode");
+        if (!el) return localStorage.getItem(MATRIX_MODE_KEY) || "attr";
+        return el.value || "attr";
+      }
       let refreshing = false;
 
       function fmt(x) {
@@ -1863,8 +1980,10 @@ def _make_controller_app(runs_dir: Path):
 	        const cols = Array.isArray(mat[0]) ? mat[0].length : 0;
 	        if (cols === 0) { el.textContent = "—"; return; }
 
-	        const rowNames = opts.rowNames || Array.from({length: rows}, (_, i) => String(i));
-	        const colNames = opts.colNames || Array.from({length: cols}, (_, i) => (i === cols-1 && opts.lastColName ? opts.lastColName : String(i)));
+	        const rowPrefix = opts.rowPrefix || "";
+	        const colPrefix = opts.colPrefix || "";
+	        const rowNames = opts.rowNames || Array.from({length: rows}, (_, i) => `${rowPrefix}${i}`);
+	        const colNames = opts.colNames || Array.from({length: cols}, (_, i) => (i === cols-1 && opts.lastColName ? opts.lastColName : `${colPrefix}${i}`));
 
 	        let maxVal = 0;
 	        for (let r=0; r<rows; r++) for (let c=0; c<cols; c++) maxVal = Math.max(maxVal, mat[r][c] || 0);
@@ -1945,12 +2064,18 @@ def _make_controller_app(runs_dir: Path):
 
 	      function readQuickVoiceArgs() {
 	        const args = {
+            manifest: (document.getElementById("q_manifest").value || "").trim() || null,
+            load_encoder: (document.getElementById("q_load_encoder").value || "").trim() || null,
+            load_decoder: (document.getElementById("q_load_decoder").value || "").trim() || null,
 	          source_dir: document.getElementById("q_source_dir").value,
 	          num_clips: parseInt(document.getElementById("q_num_clips").value, 10),
 	          epochs_s1: parseInt(document.getElementById("q_epochs_s1").value, 10),
 	          epochs_s1b: parseInt(document.getElementById("q_epochs_s1b").value, 10),
 	          epochs_s2: parseInt(document.getElementById("q_epochs_s2").value, 10),
 	          epochs_s1b_post: parseInt(document.getElementById("q_epochs_s1b_post").value, 10),
+            detect_weight: parseFloat(document.getElementById("q_detect_weight").value),
+            id_weight: parseFloat(document.getElementById("q_id_weight").value),
+            freeze_detect_head_in_s3: (document.getElementById("q_freeze_detect_head_in_s3").value === "1"),
 	          msg_weight: parseFloat(document.getElementById("q_msg_weight").value),
 	          stage2_payload_on_all: (document.getElementById("q_stage2_payload_on_all").value === "1"),
 		          probe_clips: parseInt(document.getElementById("q_probe_clips").value, 10),
@@ -1973,12 +2098,17 @@ def _make_controller_app(runs_dir: Path):
 	      function readTrainFullArgs() {
 	        const args = {
 	          manifest: document.getElementById("t_manifest").value,
+            load_encoder: (document.getElementById("t_load_encoder").value || "").trim() || null,
+            load_decoder: (document.getElementById("t_load_decoder").value || "").trim() || null,
 	          epochs_s1: parseInt(document.getElementById("t_epochs_s1").value, 10),
 	          epochs_s1b: parseInt(document.getElementById("t_epochs_s1b").value, 10),
 	          warmup_s1b: parseInt(document.getElementById("t_warmup_s1b").value, 10),
 	          epochs_s2: parseInt(document.getElementById("t_epochs_s2").value, 10),
 	          epochs_s1b_post: parseInt(document.getElementById("t_epochs_s1b_post").value, 10),
 	          reverb_prob: parseFloat(document.getElementById("t_reverb_prob").value),
+            detect_weight: parseFloat(document.getElementById("t_detect_weight").value),
+            id_weight: parseFloat(document.getElementById("t_id_weight").value),
+            freeze_detect_head_in_s3: (document.getElementById("t_freeze_detect_head_in_s3").value === "1"),
 	          msg_weight: parseFloat(document.getElementById("t_msg_weight").value),
 	          stage2_payload_on_all: (document.getElementById("t_stage2_payload_on_all").value === "1"),
 	          unknown_ce_weight: parseFloat(document.getElementById("t_unknown_ce_weight").value),
@@ -2053,6 +2183,7 @@ def _make_controller_app(runs_dir: Path):
 	        if (!selected) return;
 	        if (refreshing) return;
 	        refreshing = true;
+	        initMatrixMode();
 	        ensureCharts();
 	        const id = selected.id;
 	        try {
@@ -2080,7 +2211,10 @@ def _make_controller_app(runs_dir: Path):
 
 	          const latestProbe = probes.length ? probes[probes.length - 1] : null;
 	          if (latestProbe) {
-	            makeMatrix("matrixModel", latestProbe.confusion, { lastColName: null });
+	            const mm = getMatrixMode();
+	            const cm = (mm === "full") ? latestProbe.confusion : (latestProbe.confusion_attr || latestProbe.confusion);
+	            const prefix = (mm !== "full" && latestProbe.confusion_attr) ? "id" : "class";
+	            makeMatrix("matrixModel", cm, { lastColName: null, rowPrefix: `true_${prefix} `, colPrefix: `pred_${prefix} ` });
 	            document.getElementById("matrixVersion").textContent = "—";
 	          } else {
 	            document.getElementById("matrixModel").textContent = "—";
@@ -2112,38 +2246,45 @@ def _make_controller_app(runs_dir: Path):
 
 	          const attr = probes.map(p => p.attr_acc ?? null);
 	          const wm = probes.map(p => p.wm_acc ?? null);
+	          const idPos = probes.map(p => p.id_acc_pos ?? null);
 	          const attrR = probes.map(p => p.attr_acc_reverb ?? null);
 	          const wmR = probes.map(p => p.wm_acc_reverb ?? null);
+	          const idPosR = probes.map(p => p.id_acc_pos_reverb ?? null);
 	          setDatasets(charts.id, labels, [
 	            solid("attr_acc", "#60a5fa", attr),
 	            solid("wm_acc", "#34d399", wm),
+	            solid("id_acc_pos", "#fbbf24", idPos),
 	            solid("attr_acc_reverb", "#c084fc", attrR),
 	            solid("wm_acc_reverb", "#fb7185", wmR),
+	            solid("id_acc_pos_reverb", "#94a3b8", idPosR),
 	          ]);
 
 	          const predClean = probes.map(p => p.pred_clean_rate ?? null);
-	          const pCleanMean = probes.map(p => p.p_clean_mean ?? null);
+	          const pCleanPos = probes.map(p => p.p_clean_pos_mean ?? null);
+	          const pCleanNeg = probes.map(p => p.p_clean_neg_mean ?? null);
 	          setDatasets(charts.crc, labels, [
 	               solid("pred_clean_rate", "#94a3b8", predClean),
-	               solid("p_clean_mean", "#fbbf24", pCleanMean),
+	               solid("p_clean_pos_mean", "#fbbf24", pCleanPos),
+	               solid("p_clean_neg_mean", "#60a5fa", pCleanNeg),
 	          ]);
 	          setDatasets(charts.bits, labels, [
 	               solid("attr_acc", "#60a5fa", attr),
 	               solid("wm_acc", "#34d399", wm),
 	          ]);
 
-	          const pPos = probes.map(p => p.p_clean_pos_mean ?? null);
-	          const pNeg = probes.map(p => p.p_clean_neg_mean ?? null);
+	          const locPos = probes.map(p => p.wm_prob_loc_pos_mean ?? null);
+	          const locNeg = probes.map(p => p.wm_prob_loc_neg_mean ?? null);
 	          setDatasets(charts.preamble, labels, [
-	            solid("p_clean_pos_mean", "#fb7185", pPos),
-	            solid("p_clean_neg_mean", "#34d399", pNeg),
+	            solid("wm_prob_loc_pos_mean", "#34d399", locPos),
+	            solid("wm_prob_loc_neg_mean", "#fb7185", locNeg),
 	          ]);
 
 	          const s2labels = s2.map(e => `${e.stage}/e${e.epoch}`);
 	          setDatasets(charts.s2, s2labels, [
 	            solid("loss", "#cbd5e1", s2.map(e => e.loss ?? null)),
-	            solid("loss_attr", "#60a5fa", s2.map(e => e.loss_attr ?? null)),
-	            solid("loss_clean", "#94a3b8", s2.map(e => e.loss_clean ?? null)),
+	            solid("loss_detect", "#60a5fa", s2.map(e => e.loss_detect ?? null)),
+	            solid("loss_id", "#34d399", s2.map(e => e.loss_id ?? null)),
+	            solid("loss_clean_detect", "#94a3b8", s2.map(e => e.loss_clean_detect ?? null)),
 	            solid("loss_qual", "#fbbf24", s2.map(e => e.loss_qual ?? null)),
 	            solid("loss_budget", "#ef4444", s2.map(e => e.loss_budget ?? null)),
 	          ]);
@@ -2500,6 +2641,10 @@ def _make_controller_app(runs_dir: Path):
                 str(int(args.get("probe_every", 1))),
                 "--probe_reverb_every",
                 str(int(args.get("probe_reverb_every", 999999))),
+                "--detect_weight",
+                str(float(args.get("detect_weight", 1.0))),
+                "--id_weight",
+                str(float(args.get("id_weight", 2.0))),
                 "--log_steps_every",
                 str(int(args.get("log_steps_every", 25))),
                 "--log_metrics",
@@ -2507,6 +2652,17 @@ def _make_controller_app(runs_dir: Path):
                 "--out",
                 str(sdir),
             ]
+            manifest = str(args.get("manifest") or "").strip()
+            if manifest:
+                cmd.extend(["--manifest", manifest])
+            load_encoder = str(args.get("load_encoder") or "").strip()
+            if load_encoder:
+                cmd.extend(["--load_encoder", load_encoder])
+            load_decoder = str(args.get("load_decoder") or "").strip()
+            if load_decoder:
+                cmd.extend(["--load_decoder", load_decoder])
+            if bool(args.get("freeze_detect_head_in_s3")):
+                cmd.append("--freeze_detect_head_in_s3")
             if bool(args.get("stage2_payload_on_all")):
                 cmd.append("--stage2_payload_on_all")
             extra = args.get("extra_args")
@@ -2550,6 +2706,10 @@ def _make_controller_app(runs_dir: Path):
                 str(float(args.get("msg_weight", 1.0))),
                 "--reverb_prob",
                 str(float(args.get("reverb_prob", 0.25))),
+                "--detect_weight",
+                str(float(args.get("detect_weight", 1.0))),
+                "--id_weight",
+                str(float(args.get("id_weight", 2.0))),
                 "--probe_clips",
                 str(int(args.get("probe_clips", 1024))),
                 "--probe_every",
@@ -2561,6 +2721,14 @@ def _make_controller_app(runs_dir: Path):
                 "--log_metrics",
                 str(metrics_path),
             ]
+            load_encoder = str(args.get("load_encoder") or "").strip()
+            if load_encoder:
+                cmd.extend(["--load_encoder", load_encoder])
+            load_decoder = str(args.get("load_decoder") or "").strip()
+            if load_decoder:
+                cmd.extend(["--load_decoder", load_decoder])
+            if bool(args.get("freeze_detect_head_in_s3")):
+                cmd.append("--freeze_detect_head_in_s3")
             if bool(args.get("stage2_payload_on_all")):
                 cmd.append("--stage2_payload_on_all")
             extra = args.get("extra_args")

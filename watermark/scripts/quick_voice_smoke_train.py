@@ -72,11 +72,19 @@ def build_manifest(paths: list[Path], out_dir: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Quick voice smoke train (Dashboard Compatible)")
     parser.add_argument("--source_dir", type=str, default="mini_benchmark_data")
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Optional: use an existing manifest JSON instead of sampling from --source_dir",
+    )
     parser.add_argument("--out", type=str, default="outputs/quick_voice_smoke")
     parser.add_argument("--num_clips", type=int, default=None)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--log_metrics", type=str, default=None)
     parser.add_argument("--reverb_prob", type=float, default=0.0)
+    parser.add_argument("--load_encoder", type=str, default=None, help="Optional: path to encoder .pt state_dict")
+    parser.add_argument("--load_decoder", type=str, default=None, help="Optional: path to decoder .pt state_dict")
 
     # Schedule
     parser.add_argument("--epochs_s1", type=int, default=3, help="Stage 1: decoder pretrain")
@@ -99,42 +107,68 @@ def main() -> int:
     parser.add_argument("--probe_every", type=int, default=1)
     parser.add_argument("--probe_reverb_every", type=int, default=999)
     parser.add_argument("--probe_clips", type=int, default=128)
+    parser.add_argument("--detect_weight", type=float, default=1.0, help="Weight for detect loss")
+    parser.add_argument("--id_weight", type=float, default=2.0, help="Weight for ID loss (positives only)")
+    parser.add_argument(
+        "--freeze_detect_head_in_s3",
+        action="store_true",
+        help="Freeze detect head during finetune to reduce detect/ID interference",
+    )
 
     args = parser.parse_args()
-
-    source_dir = Path(args.source_dir)
-    if not source_dir.exists():
-        print(f"[QuickVoice] Source dir not found: {source_dir}")
-        return 1
 
     print(f"[QuickVoice] Using device: {DEVICE}")
     print(f"[QuickVoice] N_MODELS={N_MODELS} N_CLASSES={N_CLASSES}")
 
-    audio_files = collect_audio_files(source_dir)
-    if not audio_files:
-        print(f"No audio files in {source_dir}")
-        return 1
-
     rng = random.Random(int(args.seed))
-    num_clips = int(args.num_clips) if args.num_clips is not None else 500
-    if num_clips <= 0:
-        print("--num_clips must be > 0")
-        return 1
-
-    if num_clips < len(audio_files):
-        selected = rng.sample(audio_files, num_clips)
-    else:
-        selected = list(audio_files)
-        while len(selected) < num_clips:
-            selected.append(rng.choice(audio_files))
-
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = build_manifest(selected, out_dir)
+
+    if args.manifest:
+        manifest_path = Path(args.manifest).expanduser().resolve()
+        if not manifest_path.exists():
+            print(f"[QuickVoice] Manifest not found: {manifest_path}")
+            return 1
+    else:
+        source_dir = Path(args.source_dir)
+        if not source_dir.exists():
+            print(f"[QuickVoice] Source dir not found: {source_dir}")
+            return 1
+        audio_files = collect_audio_files(source_dir)
+        if not audio_files:
+            print(f"No audio files in {source_dir}")
+            return 1
+
+        num_clips = int(args.num_clips) if args.num_clips is not None else 500
+        if num_clips <= 0:
+            print("--num_clips must be > 0")
+            return 1
+
+        if num_clips < len(audio_files):
+            selected = rng.sample(audio_files, num_clips)
+        else:
+            selected = list(audio_files)
+            while len(selected) < num_clips:
+                selected.append(rng.choice(audio_files))
+        manifest_path = build_manifest(selected, out_dir)
 
     # Models
     encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
     decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+
+    if args.load_encoder:
+        p = Path(args.load_encoder).expanduser().resolve()
+        ckpt = torch.load(p, map_location="cpu")
+        state = ckpt.get("state_dict") if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        encoder.load_state_dict(state, strict=True)
+        print(f"[QuickVoice] Loaded encoder weights: {p}")
+
+    if args.load_decoder:
+        p = Path(args.load_decoder).expanduser().resolve()
+        ckpt = torch.load(p, map_location="cpu")
+        state = ckpt.get("state_dict") if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        decoder.load_state_dict(state, strict=True)
+        print(f"[QuickVoice] Loaded decoder weights: {p}")
 
     # Data
     dataset = WatermarkDataset(str(manifest_path), training=True)
@@ -193,6 +227,8 @@ def main() -> int:
                 loader,
                 DEVICE,
                 epochs=epochs_s1_total,
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
                 on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
                 on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s1", int(e["epoch"]))),
             )
@@ -206,6 +242,8 @@ def main() -> int:
                 DEVICE,
                 epochs=epochs_s2,
                 reverb_prob=float(args.reverb_prob),
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
                 on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
                 on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s2_encoder", int(e["epoch"]))),
                 finetune_mode=False,
@@ -222,6 +260,9 @@ def main() -> int:
                 lr=1e-5,
                 reverb_prob=float(args.reverb_prob),
                 neg_weight=float(args.neg_weight),
+                detect_weight=float(args.detect_weight),
+                id_weight=float(args.id_weight),
+                freeze_detect_head=bool(args.freeze_detect_head_in_s3),
                 on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
                 on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s3_finetune", int(e["epoch"]))),
                 finetune_mode=True,
@@ -235,4 +276,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
