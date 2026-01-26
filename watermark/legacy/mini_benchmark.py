@@ -1,3 +1,8 @@
+"""
+Mini Benchmark Script (LEGACY)
+
+This script targets the old bit-payload pipeline and is retained for reference only.
+"""
 
 import torch
 import torch.nn.functional as F

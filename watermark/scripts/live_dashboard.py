@@ -257,6 +257,14 @@ def _make_single_log_app(log_path: Path):
         </div>
 
         <div class="card" style="grid-column: span 12;">
+          <h2>Attribution & Calibration (Probe)</h2>
+          <div class="split">
+             <div class="chartWrap"><canvas id="chart_crc"></canvas></div>
+             <div class="chartWrap"><canvas id="chart_bits"></canvas></div>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: span 12;">
           <h2>Detection AUC (Presence)</h2>
           <div class="tiny">Goal: AUC lines above target (random baseline = 0.5). Reverb AUC measures robustness.</div>
           <div class="chartWrap"><canvas id="chart_auc"></canvas></div>
@@ -284,14 +292,14 @@ def _make_single_log_app(log_path: Path):
         </div>
 
         <div class="card" style="grid-column: span 12;">
-          <h2>Preamble (Sync) Quality</h2>
-          <div class="tiny">Goal: preamble_pos_avg high, preamble_neg_avg low (near random ~0.5).</div>
+          <h2>P(clean) Calibration</h2>
+          <div class="tiny">Goal: P(clean) high on clean clips, low on watermarked clips.</div>
           <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
         </div>
 
         <div class="card" style="grid-column: span 12;">
-          <h2>Attribution (Identity)</h2>
-          <div class="tiny">Goal: accuracies rise above chance (model=0.125, version=0.0625, exact≈0.0078).</div>
+          <h2>Attribution (Multiclass)</h2>
+          <div class="tiny">Goal: overall accuracy and watermarked-only accuracy rise above chance.</div>
           <div class="chartWrap"><canvas id="chart_id"></canvas></div>
         </div>
 
@@ -311,18 +319,21 @@ def _make_single_log_app(log_path: Path):
           <div style="height: 10px;"></div>
           <h3>Stage 2 (Encoder)</h3>
           <div class="chartWrap"><canvas id="chart_s2"></canvas></div>
+          <div style="height: 10px;"></div>
+          <h3>Energy Budget</h3>
+          <div class="chartWrap"><canvas id="chart_budget"></canvas></div>
         </div>
 
         <div class="card" style="grid-column: span 12;">
-          <h2>Attribution Confusion Matrices (Probe Positives)</h2>
-          <div class="tiny">Diagonal dominance means correct attribution. “unknown” is an extra class; it should be rare on positives.</div>
+          <h2>Attribution Confusion Matrix (Probe)</h2>
+          <div class="tiny">Diagonal dominance means correct attribution; class 0 is clean.</div>
           <div class="split">
             <div>
-              <h3>Model ID</h3>
+              <h3>Classes</h3>
               <div class="matrix" id="matrix_model"></div>
             </div>
             <div>
-              <h3>Version</h3>
+              <h3>Legacy</h3>
               <div class="matrix" id="matrix_version"></div>
             </div>
           </div>
@@ -337,7 +348,7 @@ def _make_single_log_app(log_path: Path):
               <thead>
                 <tr>
                   <th>time</th><th>type</th><th>stage</th><th>epoch</th>
-                  <th>loss</th><th>mini_auc</th><th>auc_reverb</th><th>tpr@1%fpr</th><th>model_acc</th><th>version_acc</th>
+                  <th>loss</th><th>mini_auc</th><th>auc_reverb</th><th>tpr@1%fpr</th><th>probe_wm_acc</th><th>attr_acc</th><th>wm_acc</th>
                 </tr>
               </thead>
               <tbody id="eventsTable"></tbody>
@@ -360,15 +371,13 @@ def _make_single_log_app(log_path: Path):
         mini_auc_reverb: 0.85,
         tpr_at_fpr_1pct: 0.90,
         tpr_at_fpr_1pct_reverb: 0.70,
-        preamble_pos_avg: 0.95,
-        preamble_neg_avg: 0.60,
-        model_id_acc_cls: 0.60,
-        version_acc_cls: 0.40,
-        pair_acc_cls: 0.30,
-        payload_exact_acc_cls: 0.30,
-        payload_exact_acc_cls_cond_1pct: 0.30,
-        model_unknown_rate: 0.10,
-        version_unknown_rate: 0.10,
+        attr_acc: 0.70,
+        wm_acc: 0.70,
+        attr_acc_reverb: 0.60,
+        wm_acc_reverb: 0.60,
+        p_clean_pos_mean: 0.30,
+        p_clean_neg_mean: 0.90,
+        loss_budget: 0.05,
       };
 
       const DIRECTIONS = {
@@ -376,15 +385,13 @@ def _make_single_log_app(log_path: Path):
         mini_auc_reverb: "gte",
         tpr_at_fpr_1pct: "gte",
         tpr_at_fpr_1pct_reverb: "gte",
-        preamble_pos_avg: "gte",
-        preamble_neg_avg: "lte",
-        model_id_acc_cls: "gte",
-        version_acc_cls: "gte",
-        pair_acc_cls: "gte",
-        payload_exact_acc_cls: "gte",
-        payload_exact_acc_cls_cond_1pct: "gte",
-        model_unknown_rate: "lte",
-        version_unknown_rate: "lte",
+        attr_acc: "gte",
+        wm_acc: "gte",
+        attr_acc_reverb: "gte",
+        wm_acc_reverb: "gte",
+        p_clean_pos_mean: "lte",
+        p_clean_neg_mean: "gte",
+        loss_budget: "lte",
       };
 
       const EXPLAIN = {
@@ -392,15 +399,13 @@ def _make_single_log_app(log_path: Path):
         mini_auc_reverb: "AUC under reverb. Higher is better.",
         tpr_at_fpr_1pct: "TPR when we allow only 1% false positives (strict). Higher is better.",
         tpr_at_fpr_1pct_reverb: "Same strict operating point under reverb. Higher is better.",
-        preamble_pos_avg: "Preamble match on watermarked clips. Higher is better.",
-        preamble_neg_avg: "Preamble match on clean clips. Lower is better (near ~0.5 is random).",
-        model_id_acc_cls: "Model-ID accuracy on positives. Higher is better (chance=0.125).",
-        version_acc_cls: "Version accuracy on positives. Higher is better (chance=0.0625).",
-        pair_acc_cls: "Pair-ID accuracy on positives (128 classes). Higher is better (chance≈0.0078).",
-        payload_exact_acc_cls: "Exact (model_id+version) accuracy on positives. Higher is better (chance≈0.0078).",
-        payload_exact_acc_cls_cond_1pct: "Exact accuracy on positives conditioned on detector acceptance at the strict 1% FPR threshold. Higher is better.",
-        model_unknown_rate: "Positives predicted as 'unknown'. Lower is better.",
-        version_unknown_rate: "Positives predicted as 'unknown'. Lower is better.",
+        attr_acc: "Overall multiclass accuracy across probe items (clean + model classes).",
+        wm_acc: "Accuracy on watermarked-only probe items (model attribution).",
+        attr_acc_reverb: "Overall accuracy under reverb attack.",
+        wm_acc_reverb: "Watermarked-only attribution under reverb attack.",
+        p_clean_pos_mean: "Mean P(clean) on watermarked probe items. Lower is better (clean class suppressed).",
+        p_clean_neg_mean: "Mean P(clean) on clean probe items. Higher is better (clean class dominant).",
+        loss_budget: "Penalty for exceeding energy budget (-30dB). Should be 0.0.",
       };
 
       function fmt(x) {
@@ -511,9 +516,12 @@ def _make_single_log_app(log_path: Path):
         charts.sepReverb = lineChart("chart_sep_reverb", 0, 1);
         charts.preamble = lineChart("chart_preamble", 0, 1);
         charts.id = lineChart("chart_id", 0, 1);
+        charts.crc = lineChart("chart_crc", 0, 1);
+        charts.bits = lineChart("chart_bits", 0.7, 1.0);
         charts.s1 = lineChart("chart_s1");
         charts.s1b = lineChart("chart_s1b");
         charts.s2 = lineChart("chart_s2");
+        charts.budget = lineChart("chart_budget", 0, 1);
 
         charts._ready = true;
         return true;
@@ -613,15 +621,12 @@ def _make_single_log_app(log_path: Path):
           "mini_auc_reverb",
           "tpr_at_fpr_1pct",
           "tpr_at_fpr_1pct_reverb",
-          "preamble_pos_avg",
-          "preamble_neg_avg",
-          "model_id_acc_cls",
-          "version_acc_cls",
-          "pair_acc_cls",
-          "payload_exact_acc_cls",
-          "payload_exact_acc_cls_cond_1pct",
-          "model_unknown_rate",
-          "version_unknown_rate",
+          "attr_acc",
+          "wm_acc",
+          "attr_acc_reverb",
+          "wm_acc_reverb",
+          "p_clean_pos_mean",
+          "p_clean_neg_mean",
         ];
         if (latestProbe) {
           for (const k of keys) {
@@ -648,7 +653,7 @@ def _make_single_log_app(log_path: Path):
           const meaning = EXPLAIN[k] || "";
           guideRows.push(`<tr><td><code>${k}</code></td><td class="mono">${goal}</td><td>${meaning}</td></tr>`);
         }
-        guideRows.push(`<tr><td><code>chance baselines</code></td><td class="mono">model=0.125 · version=0.0625 · exact≈0.0078</td><td>Use these to check if attribution is better than random guessing.</td></tr>`);
+        guideRows.push(`<tr><td><code>chance baselines</code></td><td class="mono">overall≈1/(K+1) · watermarked≈1/K</td><td>Use these to check if attribution is better than random guessing (K = number of model classes).</td></tr>`);
         document.getElementById("metricGuide").innerHTML = guideRows.join("");
 
         // Recommendations (rule-based)
@@ -661,9 +666,9 @@ def _make_single_log_app(log_path: Path):
           const stAucR = metricStatus("mini_auc_reverb", latestProbe.mini_auc_reverb, targets).cls;
           const stTpr = metricStatus("tpr_at_fpr_1pct", latestProbe.tpr_at_fpr_1pct, targets).cls;
           const stTprR = metricStatus("tpr_at_fpr_1pct_reverb", latestProbe.tpr_at_fpr_1pct_reverb, targets).cls;
-          const stPreNeg = metricStatus("preamble_neg_avg", latestProbe.preamble_neg_avg, targets).cls;
-          const stModel = metricStatus("model_id_acc_cls", latestProbe.model_id_acc_cls, targets).cls;
-          const stVer = metricStatus("version_acc_cls", latestProbe.version_acc_cls, targets).cls;
+          const stAttr = metricStatus("wm_acc", latestProbe.wm_acc, targets).cls;
+          const stPCleanNeg = metricStatus("p_clean_neg_mean", latestProbe.p_clean_neg_mean, targets).cls;
+          const stPCleanPos = metricStatus("p_clean_pos_mean", latestProbe.p_clean_pos_mean, targets).cls;
 
           if (stAuc === "bad") {
             addRec("Detection AUC is low", "Increase Stage 1/2 training, confirm mixed pos/neg is correct, and verify the probe set contains both classes.");
@@ -672,16 +677,19 @@ def _make_single_log_app(log_path: Path):
             addRec("Reverb robustness is low", "Reduce `reverb_prob` early (schedule it up later), increase Stage 2 epochs, or add post-Stage2 decoder fine-tune (`--epochs_s1b_post`).");
           }
           if (stTpr === "bad") {
-            addRec("TPR@1%FPR is low", "AUC might be high but the detector is not confident enough. Consider more Stage 1 training or raising watermark strength (msg/model/version CE weights) while monitoring quality.");
+            addRec("TPR@1%FPR is low", "AUC might be high but confidence is low. Consider more Stage 1 training and/or longer Stage 2 (encoder) while monitoring quality.");
           }
           if (stTprR === "bad") {
-            addRec("TPR@1%FPR under reverb is low", "The watermark is fragile at strict thresholds. Try lowering `reverb_prob` initially, then ramp it up; also consider higher `msg_weight`/CE weights and longer Stage 2.");
+            addRec("TPR@1%FPR under reverb is low", "The watermark is fragile at strict thresholds. Try lowering `reverb_prob` early then ramping it up, and/or increase Stage 2 epochs.");
           }
-          if (stPreNeg === "bad") {
-            addRec("False preamble on clean audio", "Increase Stage 1B negative regularization (`--neg_weight`), keep `--neg_preamble_target 0.5`, and ensure enough clean negatives in the manifest.");
+          if (stPCleanNeg === "bad") {
+            addRec("Clean audio looks watermarked", "If P(clean) is low on clean clips, add more clean negatives and (if finetuning) increase `neg_weight` so the decoder stays calibrated.");
           }
-          if (stModel === "bad" || stVer === "bad") {
-            addRec("Attribution stuck near chance", "If detection is good but identity is chance, this is “presence-only”. Ensure Stage 2 uses balanced random messages on mixed manifests (default `random_if_mixed`), and consider increasing `--model_ce_weight/--version_ce_weight` plus `--epochs_s1b_post`.");
+          if (stPCleanPos === "bad") {
+            addRec("Watermarked audio looks clean", "If P(clean) stays high on watermarked clips, the encoder watermark may be too weak or undertrained. Increase Stage 2 epochs and consider Stage 3 finetuning.");
+          }
+          if (stAttr === "bad") {
+            addRec("Attribution is low", "If detection is good but wm_acc is near chance, increase Stage 2 (encoder) epochs and consider Stage 3 finetuning to align decision boundaries.");
           }
         }
         document.getElementById("recs").innerHTML = recs.length ? `<ul>${recs.join("")}</ul>` : `<div class="tiny">No recommendations right now (either no probe yet, or metrics look on-track).</div>`;
@@ -740,81 +748,78 @@ def _make_single_log_app(log_path: Path):
         setDatasets(charts.sepClean, probeLabels, bandDatasets("detect"));
         setDatasets(charts.sepReverb, probeLabels, bandDatasets("reverb"));
 
-        // Preamble
-        const prePos = probes.map(p => maybeNumber(p.preamble_pos_avg));
-        const preNeg = probes.map(p => maybeNumber(p.preamble_neg_avg));
-        const prePosT = probeLabels.map(_ => (targets.preamble_pos_avg !== undefined ? targets.preamble_pos_avg : DEFAULT_TARGETS.preamble_pos_avg));
-        const preNegT = probeLabels.map(_ => (targets.preamble_neg_avg !== undefined ? targets.preamble_neg_avg : DEFAULT_TARGETS.preamble_neg_avg));
-        const preRand = probeLabels.map(_ => 0.5);
+        // P(clean) calibration
+        const pPos = probes.map(p => maybeNumber(p.p_clean_pos_mean));
+        const pNeg = probes.map(p => maybeNumber(p.p_clean_neg_mean));
+        const pPosT = probeLabels.map(_ => (targets.p_clean_pos_mean !== undefined ? targets.p_clean_pos_mean : DEFAULT_TARGETS.p_clean_pos_mean));
+        const pNegT = probeLabels.map(_ => (targets.p_clean_neg_mean !== undefined ? targets.p_clean_neg_mean : DEFAULT_TARGETS.p_clean_neg_mean));
         setDatasets(charts.preamble, probeLabels, [
-          solid("preamble_pos_avg", "#34d399", prePos),
-          solid("preamble_neg_avg", "#fb7185", preNeg),
-          dashed("target preamble_pos", "rgba(52,211,153,0.65)", prePosT),
-          dashed("target preamble_neg", "rgba(251,113,133,0.65)", preNegT),
-          dashed("random≈0.5", "rgba(255,255,255,0.35)", preRand),
+          solid("p_clean_pos_mean", "#fb7185", pPos),
+          solid("p_clean_neg_mean", "#34d399", pNeg),
+          dashed("target p_clean_pos", "rgba(251,113,133,0.65)", pPosT),
+          dashed("target p_clean_neg", "rgba(52,211,153,0.65)", pNegT),
         ]);
 
-        // Identity
-        const modelAcc = probes.map(p => maybeNumber(p.model_id_acc_cls));
-        const verAcc = probes.map(p => maybeNumber(p.version_acc_cls));
-        const pairAcc = probes.map(p => maybeNumber(p.pair_acc_cls));
-        const exactAcc = probes.map(p => maybeNumber(p.payload_exact_acc_cls));
-        const exactAccCond = probes.map(p => maybeNumber(p.payload_exact_acc_cls_cond_1pct));
-        const modelT = probeLabels.map(_ => (targets.model_id_acc_cls !== undefined ? targets.model_id_acc_cls : DEFAULT_TARGETS.model_id_acc_cls));
-        const verT = probeLabels.map(_ => (targets.version_acc_cls !== undefined ? targets.version_acc_cls : DEFAULT_TARGETS.version_acc_cls));
-        const pairT = probeLabels.map(_ => (targets.pair_acc_cls !== undefined ? targets.pair_acc_cls : DEFAULT_TARGETS.pair_acc_cls));
-        const exactT = probeLabels.map(_ => (targets.payload_exact_acc_cls !== undefined ? targets.payload_exact_acc_cls : DEFAULT_TARGETS.payload_exact_acc_cls));
-        const exactCondT = probeLabels.map(_ => (targets.payload_exact_acc_cls_cond_1pct !== undefined ? targets.payload_exact_acc_cls_cond_1pct : DEFAULT_TARGETS.payload_exact_acc_cls_cond_1pct));
-        const chanceModel = probeLabels.map(_ => 1/8);
-        const chanceVer = probeLabels.map(_ => 1/16);
-        const chanceExact = probeLabels.map(_ => 1/(8*16));
+        // Attribution accuracy (probe)
+        const attrAcc = probes.map(p => maybeNumber(p.attr_acc));
+        const wmAcc = probes.map(p => maybeNumber(p.wm_acc));
+        const attrAccR = probes.map(p => maybeNumber(p.attr_acc_reverb));
+        const wmAccR = probes.map(p => maybeNumber(p.wm_acc_reverb));
+        const attrT = probeLabels.map(_ => (targets.attr_acc !== undefined ? targets.attr_acc : DEFAULT_TARGETS.attr_acc));
+        const wmT = probeLabels.map(_ => (targets.wm_acc !== undefined ? targets.wm_acc : DEFAULT_TARGETS.wm_acc));
         setDatasets(charts.id, probeLabels, [
-          solid("model_id_acc_cls", "#60a5fa", modelAcc),
-          solid("version_acc_cls", "#fbbf24", verAcc),
-          solid("pair_acc_cls", "#34d399", pairAcc),
-          solid("payload_exact_acc_cls", "rgba(255,255,255,0.85)", exactAcc),
-          solid("payload_exact_acc_cls_cond_1pct", "rgba(255,255,255,0.55)", exactAccCond),
-          dashed("target model", "rgba(96,165,250,0.65)", modelT),
-          dashed("target version", "rgba(251,191,36,0.65)", verT),
-          dashed("target pair", "rgba(52,211,153,0.65)", pairT),
-          dashed("target exact", "rgba(255,255,255,0.40)", exactT),
-          dashed("target exact (cond)", "rgba(255,255,255,0.25)", exactCondT),
-          dashed("chance model (0.125)", "rgba(96,165,250,0.35)", chanceModel),
-          dashed("chance ver (0.0625)", "rgba(251,191,36,0.35)", chanceVer),
-          dashed("chance exact (~0.0078)", "rgba(255,255,255,0.25)", chanceExact),
+          solid("attr_acc", "#60a5fa", attrAcc),
+          solid("wm_acc", "#34d399", wmAcc),
+          solid("attr_acc_reverb", "#c084fc", attrAccR),
+          solid("wm_acc_reverb", "#fb7185", wmAccR),
+          dashed("target attr", "rgba(96,165,250,0.65)", attrT),
+          dashed("target wm", "rgba(52,211,153,0.65)", wmT),
+        ]);
+
+        // Extra charts (repurpose old CRC/bits slots)
+        const predClean = probes.map(p => maybeNumber(p.pred_clean_rate));
+        const pMean = probes.map(p => maybeNumber(p.p_clean_mean));
+        setDatasets(charts.crc, probeLabels, [
+             solid("pred_clean_rate", "#94a3b8", predClean),
+             solid("p_clean_mean", "#fbbf24", pMean),
+        ]);
+
+        setDatasets(charts.bits, probeLabels, [
+             solid("attr_acc", "#60a5fa", attrAcc),
+             solid("wm_acc", "#34d399", wmAcc),
         ]);
 
         // Loss charts
         const s1 = epochs.filter(e => e.stage === "s1");
         setDatasets(charts.s1, s1.map(e => `e${e.epoch}`), [
           solid("loss", "#cbd5e1", s1.map(e => maybeNumber(e.loss))),
-          solid("loss_window", "#60a5fa", s1.map(e => maybeNumber(e.loss_window))),
-          solid("loss_clip", "#c084fc", s1.map(e => maybeNumber(e.loss_clip))),
+          solid("loss_win_ce", "#60a5fa", s1.map(e => maybeNumber(e.loss_win_ce))),
+          solid("loss_clip_ce", "#c084fc", s1.map(e => maybeNumber(e.loss_clip_ce))),
         ]);
 
         const s1b = epochs.filter(e => e.stage === "s1b" || e.stage === "s1b_post");
         setDatasets(charts.s1b, s1b.map(e => `${e.stage}/e${e.epoch}`), [
           solid("loss", "#cbd5e1", s1b.map(e => maybeNumber(e.loss))),
-          solid("loss_msg_bits", "#60a5fa", s1b.map(e => maybeNumber(e.loss_msg_bits))),
-          solid("loss_model_ce", "#34d399", s1b.map(e => maybeNumber(e.loss_model_ce))),
-          solid("loss_version_ce", "#fbbf24", s1b.map(e => maybeNumber(e.loss_version_ce))),
-          solid("loss_neg_preamble", "#fb7185", s1b.map(e => maybeNumber(e.loss_neg_preamble))),
         ]);
 
-        const s2 = epochs.filter(e => e.stage === "s2");
-        setDatasets(charts.s2, s2.map(e => `e${e.epoch}`), [
+        const s2 = epochs.filter(e => e.stage === "s2_encoder" || e.stage === "s3_finetune");
+        setDatasets(charts.s2, s2.map(e => `${e.stage}/e${e.epoch}`), [
           solid("loss", "#cbd5e1", s2.map(e => maybeNumber(e.loss))),
-          solid("loss_det", "#60a5fa", s2.map(e => maybeNumber(e.loss_det))),
-          solid("loss_aux", "#c084fc", s2.map(e => maybeNumber(e.loss_aux))),
-          solid("loss_msg", "#34d399", s2.map(e => maybeNumber(e.loss_msg))),
-          solid("loss_model_ce", "#fbbf24", s2.map(e => maybeNumber(e.loss_model_ce))),
-          solid("loss_version_ce", "#fb7185", s2.map(e => maybeNumber(e.loss_version_ce))),
+          solid("loss_attr", "#60a5fa", s2.map(e => maybeNumber(e.loss_attr))),
+          solid("loss_clean", "#94a3b8", s2.map(e => maybeNumber(e.loss_clean))),
           solid("loss_qual", "rgba(255,255,255,0.70)", s2.map(e => maybeNumber(e.loss_qual))),
+          solid("loss_budget", "#ef4444", s2.map(e => maybeNumber(e.loss_budget))),
         ]);
 
-        // Confusion matrices
-        makeMatrix(document.getElementById("matrix_model"), latestProbe ? latestProbe.model_confusion : null, "true ", "pred ");
-        makeMatrix(document.getElementById("matrix_version"), latestProbe ? latestProbe.version_confusion : null, "true ", "pred ");
+        const s2bud = epochs.filter(e => e.stage === "s2" || e.stage === "s2_encoder" || e.stage === "s3_finetune");
+        setDatasets(charts.budget, s2bud.map(e => `e${e.epoch}`), [
+             solid("loss_budget", "#ef4444", s2bud.map(e => maybeNumber(e.loss_budget))),
+             dashed("target (0.0)", "rgba(255,255,255,0.3)", s2bud.map(_ => 0.0))
+        ]);
+
+        // Confusion matrix (multiclass)
+        makeMatrix(document.getElementById("matrix_model"), latestProbe ? latestProbe.confusion : null, "true ", "pred ");
+        makeMatrix(document.getElementById("matrix_version"), null, "true ", "pred ");
 
         // Recent events table
         const rows = [];
@@ -822,6 +827,7 @@ def _make_single_log_app(log_path: Path):
         for (const e of recent.reverse()) {
           const dt = e.ts ? new Date(e.ts*1000).toLocaleTimeString() : "—";
           const tpr = (e.type === "probe") ? (e.tpr_at_fpr_1pct !== undefined ? e.tpr_at_fpr_1pct : e.tpr_at_fpr_1pct_reverb) : null;
+          const wmAccEv = (e.type === "probe") ? e.wm_acc : null;
           rows.push(`<tr>
             <td class="mono">${dt}</td>
             <td>${e.type || ""}</td>
@@ -831,8 +837,9 @@ def _make_single_log_app(log_path: Path):
             <td class="mono">${e.mini_auc !== undefined ? fmt(e.mini_auc) : ""}</td>
             <td class="mono">${e.mini_auc_reverb !== undefined ? fmt(e.mini_auc_reverb) : ""}</td>
             <td class="mono">${tpr !== null && tpr !== undefined ? fmt(tpr) : ""}</td>
-            <td class="mono">${e.model_id_acc_cls !== undefined ? fmt(e.model_id_acc_cls) : ""}</td>
-            <td class="mono">${e.version_acc_cls !== undefined ? fmt(e.version_acc_cls) : ""}</td>
+            <td class="mono">${wmAccEv !== null && wmAccEv !== undefined ? fmt(wmAccEv) : ""}</td>
+            <td class="mono">${e.attr_acc !== undefined ? fmt(e.attr_acc) : ""}</td>
+            <td class="mono">${e.wm_acc !== undefined ? fmt(e.wm_acc) : ""}</td>
           </tr>`);
         }
         document.getElementById("eventsTable").innerHTML = rows.join("");
@@ -970,14 +977,21 @@ def _summarize_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     latest_probe = probes[-1] if probes else None
 
     best_probe = None
-    best_key = "payload_exact_acc_cls"
     best_val = None
-    for p in probes:
-        v = p.get(best_key)
-        if isinstance(v, (int, float)):
-            if best_val is None or float(v) > float(best_val):
-                best_val = float(v)
-                best_probe = p
+    best_key_candidates = ["wm_acc", "attr_acc", "tpr_at_fpr_1pct", "mini_auc"]
+    best_key = None
+    for k in best_key_candidates:
+        if any(isinstance(p.get(k), (int, float)) for p in probes):
+            best_key = k
+            break
+
+    if best_key is not None:
+        for p in probes:
+            v = p.get(best_key)
+            if isinstance(v, (int, float)):
+                if best_val is None or float(v) > float(best_val):
+                    best_val = float(v)
+                    best_probe = p
 
     return {
         "meta": meta,
@@ -1050,7 +1064,7 @@ def _render_run_report_md(*, sess: dict[str, Any], summary: dict[str, Any]) -> s
         lines.append("")
 
     if best_probe:
-        lines.append("## Best probe (by `payload_exact_acc_cls`)")
+        lines.append("## Best probe (by `wm_acc`)")
         lines.append(f"- `stage`: `{fmt(best_probe.get('stage'))}`")
         lines.append(f"- `epoch`: `{fmt(best_probe.get('epoch'))}`")
         for k in (
@@ -1058,13 +1072,12 @@ def _render_run_report_md(*, sess: dict[str, Any], summary: dict[str, Any]) -> s
             "tpr_at_fpr_1pct",
             "mini_auc_reverb",
             "tpr_at_fpr_1pct_reverb",
-            "preamble_pos_avg",
-            "preamble_neg_avg",
-            "model_id_acc_cls",
-            "version_acc_cls",
-            "pair_acc_cls",
-            "payload_exact_acc_cls",
-            "payload_exact_acc_cls_cond_1pct",
+            "attr_acc",
+            "wm_acc",
+            "attr_acc_reverb",
+            "wm_acc_reverb",
+            "p_clean_pos_mean",
+            "p_clean_neg_mean",
         ):
             if k in best_probe:
                 lines.append(metric_line(k, best_probe))
@@ -1077,12 +1090,10 @@ def _render_run_report_md(*, sess: dict[str, Any], summary: dict[str, Any]) -> s
         for k in (
             "mini_auc",
             "tpr_at_fpr_1pct",
-            "preamble_neg_avg",
-            "model_id_acc_cls",
-            "version_acc_cls",
-            "pair_acc_cls",
-            "payload_exact_acc_cls",
-            "payload_exact_acc_cls_cond_1pct",
+            "attr_acc",
+            "wm_acc",
+            "p_clean_pos_mean",
+            "p_clean_neg_mean",
         ):
             if k in latest_probe:
                 lines.append(metric_line(k, latest_probe))
@@ -1096,8 +1107,9 @@ def _render_run_report_md(*, sess: dict[str, Any], summary: dict[str, Any]) -> s
         lines.append("")
 
     lines.append("## Notes")
-    lines.append("- If `mini_auc` is high but attribution metrics are near chance, prioritize payload supervision (Stage 1B) and message-friendly Stage 2 settings (e.g. `stage2_payload_on_all`).")
-    lines.append("- Use the dashboard’s confusion matrices to spot class-collapse (predicting only a few IDs).")
+    lines.append("- If `mini_auc` is high but `wm_acc` is near chance, the system is doing presence-only. Increase encoder training (Stage 2) and consider Stage 3 finetuning.")
+    lines.append("- If clean clips are often misclassified, increase clean negatives and (in finetune) increase `neg_weight` so the decoder stays calibrated.")
+    lines.append("- Use the confusion matrix to spot class collapse (predicting only a few classes).")
     lines.append("")
     return "\n".join(lines)
 
@@ -1727,12 +1739,18 @@ def _make_controller_app(runs_dir: Path):
           <div class="grid3">
             <div class="chartWrap"><canvas id="chart_auc"></canvas></div>
             <div class="chartWrap"><canvas id="chart_tpr"></canvas></div>
-            <div class="chartWrap"><canvas id="chart_id"></canvas></div>
+            <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
+          </div>
+          <div style="height:10px"></div>
+          <div class="grid3">
+             <div class="chartWrap"><canvas id="chart_id"></canvas></div>
+             <div class="chartWrap"><canvas id="chart_crc"></canvas></div>
+             <div class="chartWrap"><canvas id="chart_bits"></canvas></div>
           </div>
           <div style="height:10px"></div>
           <div class="grid2">
-            <div class="chartWrap"><canvas id="chart_preamble"></canvas></div>
             <div class="chartWrap"><canvas id="chart_s2"></canvas></div>
+            <div class="chartWrap"><canvas id="chart_budget"></canvas></div>
           </div>
         </div>
 
@@ -1816,8 +1834,11 @@ def _make_controller_app(runs_dir: Path):
         charts.auc = lineChart("chart_auc", 0, 1);
         charts.tpr = lineChart("chart_tpr", 0, 1);
         charts.id = lineChart("chart_id", 0, 1);
+        charts.crc = lineChart("chart_crc", 0, 1);
+        charts.bits = lineChart("chart_bits", 0.7, 1.0);
         charts.preamble = lineChart("chart_preamble", 0, 1);
         charts.s2 = lineChart("chart_s2");
+        charts.budget = lineChart("chart_budget", 0, 0.5);
         charts._ready = true;
       }
 
@@ -2055,16 +2076,12 @@ def _make_controller_app(runs_dir: Path):
 	          const meta = events.find(e => e.type === "meta") || {};
 	          const targets = (meta && meta.targets) ? meta.targets : {};
 	          const probes = events.filter(e => e.type === "probe");
-	          const s2 = events.filter(e => e.type === "epoch" && e.stage === "s2");
+	          const s2 = events.filter(e => e.type === "epoch" && (e.stage === "s2_encoder" || e.stage === "s3_finetune"));
 
 	          const latestProbe = probes.length ? probes[probes.length - 1] : null;
 	          if (latestProbe) {
-	            const mc = latestProbe.model_confusion;
-	            const vc = latestProbe.version_confusion;
-	            const mcCols = (mc && Array.isArray(mc) && Array.isArray(mc[0])) ? mc[0].length : 0;
-	            const vcCols = (vc && Array.isArray(vc) && Array.isArray(vc[0])) ? vc[0].length : 0;
-	            makeMatrix("matrixModel", mc, { lastColName: (mcCols === 9 || mcCols === (mc.length + 1)) ? "UNK" : null });
-	            makeMatrix("matrixVersion", vc, { lastColName: (vcCols === 17 || vcCols === (vc.length + 1)) ? "UNK" : null });
+	            makeMatrix("matrixModel", latestProbe.confusion, { lastColName: null });
+	            document.getElementById("matrixVersion").textContent = "—";
 	          } else {
 	            document.getElementById("matrixModel").textContent = "—";
 	            document.getElementById("matrixVersion").textContent = "—";
@@ -2093,44 +2110,48 @@ def _make_controller_app(runs_dir: Path):
 	            dashed("target tpr (reverb)", "rgba(251,191,36,0.35)", tprRT),
 	          ]);
 
-	          const model = probes.map(p => p.model_id_acc_cls ?? null);
-	          const ver = probes.map(p => p.version_acc_cls ?? null);
-	          const pair = probes.map(p => p.pair_acc_cls ?? null);
-	          const exact = probes.map(p => p.payload_exact_acc_cls ?? null);
-	          const exactCond = probes.map(p => p.payload_exact_acc_cls_cond_1pct ?? null);
-	          const modelT = labels.map(_ => (targets.model_id_acc_cls !== undefined ? targets.model_id_acc_cls : 0.60));
-	          const verT = labels.map(_ => (targets.version_acc_cls !== undefined ? targets.version_acc_cls : 0.60));
-	          const pairT = labels.map(_ => (targets.pair_acc_cls !== undefined ? targets.pair_acc_cls : 0.30));
-	          const exactT = labels.map(_ => (targets.payload_exact_acc_cls !== undefined ? targets.payload_exact_acc_cls : 0.30));
-	          const exactCondT = labels.map(_ => (targets.payload_exact_acc_cls_cond_1pct !== undefined ? targets.payload_exact_acc_cls_cond_1pct : 0.30));
-	          const chanceModel = labels.map(_ => 1/8);
-	          const chanceVer = labels.map(_ => 1/16);
-	          const chanceExact = labels.map(_ => 1/(8*16));
+	          const attr = probes.map(p => p.attr_acc ?? null);
+	          const wm = probes.map(p => p.wm_acc ?? null);
+	          const attrR = probes.map(p => p.attr_acc_reverb ?? null);
+	          const wmR = probes.map(p => p.wm_acc_reverb ?? null);
 	          setDatasets(charts.id, labels, [
-	            solid("model_id_acc_cls", "#60a5fa", model),
-	            solid("version_acc_cls", "#fbbf24", ver),
-	            solid("pair_acc_cls", "#34d399", pair),
-	            solid("payload_exact_acc_cls", "rgba(255,255,255,0.85)", exact),
-	            solid("payload_exact_acc_cls_cond_1pct", "rgba(255,255,255,0.55)", exactCond),
-	            dashed("target model", "rgba(96,165,250,0.35)", modelT),
-	            dashed("target ver", "rgba(251,191,36,0.35)", verT),
-	            dashed("target pair", "rgba(52,211,153,0.35)", pairT),
-	            dashed("target exact", "rgba(255,255,255,0.25)", exactT),
-	            dashed("target exact (cond)", "rgba(255,255,255,0.18)", exactCondT),
-	            dashed("chance model", "rgba(96,165,250,0.18)", chanceModel),
-	            dashed("chance ver", "rgba(251,191,36,0.18)", chanceVer),
-	            dashed("chance exact", "rgba(255,255,255,0.12)", chanceExact),
+	            solid("attr_acc", "#60a5fa", attr),
+	            solid("wm_acc", "#34d399", wm),
+	            solid("attr_acc_reverb", "#c084fc", attrR),
+	            solid("wm_acc_reverb", "#fb7185", wmR),
 	          ]);
 
-	          const prePos = probes.map(p => p.preamble_pos_avg ?? null);
-	          const preNeg = probes.map(p => p.preamble_neg_avg ?? null);
-	          setDatasets(charts.preamble, labels, [ solid("preamble_pos_avg", "#34d399", prePos), solid("preamble_neg_avg", "#fb7185", preNeg), dashed("random≈0.5", "rgba(255,255,255,0.35)", labels.map(_ => 0.5)) ]);
+	          const predClean = probes.map(p => p.pred_clean_rate ?? null);
+	          const pCleanMean = probes.map(p => p.p_clean_mean ?? null);
+	          setDatasets(charts.crc, labels, [
+	               solid("pred_clean_rate", "#94a3b8", predClean),
+	               solid("p_clean_mean", "#fbbf24", pCleanMean),
+	          ]);
+	          setDatasets(charts.bits, labels, [
+	               solid("attr_acc", "#60a5fa", attr),
+	               solid("wm_acc", "#34d399", wm),
+	          ]);
 
-	          const s2labels = s2.map(e => `e${e.epoch}`);
+	          const pPos = probes.map(p => p.p_clean_pos_mean ?? null);
+	          const pNeg = probes.map(p => p.p_clean_neg_mean ?? null);
+	          setDatasets(charts.preamble, labels, [
+	            solid("p_clean_pos_mean", "#fb7185", pPos),
+	            solid("p_clean_neg_mean", "#34d399", pNeg),
+	          ]);
+
+	          const s2labels = s2.map(e => `${e.stage}/e${e.epoch}`);
 	          setDatasets(charts.s2, s2labels, [
 	            solid("loss", "#cbd5e1", s2.map(e => e.loss ?? null)),
-	            solid("loss_det", "#60a5fa", s2.map(e => e.loss_det ?? null)),
-	            solid("loss_pair_ce", "#34d399", s2.map(e => e.loss_pair_ce ?? null)),
+	            solid("loss_attr", "#60a5fa", s2.map(e => e.loss_attr ?? null)),
+	            solid("loss_clean", "#94a3b8", s2.map(e => e.loss_clean ?? null)),
+	            solid("loss_qual", "#fbbf24", s2.map(e => e.loss_qual ?? null)),
+	            solid("loss_budget", "#ef4444", s2.map(e => e.loss_budget ?? null)),
+	          ]);
+
+	          // Budget chart
+	          setDatasets(charts.budget, s2labels, [
+	             solid("loss_budget", "#ef4444", s2.map(e => e.loss_budget ?? null)),
+	             dashed("target (0.0)", "rgba(255,255,255,0.3)", s2labels.map(_ => 0.0))
 	          ]);
 
 		          const outR = await api(`/api/sessions/${id}/stdout?tail=120`);
@@ -2226,27 +2247,24 @@ def _make_controller_app(runs_dir: Path):
     def _planned_epochs_from_meta_or_cmd(sess: dict[str, Any], meta: dict[str, Any]) -> dict[str, int]:
         cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
         cmd = sess.get("cmd") if isinstance(sess.get("cmd"), list) else []
-        keys = {
-            "s1": ("epochs_s1", "--epochs_s1"),
-            "s1b": ("epochs_s1b", "--epochs_s1b"),
-            "s2": ("epochs_s2", "--epochs_s2"),
-            "s1b_post": ("epochs_s1b_post", "--epochs_s1b_post"),
-        }
-        out: dict[str, int] = {}
-        for stage, (cfg_k, flag) in keys.items():
-            v = cfg.get(cfg_k)
+        # Multiclass training emits stages: s1, s2_encoder, s3_finetune
+        # We fold legacy `epochs_s1b` into stage `s1` for backward-compatible configs.
+        def _read_int(cfg_key: str, flag: str) -> int:
+            v = cfg.get(cfg_key)
             if isinstance(v, (int, float)):
-                out[stage] = int(v)
-                continue
+                return int(v)
             raw = _extract_flag_value(cmd, flag)
             if raw is None:
-                out[stage] = 0
-                continue
+                return 0
             try:
-                out[stage] = int(float(raw))
+                return int(float(raw))
             except Exception:
-                out[stage] = 0
-        return out
+                return 0
+
+        s1 = _read_int("epochs_s1", "--epochs_s1") + _read_int("epochs_s1b", "--epochs_s1b")
+        s2 = _read_int("epochs_s2", "--epochs_s2")
+        s3 = _read_int("epochs_s1b_post", "--epochs_s1b_post")
+        return {"s1": int(s1), "s2_encoder": int(s2), "s3_finetune": int(s3)}
 
     def _num_clips_from_meta_or_cmd(sess: dict[str, Any], meta: dict[str, Any]) -> int:
         cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
@@ -2363,7 +2381,7 @@ def _make_controller_app(runs_dir: Path):
                 current_stage = str(last_epoch.get("stage"))
                 current_epoch = int(float(last_epoch.get("epoch")))
 
-        stage_order = ["s1", "s1b", "s2", "s1b_post"]
+        stage_order = ["s1", "s2_encoder", "s3_finetune"]
         done_epochs = 0.0
         for st in stage_order:
             pe = int(planned.get(st, 0))
@@ -2383,9 +2401,9 @@ def _make_controller_app(runs_dir: Path):
                     runs_dir=runs_dir,
                     num_clips=int(nclips),
                     epochs_s1=int(planned.get("s1", 0)),
-                    epochs_s1b=int(planned.get("s1b", 0)),
-                    epochs_s2=int(planned.get("s2", 0)),
-                    epochs_s1b_post=int(planned.get("s1b_post", 0)),
+                    epochs_s1b=0,
+                    epochs_s2=int(planned.get("s2_encoder", 0)),
+                    epochs_s1b_post=int(planned.get("s3_finetune", 0)),
                 )
                 if est and isinstance(est.get("total_seconds"), (int, float)):
                     est_total = float(est["total_seconds"])

@@ -5,6 +5,9 @@ Goal: Verify detection learning on REAL SPEECH (System Outputs) with Alpha=0.1.
 Target: AUC > 0.95, Stage 2 Prob > 0.85.
 
 Data Source: Scans `outputs/` for .wav files (TTS outputs) to build the dataset.
+
+LEGACY NOTE:
+This script targets the old bit-payload pipeline and decoder outputs that no longer exist.
 """
 import torch
 import numpy as np

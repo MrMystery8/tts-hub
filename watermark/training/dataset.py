@@ -1,23 +1,18 @@
 """
 Watermark Dataset Module
 
-Handles loading audio, on-the-fly watermarking, and message generation.
+Handles loading audio and producing multiclass attribution labels.
 Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 5.1.
 """
 import json
 import torch
 import torch.nn.functional as F
-import torchaudio
 from torch.utils.data import Dataset
 from pathlib import Path
 from typing import Dict, List, TYPE_CHECKING
-import random
 
 from watermark.config import SAMPLE_RATE, SEGMENT_SAMPLES
-from watermark.config import N_MODELS, N_VERSIONS
-
-if TYPE_CHECKING:
-    from watermark.models.codec import MessageCodec
+from watermark.config import CLASS_CLEAN, N_MODELS
 
 
 from watermark.utils.io import load_audio
@@ -28,12 +23,12 @@ class WatermarkDataset(Dataset):
     Now uses robust load_audio for canonical (1, T) format.
     """
     
-    def __init__(self, manifest_path: str, codec: 'MessageCodec', training: bool = True):
+    def __init__(self, manifest_path: str, *, training: bool = True, n_models: int = N_MODELS):
         with open(manifest_path, 'r') as f:
             self.samples = json.load(f)
         
-        self.codec = codec
         self.training = training
+        self.n_models = int(n_models)
     
     def __len__(self) -> int:
         return len(self.samples)
@@ -66,44 +61,34 @@ class WatermarkDataset(Dataset):
             audio = F.pad(audio, (0, SEGMENT_SAMPLES - T))
         
 
-        
-        # Metadata parsing
+        # Metadata parsing (for logging/debug; class label drives training)
         raw_model_id = item.get("model_id", None)
         raw_version = item.get("version", None)
         model_id = int(raw_model_id) if raw_model_id is not None else -1
         version = int(raw_version) if raw_version is not None else -1
         has_watermark = float(item.get("has_watermark", 0))
-        has_labels = (model_id >= 0) and (version >= 0)
-        
-        # Generate MESSAGE tensor on-the-fly
-        # Even if clean (has_watermark=0), we generate a message so tensors have constant shape.
-        # Loss will ignore message for negative samples if implemented correctly.
-        if has_labels:
-            message = self.codec.encode(model_id, version).float()
+
+        # Multiclass attribution label:
+        # - class 0: clean / not watermarked
+        # - class 1..K: model_id 0..K-1
+        #
+        # For simplicity and correctness, we require that any watermarked sample has a valid model_id.
+        # Version is treated as external metadata (not embedded in the watermark in multiclass mode).
+        if has_watermark >= 0.5:
+            if model_id < 0:
+                raise ValueError(f"manifest has watermarked sample without model_id: idx={idx} path={path}")
+            if not (0 <= model_id < self.n_models):
+                raise ValueError(f"model_id out of range: idx={idx} model_id={model_id} n_models={self.n_models}")
+            y_class = int(model_id) + 1
         else:
-            # IMPORTANT (attribution footgun):
-            # If a manifest contains unlabeled positives and we always map them to a constant
-            # default (0,0), any training path that accidentally supervises on these targets
-            # can collapse into "presence-only + constant identity".
-            #
-            # Keep message shape fixed, but avoid a constant payload for unlabeled watermarked
-            # items by sampling a balanced random ID pair.
-            if has_watermark >= 0.5:
-                rid = random.randrange(int(N_MODELS))
-                rver = random.randrange(int(N_VERSIONS))
-                message = self.codec.encode(rid, rver).float()
-            else:
-                # For clean negatives this value is unused (decoder sees clean audio), but we
-                # still return a tensor for consistent collate.
-                message = self.codec.encode(0, 0).float()
-        
+            y_class = int(CLASS_CLEAN)
+
         return {
             "audio": audio,
             "has_watermark": torch.tensor(has_watermark, dtype=torch.float32),
             "model_id": torch.tensor(model_id, dtype=torch.long),
             "version": torch.tensor(version, dtype=torch.long),
-            "has_labels": torch.tensor(has_labels, dtype=torch.bool),
-            "message": message 
+            "y_class": torch.tensor(y_class, dtype=torch.long),
         }
 
 

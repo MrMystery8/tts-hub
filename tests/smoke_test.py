@@ -83,21 +83,21 @@ class TestEngineeringContracts(unittest.TestCase):
     def test_encoder_contract(self):
         """Test OverlapAddEncoder preserves strict length (no rounding errors)."""
         from watermark.models.encoder import WatermarkEncoder, OverlapAddEncoder
-        from watermark.config import MSG_BITS
+        from watermark.config import N_CLASSES
         
-        base = WatermarkEncoder(msg_bits=MSG_BITS)
+        base = WatermarkEncoder(num_classes=N_CLASSES)
         encoder = OverlapAddEncoder(base)
         
         # Test various lengths, including primes and awkward sizes
         lengths = [16000, 16001, 22050, 48000, 100] 
-        msg = torch.randint(0, 2, (1, MSG_BITS)).float()
+        class_id = torch.randint(0, N_CLASSES, (1,), dtype=torch.long)
         
         print("\nTesting Encoder Lengths...")
         for L in lengths:
             # (1, 1, L)
             audio = torch.randn(1, 1, L)
             with torch.no_grad():
-                out = encoder(audio, msg)
+                out = encoder(audio, class_id)
             
             self.assertEqual(out.shape[-1], L, f"Encoder changed length from {L} to {out.shape[-1]}")
             print(f"  -> L={L} Passed")

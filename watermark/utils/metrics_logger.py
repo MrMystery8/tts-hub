@@ -25,6 +25,16 @@ class JSONLMetricsLogger:
         self._fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._fh.flush()
 
+        # Check for external stop signal (STOP file in the same dir)
+        stop_file = self.path.parent / "STOP"
+        if stop_file.exists():
+            print(f"\n[MetricsLogger] STOP signal detected at {stop_file}. Exiting...")
+            try:
+                stop_file.unlink()
+            except Exception:
+                pass
+            raise KeyboardInterrupt("Stop signal received from dashboard.")
+
     def close(self) -> None:
         self._fh.close()
 

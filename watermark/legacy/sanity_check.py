@@ -6,6 +6,9 @@ Runs a complete lifecycle test:
 2. Train Stage 1 (Detection) -> Stage 1B (Payload) -> Stage 2 (Encoder).
 3. Evaluate on a held-out test set using the FULL Decision Rule.
 4. Report metrics (Accuracy, TPR, etc).
+
+LEGACY NOTE:
+This script targets the old bit-payload pipeline and is not maintained under multiclass attribution.
 """
 import torch
 import numpy as np

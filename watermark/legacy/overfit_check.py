@@ -8,6 +8,9 @@ Strategy:
 3. Stronger Embed: Increase alpha range.
 4. Monitoring: Log TRAINING AUC per epoch to verify convergence.
 5. Verification: Check if AUC uses probabilities.
+
+LEGACY NOTE:
+This script targets the old bit-payload pipeline and is not maintained under multiclass attribution.
 """
 import torch
 import numpy as np

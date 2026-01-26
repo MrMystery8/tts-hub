@@ -4,6 +4,9 @@ Benchmark Script for Watermark System
 1. Generates synthetic dataset (simulating dataset creation cost).
 2. Runs short training epochs (simulating training cost).
 3. Extrapolates time for large scale datasets.
+
+LEGACY NOTE:
+This script targets the old bit-payload pipeline and is not maintained under multiclass attribution.
 """
 import time
 import torch

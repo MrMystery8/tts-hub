@@ -1,12 +1,12 @@
 """
-Stage 1: Detection Training
+Stage 1: Decoder Pretraining (Multiclass Attribution)
 
-Trains the decoder to distinguishing watermarked audio from clean audio.
-Implementation follows WATERMARK_PROJECT_PLAN.md v17, section 5.2.
+Trains the decoder to:
+1. Distinguish clean vs watermarked.
+2. Attribute watermarked audio to one of K model classes.
 
-CORRECTION (On-the-fly Embedding):
-Dataset yields CLEAN audio. We use a frozen encoder to watermark samples
-where `has_watermark=1` dynamically during training.
+Uses a FROZEN encoder (acting as a fixed synthetic watermark generator).
+Implementation follows multiclass attribution architecture.
 """
 import torch
 import torch.nn.functional as F
@@ -21,16 +21,21 @@ def train_stage1(
     device: torch.device,
     epochs: int = 20,
     lr: float = 3e-4,
+    class_weights: Optional[torch.Tensor] = None,
+    # legacy args (kept for call-site compatibility; unused in multiclass)
+    neg_weight: float = 0.0,
+    neg_preamble_target: float = 0.5,
+    unknown_ce_weight: float = 0.0,
     log_interval: int = 10,
     step_interval: int = 0,
     on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
 ):
     """
-    Stage 1: Detection Training.
-    - Dataset yields CLEAN audio.
-    - We apply watermark on-the-fly to samples where 'has_watermark'==1 using the FROZEN encoder.
-    - We train decoder to distinguish watermarked vs clean.
+    Stage 1: Decoder Pretraining.
+    - Dataset yields CLEAN audio segments.
+    - We apply watermark on-the-fly to samples where `y_class != 0` using the frozen encoder.
+    - We train decoder using cross-entropy on both window-level and clip-level logits.
     """
     decoder.train()
     encoder.eval() # Encoder is frozen in Stage 1
@@ -38,11 +43,11 @@ def train_stage1(
     opt = torch.optim.AdamW(decoder.parameters(), lr=lr)
     loss_hist = []
     
-    print(f"Starting Stage 1: Detection Training for {epochs} epochs")
+    print(f"Starting Stage 1: Decoder Pretraining for {epochs} epochs")
     
     for epoch in range(epochs):
         epoch_loss = 0.0
-        epoch_loss_window = 0.0
+        epoch_loss_win = 0.0
         epoch_loss_clip = 0.0
         batch_count = 0
         try:
@@ -52,51 +57,47 @@ def train_stage1(
 
         for i, batch in enumerate(loader):
             audio = batch["audio"].to(device)
-            has_wm = batch["has_watermark"].to(device)  # (B,)
-            message = batch["message"].to(device)
+            y_class = batch["y_class"].to(device)  # (B,)
+            has_wm = (y_class != 0).to(dtype=torch.float32)  # (B,)
             
-            # === On-the-fly Embedding ===
+            # === On-the-fly Embedding (positives only) ===
             with torch.no_grad():
-                # Fix dimensions: Encoder expects (B, 1, T). Audio is already (B, 1, T).
-                watermarked_audio = encoder(audio, message)
-                
-                # Mix: use watermarked where has_wm=1, else clean
-                mask = has_wm.view(-1, 1, 1)
-                input_audio = mask * watermarked_audio + (1 - mask) * audio
+                input_audio = audio
+                pos = (y_class != 0)
+                if pos.any():
+                    wm = encoder(audio[pos], y_class[pos])
+                    input_audio = input_audio.clone()
+                    input_audio[pos] = wm
                 input_audio = input_audio.detach()
             
             # Forward pass
-            # Decoder adapts to (B, 1, T) or (B, T)
             outputs = decoder(input_audio)
             
-            # 1. Per-window loss (stable gradients) - LOGITS
-            # (B, n_win)
-            window_logits = outputs["all_window_logits"]
-            n_win = window_logits.shape[1]
-            
-            # Expand clip label to all windows
-            has_wm_exp = has_wm.unsqueeze(1).expand(-1, n_win)
-            
-            loss_window = F.binary_cross_entropy_with_logits(
-                window_logits, has_wm_exp
+            # 1) Window-level CE
+            window_logits = outputs["all_window_class_logits"]  # (B, n_win, C)
+            B, n_win, _ = window_logits.shape
+            y_win = y_class.view(-1, 1).expand(-1, n_win).reshape(-1)
+            loss_win = F.cross_entropy(
+                window_logits.reshape(B * n_win, -1),
+                y_win,
+                weight=class_weights.to(device) if class_weights is not None else None,
             )
-            
-            # 2. Clip loss - FIX: Use LOGIT, not prob!
-            clip_logit = outputs["clip_detect_logit"]  # (B,)
-            
-            loss_clip = F.binary_cross_entropy_with_logits(
-                clip_logit, has_wm
+
+            # 2) Clip-level CE (top-k aggregated logits)
+            loss_clip = F.cross_entropy(
+                outputs["clip_class_logits"],
+                y_class,
+                weight=class_weights.to(device) if class_weights is not None else None,
             )
-            
-            # Combined loss
-            loss = loss_window + 0.5 * loss_clip
+
+            loss = loss_win + 0.5 * loss_clip
             
             opt.zero_grad()
             loss.backward()
             opt.step()
 
             epoch_loss += loss.item()
-            epoch_loss_window += loss_window.item()
+            epoch_loss_win += loss_win.item()
             epoch_loss_clip += loss_clip.item()
             batch_count += 1
 
@@ -109,8 +110,8 @@ def train_stage1(
                         "batch": int(i),
                         "n_batches": n_batches,
                         "loss": float(loss.item()),
-                        "loss_window": float(loss_window.item()),
-                        "loss_clip": float(loss_clip.item()),
+                        "loss_win_ce": float(loss_win.item()),
+                        "loss_clip_ce": float(loss_clip.item()),
                     }
                 )
             
@@ -118,10 +119,10 @@ def train_stage1(
                 print(f"Epoch {epoch+1}/{epochs} | Batch {i} | Loss: {loss.item():.4f}")
         
         avg_loss = epoch_loss / max(1, batch_count)
-        avg_loss_window = epoch_loss_window / max(1, batch_count)
+        avg_loss_win = epoch_loss_win / max(1, batch_count)
         avg_loss_clip = epoch_loss_clip / max(1, batch_count)
         loss_hist.append(avg_loss)
-        print(f"Epoch {epoch+1} Complete | Avg Loss: {avg_loss:.4f}")
+        print(f"Epoch {epoch+1} Complete | Avg Loss: {avg_loss:.4f} (WinCE: {avg_loss_win:.4f}, ClipCE: {avg_loss_clip:.4f})")
 
         if on_epoch_end is not None:
             on_epoch_end(
@@ -130,8 +131,8 @@ def train_stage1(
                     "stage": "s1",
                     "epoch": epoch + 1,
                     "loss": avg_loss,
-                    "loss_window": avg_loss_window,
-                    "loss_clip": avg_loss_clip,
+                    "loss_win_ce": avg_loss_win,
+                    "loss_clip_ce": avg_loss_clip,
                     "lr": opt.param_groups[0].get("lr"),
                 }
             )

@@ -7,7 +7,6 @@ import tempfile
 import json
 import os
 from pathlib import Path
-from watermark.models.codec import MessageCodec
 from watermark.training.dataset import WatermarkDataset, collate_fn
 from watermark.training.losses import CachedSTFTLoss
 
@@ -16,7 +15,7 @@ class TestWatermarkDataset:
     """Tests for WatermarkDataset."""
     
     def test_dataset_loading(self):
-        """Should load audio and generate message."""
+        """Should load audio and generate multiclass label."""
         # Create temp audio and manifest
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
@@ -43,17 +42,16 @@ class TestWatermarkDataset:
             with open(manifest_path, 'w') as f:
                 json.dump(manifest, f)
             
-            codec = MessageCodec()
-            dataset = WatermarkDataset(str(manifest_path), codec, training=True)
+            dataset = WatermarkDataset(str(manifest_path), training=True)
             
             item = dataset[0]
             assert "audio" in item
             # Canonical audio contract is (C, T) where C=1 (mono).
             assert item["audio"].shape == (1, 48000)  # Default segment samples
-            assert item["message"].shape == (32,)
             assert item["has_watermark"].item() == 1.0
             assert item["model_id"].item() == 3
             assert item["version"].item() == 2
+            assert item["y_class"].item() == 4  # class = model_id + 1
 
     def test_collate_fn(self):
         """Should stack items correctly."""

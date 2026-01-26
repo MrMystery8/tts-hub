@@ -1,117 +1,74 @@
 """
-Unit tests for WatermarkDecoder and related classes
+Unit tests for WatermarkDecoder (multiclass attribution) and related classes.
 """
+
 import torch
-import pytest
-from watermark.models.decoder import WatermarkDecoder, SlidingWindowDecoder, ClipDecisionRule
-from watermark.models.codec import MessageCodec
+
+from watermark.config import CLASS_CLEAN, N_CLASSES
+from watermark.models.decoder import AttributionDecisionRule, SlidingWindowDecoder, WatermarkDecoder
 
 
 class TestWatermarkDecoder:
-    """Tests for WatermarkDecoder."""
-    
     def test_forward_output_shapes(self):
-        """Forward pass should return dict with correct shapes."""
-        decoder = WatermarkDecoder(msg_bits=32, n_models=8)
-        # Batch size 4, 16000 samples (1 sec)
+        decoder = WatermarkDecoder(num_classes=N_CLASSES)
         audio = torch.randn(4, 16000)
         outputs = decoder(audio)
-        
-        assert outputs["detect_logit"].shape == (4, 1)
-        assert outputs["message_logits"].shape == (4, 32)
-        assert outputs["model_logits"].shape == (4, 9)  # 8 models + 1 unknown
-        assert outputs["detect_prob"].shape == (4, 1)
-        assert outputs["message_probs"].shape == (4, 32)
-    
-    def test_mps_safe_mel(self):
-        """Mel filterbank should be a buffer (not recreated)."""
-        decoder = WatermarkDecoder()
-        assert hasattr(decoder, 'mel_fb')
+
+        assert outputs["class_logits"].shape == (4, N_CLASSES)
+        assert outputs["class_probs"].shape == (4, N_CLASSES)
+        assert outputs["wm_prob"].shape == (4,)
+
+    def test_mps_safe_mel_buffers(self):
+        decoder = WatermarkDecoder(num_classes=N_CLASSES)
+        assert hasattr(decoder, "mel_fb")
         assert isinstance(decoder.mel_fb, torch.Tensor)
-        assert hasattr(decoder, 'stft_window')
+        assert hasattr(decoder, "stft_window")
 
 
 class TestSlidingWindowDecoder:
-    """Tests for SlidingWindowDecoder."""
-    
     def test_forward_long_audio(self):
-        """Should handle audio longer than window."""
-        base_decoder = WatermarkDecoder()
-        decoder = SlidingWindowDecoder(base_decoder, window=16000, hop_ratio=0.5)
-        
-        # 3 seconds audio (approx 5 windows: 0, 0.5, 1, 1.5, 2)
+        base = WatermarkDecoder(num_classes=N_CLASSES)
+        decoder = SlidingWindowDecoder(base, window=16000, hop_ratio=0.5)
         audio = torch.randn(2, 48000)
         outputs = decoder(audio)
-        
-        # Check window splitting
+
         assert outputs["n_windows"] == 5
-        assert outputs["all_window_probs"].shape == (2, 5)
-        assert outputs["all_message_probs"].shape == (2, 5, 32)
-        
-        # Check aggregation
-        assert outputs["clip_detect_prob"].shape == (2,)
-        assert outputs["clip_detect_logit"].shape == (2,)
-    
+        assert outputs["all_window_class_logits"].shape == (2, 5, N_CLASSES)
+        assert outputs["all_window_class_probs"].shape == (2, 5, N_CLASSES)
+        assert outputs["all_window_wm_probs"].shape == (2, 5)
+
+        assert outputs["clip_class_logits"].shape == (2, N_CLASSES)
+        assert outputs["clip_class_probs"].shape == (2, N_CLASSES)
+        assert outputs["clip_wm_prob"].shape == (2,)
+
     def test_forward_short_audio(self):
-        """Should handle audio shorter than window (via padding)."""
-        base_decoder = WatermarkDecoder()
-        decoder = SlidingWindowDecoder(base_decoder, window=16000)
-        
-        # 0.5 seconds audio
+        base = WatermarkDecoder(num_classes=N_CLASSES)
+        decoder = SlidingWindowDecoder(base, window=16000)
         audio = torch.randn(2, 8000)
         outputs = decoder(audio)
-        
-        # Should be padded to 1 window
         assert outputs["n_windows"] == 1
-        assert outputs["all_window_probs"].shape == (2, 1)
+        assert outputs["all_window_wm_probs"].shape == (2, 1)
 
 
-class TestClipDecisionRule:
-    """Tests for decision logic."""
-    
+class TestAttributionDecisionRule:
     def test_decision_positive(self):
-        """Should detect positive if windows are confident."""
-        rule = ClipDecisionRule(detect_threshold=0.8, preamble_min=15)
-        codec = MessageCodec()
-        
-        # Construct fake outputs for a single clip
-        # 3 windows, all confident
-        n_win = 3
-        
-        # High detection prob
-        clip_prob = 0.95
-        win_probs = torch.tensor([0.9, 0.95, 0.85])
-        
-        # Valid messages (model_id=3, version=1) with perfect preamble
-        valid_msg = codec.encode(3, 1)
-        msg_probs = valid_msg.unsqueeze(0).expand(n_win, -1)
-        
-        outputs = {
-            "clip_detect_prob": clip_prob,
-            "all_window_probs": win_probs,
-            "all_message_probs": msg_probs,
-        }
-        
-        result = rule.decide(outputs, codec)
-        assert result["positive"] is True
-        assert result["model_id"] == 3
-        assert result["vote_count"] == 3
-    
-    def test_decision_negative_low_clip_prob(self):
-        """Should be negative if clip probability is low."""
-        rule = ClipDecisionRule(detect_threshold=0.8)
-        codec = MessageCodec()
-        
-        outputs = {
-            "clip_detect_prob": 0.5,  # Too low
-             # These don't matter if clip prob is low
-            "all_window_probs": torch.tensor([0.9]),
-            "all_message_probs": torch.zeros(1, 32),
-        }
-        
-        result = rule.decide(outputs, codec)
-        assert result["positive"] is False
-        assert result["reason"] == "clip_detect_low"
+        rule = AttributionDecisionRule(wm_threshold=0.8)
+        # Pretend the model predicts class 3 with high confidence and low clean prob.
+        logits = torch.zeros(1, N_CLASSES)
+        logits[0, 3] = 5.0
+        outputs = {"clip_wm_prob": torch.tensor(0.95), "clip_class_logits": logits}
+        d = rule.decide(outputs)
+        assert d["positive"] is True
+        assert d["pred_class"] == 3
+        assert d["pred_model_id"] == 2  # class-1
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_decision_negative(self):
+        rule = AttributionDecisionRule(wm_threshold=0.8)
+        logits = torch.zeros(1, N_CLASSES)
+        logits[0, int(CLASS_CLEAN)] = 5.0
+        outputs = {"clip_wm_prob": torch.tensor(0.1), "clip_class_logits": logits}
+        d = rule.decide(outputs)
+        assert d["positive"] is False
+        assert d["pred_class"] == int(CLASS_CLEAN)
+        assert d["pred_model_id"] is None
+
