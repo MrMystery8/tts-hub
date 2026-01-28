@@ -48,3 +48,7 @@ mini_benchmark_data/
 mini_benchmark_*.json
 mini_benchmark_output.txt
 dev-clean.tar.gz
+
+# Medium benchmark artifacts
+medium_benchmark_data/
+medium_benchmark_*.json

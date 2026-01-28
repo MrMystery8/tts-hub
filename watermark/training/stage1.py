@@ -35,6 +35,7 @@ def train_stage1(
     step_interval: int = 0,
     on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
+    start_epoch: int = 0,
 ):
     """
     Stage 1: Decoder Pretraining.
@@ -52,7 +53,7 @@ def train_stage1(
     
     print(f"Starting Stage 1: Decoder Pretraining for {epochs} epochs")
     
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, start_epoch + epochs):
         epoch_loss = 0.0
         epoch_loss_detect = 0.0
         epoch_loss_id = 0.0

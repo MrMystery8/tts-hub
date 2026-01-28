@@ -29,9 +29,9 @@ Runs controller mode and stores runs under `outputs/dashboard_runs/`.
 
 `./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 512 --epochs_s1 6 --epochs_s2 10 --epochs_s1b_post 0 --reverb_prob 0.25 --detect_weight 6.0 --id_weight 0.1 --probe_clips 512 --probe_every 1 --probe_reverb_every 1`
 
-What “good” looks like:
+What "good" looks like:
 
-- `mini_auc` rises quickly (≥0.95 is typical when it’s working).
+- `mini_auc` rises quickly (≥0.95 is typical when it's working).
 - `tpr_at_fpr_1pct` rises and stays stable.
 - `thr_at_fpr_1pct` does not drift toward 1.0.
 - Under reverb (`*_reverb`), you should still see separation (AUC not collapsing).
@@ -47,6 +47,38 @@ What to look at during ID tuning:
 - `id_acc_pos` (ID head accuracy on positives; ignores detection threshold).
 - `confusion_attr` (K×K, watermarked-only confusion).
 - Keep an eye on detection regression (`tpr_at_fpr_1pct` and `*_reverb`).
+
+### Checkpointing and Model Reuse
+
+The quick smoke train now supports robust checkpointing with the following artifacts saved in each run directory:
+
+- `encoder.pt` / `decoder.pt` - Always saved (best model weights for easy reuse)
+- `config.json` - Full CLI arguments and derived settings
+- `manifest.json` - Self-contained manifest copy (copied from source)
+- `checkpoints/` directory containing:
+  - `last.pt` - Crash-safe checkpoint (overwritten each save interval)
+  - `best.pt` - Best model based on chosen metric
+  - `best_meta.json` - Best checkpoint metadata (metric name/value/epoch)
+  - `last_meta.json` - Last checkpoint metadata (epoch/stage info)
+
+#### Checkpointing Options
+
+Additional CLI arguments for checkpointing control:
+
+- `--ckpt_dir <path>` - Directory to save checkpoints (default: `<out>/checkpoints`)
+- `--save_last` / `--no_save_last` - Enable/disable saving last checkpoint (default: True)
+- `--save_best` / `--no_save_best` - Enable/disable saving best checkpoint (default: True)
+- `--best_metric <name>` - Metric to use for best checkpoint (default: auto-select)
+- `--best_mode {max,min}` - Maximize/minimize best metric (default: max)
+- `--save_every <N>` - Save last checkpoint every N epochs (0 to save every epoch, default: 1)
+- `--resume <path>` - Resume from checkpoint path
+
+#### Default Best Metric Selection
+
+- If doing detection-first (S1/S2): prefers `tpr_at_fpr_1pct_reverb` if available, else `tpr_at_fpr_1pct`
+- If doing ID finetune (S3): prefers `id_acc_pos` (with detection guardrail to prevent threshold collapse)
+
+The `encoder.pt` and `decoder.pt` files in the run directory always contain the best performing model weights, making it easy to continue training or deploy models.
 
 ## How to interpret the confusion matrices
 

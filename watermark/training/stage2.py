@@ -116,6 +116,7 @@ def train_stage2(
     unknown_ce_weight: float = 1.0,
     neg_weight: float = 1.0,
     stage2_payload_on_all: bool = False,
+    start_epoch: int = 0,
 ):
     """
     Stage 2: Encoder Training (or Stage 3: Finetuning).
@@ -163,7 +164,7 @@ def train_stage2(
         params += list(decoder.parameters())
     opt = torch.optim.AdamW(params, lr=lr)
 
-    for epoch in range(int(epochs)):
+    for epoch in range(start_epoch, start_epoch + int(epochs)):
         epoch_loss = 0.0
         epoch_stats: dict[str, float] = {"loss_detect": 0.0, "loss_id": 0.0, "loss_qual": 0.0, "loss_budget": 0.0}
         if finetune_mode:

@@ -1824,6 +1824,7 @@ def _make_controller_app(runs_dir: Path):
 	          <div class="row">
 	            <span class="badge" id="statusBadge">—</span>
 	            <button class="btn btnBad" id="stopBtn" disabled>Stop</button>
+            <button class="btn btnPrimary" id="resumeBtn" disabled>Resume</button>
             <a class="btn" id="dlBtn" href="#" target="_blank" rel="noreferrer">Download metrics</a>
           </div>
         </div>
@@ -2051,6 +2052,7 @@ def _make_controller_app(runs_dir: Path):
         document.getElementById("cmdShown").textContent = selected.cmd ? selected.cmd.join(" ") : "";
         document.getElementById("statusBadge").innerHTML = `${dot(statusCls(selected.status))}<b>${selected.status || "—"}</b>`;
         document.getElementById("stopBtn").disabled = (selected.status !== "running");
+        document.getElementById("resumeBtn").disabled = (selected.status === "running" || selected.status === "created");
         document.getElementById("dlBtn").href = `/api/sessions/${id}/download/metrics`;
         await refreshSelected();
         await refreshSessions();
@@ -2151,6 +2153,18 @@ def _make_controller_app(runs_dir: Path):
         await selectSession(sess.id);
       }
 
+      async function resumeSelected() {
+        if (!selected) return;
+        try {
+          const r = await api(`/api/sessions/${selected.id}/resume`, { method:"POST" });
+          const sess = await r.json();
+          await refreshSessions();
+          await selectSession(sess.id);
+        } catch (e) {
+          alert("Failed to resume: " + e.message);
+        }
+      }
+
 	      async function runPasted() {
 	        const command = document.getElementById("rawCmd").value || "";
 	        const name = document.getElementById("name").value || null;
@@ -2190,7 +2204,8 @@ def _make_controller_app(runs_dir: Path):
 	          const sessR = await api(`/api/sessions/${id}`);
 	          selected = await sessR.json();
 	          document.getElementById("statusBadge").innerHTML = `${dot(statusCls(selected.status))}<b>${selected.status || "—"}</b>`;
-	          document.getElementById("stopBtn").disabled = (selected.status !== "running");
+          document.getElementById("stopBtn").disabled = (selected.status !== "running");
+          document.getElementById("resumeBtn").disabled = (selected.status === "running" || selected.status === "created");
 
 		          try {
 		            const etaR = await api(`/api/sessions/${id}/eta`);
@@ -2315,6 +2330,7 @@ def _make_controller_app(runs_dir: Path):
       document.getElementById("runRawBtn").addEventListener("click", () => runPasted());
       document.getElementById("attachBtn").addEventListener("click", () => attachLog());
       document.getElementById("stopBtn").addEventListener("click", () => stopSelected());
+      document.getElementById("resumeBtn").addEventListener("click", () => resumeSelected());
       document.getElementById("kind").addEventListener("change", updateFormVisibility);
 
       refreshSessions();
@@ -2910,6 +2926,105 @@ def _make_controller_app(runs_dir: Path):
 
             threading.Thread(target=_escalate, daemon=True).start()
         return {"ok": True}
+
+    @app.post("/api/sessions/{sid}/resume")
+    def resume(sid: str):
+        sess = load_sessions().get(sid)
+        if not sess:
+            raise HTTPException(status_code=404, detail="session not found")
+        
+        # Determine checkpoint path
+        rd = Path(sess["run_dir"])
+        ckpt = rd / "checkpoints" / "last.pt"
+        if not ckpt.exists():
+            raise HTTPException(status_code=400, detail=f"No checkpoint found at {ckpt}")
+            
+        # Construct new command
+        old_cmd = sess.get("cmd") or []
+        if not old_cmd:
+            raise HTTPException(status_code=400, detail="Original command not found")
+            
+        new_cmd = []
+        skip_next = False
+        # Copy args but filter out old resume
+        for i, token in enumerate(old_cmd):
+            if skip_next:
+                skip_next = False
+                continue
+            if token == "--resume":
+                skip_next = True
+                continue
+            if token.startswith("--resume="):
+                continue
+            new_cmd.append(token)
+            
+        # Verify the command is for our known scripts (sanity check)
+        is_valid = False
+        for token in new_cmd:
+            if "watermark.scripts" in token:
+                is_valid = True
+                break
+        if not is_valid:
+             raise HTTPException(status_code=400, detail="Cannot resume unidentified script type")
+
+        # Append new resume flag
+        new_cmd.extend(["--resume", str(ckpt.resolve())])
+        
+        # Create new session
+        new_sid = f"{int(time.time())}_{secrets.token_hex(3)}"
+        new_sdir = (runs_dir / new_sid).resolve()
+        new_sdir.mkdir(parents=True, exist_ok=True)
+        metrics_path = new_sdir / "metrics.jsonl"
+        stdout_path = new_sdir / "stdout.log"
+        
+        # We need to update the output paths in the command if they were explicit
+        # But _parse_pasted_command logic in create_session usually handles this by appending.
+        # Here we are working with the raw list.
+        # Strategy: filter out --out / --output / --log_metrics and re-append correctly
+        final_cmd = []
+        skip_next = False
+        for token in new_cmd:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"--out", "--output", "--log_metrics"}:
+                skip_next = True
+                continue
+            if any(token.startswith(p) for p in ["--out=", "--output=", "--log_metrics="]):
+                continue
+            final_cmd.append(token)
+            
+        # Re-add our managed paths
+        # Detect kind to know which flag to use
+        kind = sess.get("kind", "unknown")
+        if kind == "quick_voice_smoke_train":
+             final_cmd.extend(["--log_metrics", str(metrics_path), "--out", str(new_sdir)])
+        else:
+             final_cmd.extend(["--log_metrics", str(metrics_path), "--output", str(new_sdir)])
+
+        new_sess = {
+            "id": new_sid,
+            "kind": kind,
+            "name": f"Resume {sess.get('name') or sid}",
+            "created_ts": time.time(),
+            "status": "created",
+            "run_dir": str(new_sdir),
+            "metrics_path": str(metrics_path),
+            "stdout_path": str(stdout_path),
+            "cmd": final_cmd,
+            "pid": None,
+            "returncode": None,
+        }
+        save_session(new_sess)
+        try:
+            start_process(new_sess)
+        except Exception as e:
+            new_sess["status"] = "failed"
+            new_sess["error"] = str(e)
+            save_session(new_sess)
+            raise HTTPException(status_code=500, detail=str(e))
+            
+        return {"id": new_sid}
 
     @app.get("/api/sessions/{sid}/metrics")
     def metrics(sid: str, tail: int = Query(5000, ge=200, le=200000)):

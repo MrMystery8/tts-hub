@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from watermark.models.encoder import OverlapAddEncoder, WatermarkEncoder
 from watermark.training.dataset import WatermarkDataset, collate_fn
 from watermark.training.stage1 import train_stage1
 from watermark.training.stage2 import train_stage2
+from watermark.utils.checkpointing import CheckpointManager
 from watermark.utils.metrics_logger import JSONLMetricsLogger
 
 
@@ -115,6 +117,17 @@ def main() -> int:
         help="Freeze detect head during finetune to reduce detect/ID interference",
     )
 
+    # Checkpointing options
+    parser.add_argument("--ckpt_dir", type=str, default=None, help="Directory to save checkpoints (default: <out>/checkpoints)")
+    parser.add_argument("--save_last", action="store_true", default=True, help="Save last checkpoint (default: True)")
+    parser.add_argument("--no_save_last", dest="save_last", action="store_false", help="Disable saving last checkpoint")
+    parser.add_argument("--save_best", action="store_true", default=True, help="Save best checkpoint (default: True)")
+    parser.add_argument("--no_save_best", dest="save_best", action="store_false", help="Disable saving best checkpoint")
+    parser.add_argument("--best_metric", type=str, default=None, help="Metric to use for best checkpoint (default: auto-select)")
+    parser.add_argument("--best_mode", type=str, choices=["min", "max"], default="max", help="Minimize or maximize best metric (default: max)")
+    parser.add_argument("--save_every", type=int, default=1, help="Save last checkpoint every N epochs (0 to save every epoch)")
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
+
     args = parser.parse_args()
 
     print(f"[QuickVoice] Using device: {DEVICE}")
@@ -152,6 +165,12 @@ def main() -> int:
                 selected.append(rng.choice(audio_files))
         manifest_path = build_manifest(selected, out_dir)
 
+    # Compute schedule EARLY (needed for default best_metric)
+    epochs_s1_total = int(args.epochs_s1) + max(0, int(args.epochs_s1b))
+    epochs_s2 = int(args.epochs_s2)
+    epochs_s3 = int(args.epochs_s1b_post)
+    print(f"[QuickVoice] Schedule: s1={epochs_s1_total}, s2_encoder={epochs_s2}, s3_finetune={epochs_s3}")
+
     # Models
     encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
     decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
@@ -170,6 +189,32 @@ def main() -> int:
         decoder.load_state_dict(state, strict=True)
         print(f"[QuickVoice] Loaded decoder weights: {p}")
 
+    # Checkpoint manager
+    ckpt_manager = CheckpointManager(
+        run_dir=out_dir,
+        save_last=args.save_last,
+        save_best=args.save_best,
+        best_metric=args.best_metric or CheckpointManager.get_default_best_metric(
+            epochs_s1=epochs_s1_total, epochs_s2=epochs_s2, epochs_s1b_post=epochs_s3
+        ),
+        best_mode=args.best_mode,
+        save_every=args.save_every,
+        ckpt_dir=args.ckpt_dir,
+    )
+
+    # Save config.json and copy manifest for self-contained run directory
+    config_path = out_dir / "config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(vars(args), f, indent=2)
+
+    # Copy manifest to run directory if it exists and is not already in the right place
+    if manifest_path.exists():
+        import shutil
+        dest_manifest = out_dir / "manifest.json"
+        # Only copy if source and destination are different files
+        if manifest_path.resolve() != dest_manifest.resolve():
+            shutil.copy2(manifest_path, dest_manifest)
+
     # Data
     dataset = WatermarkDataset(str(manifest_path), training=True)
     loader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
@@ -187,10 +232,18 @@ def main() -> int:
     def log_event(logger: JSONLMetricsLogger, event: dict) -> None:
         logger.log(event)
 
-    def maybe_probe(logger: JSONLMetricsLogger, stage: str, epoch: int) -> None:
-        if int(epoch) % int(args.probe_every) != 0 and int(epoch) != 1:
-            return
-        reverb = (int(epoch) % int(args.probe_reverb_every) == 0)
+    def maybe_probe(logger: JSONLMetricsLogger, stage: str, epoch: int) -> dict | None:
+        # Fix: Handle probe_every=0 to disable probing
+        pe = int(args.probe_every)
+        if pe <= 0:
+            return None
+        if epoch != 1 and (epoch % pe) != 0:
+            return None
+
+        # Fix: Handle probe_reverb_every=0 to avoid ZeroDivisionError
+        pr = int(args.probe_reverb_every)
+        reverb = (pr > 0 and (epoch % pr) == 0)
+
         metrics = compute_probe_metrics(
             probe_items,
             encoder=encoder,
@@ -199,12 +252,98 @@ def main() -> int:
             compute_reverb=bool(reverb),
         )
         log_event(logger, {"type": "probe", "stage": stage, "epoch": int(epoch), **metrics})
+        return metrics
 
-    # For backward compatibility: fold epochs_s1b into Stage 1
-    epochs_s1_total = int(args.epochs_s1) + max(0, int(args.epochs_s1b))
-    epochs_s2 = int(args.epochs_s2)
-    epochs_s3 = int(args.epochs_s1b_post)
-    print(f"[QuickVoice] Schedule: s1={epochs_s1_total}, s2_encoder={epochs_s2}, s3_finetune={epochs_s3}")
+    def handle_epoch_end_s1(e):
+        log_event(mlog, e)
+        metrics = maybe_probe(mlog, "s1", int(e["epoch"]))
+        ckpt_manager.save_last(
+            encoder=encoder,
+            decoder=decoder,
+            stage="s1",
+            epoch=int(e["epoch"]),
+            args=vars(args)
+        )
+        if metrics is not None:
+            ckpt_manager.maybe_save_best(
+                encoder=encoder,
+                decoder=decoder,
+                stage="s1",
+                epoch=int(e["epoch"]),
+                probe_metrics=metrics,
+                args=vars(args)
+            )
+
+    def handle_epoch_end_s2(e):
+        log_event(mlog, e)
+        metrics = maybe_probe(mlog, "s2_encoder", int(e["epoch"]))
+        ckpt_manager.save_last(
+            encoder=encoder,
+            decoder=decoder,
+            stage="s2_encoder",
+            epoch=int(e["epoch"]),
+            args=vars(args)
+        )
+        if metrics is not None:
+            ckpt_manager.maybe_save_best(
+                encoder=encoder,
+                decoder=decoder,
+                stage="s2_encoder",
+                epoch=int(e["epoch"]),
+                probe_metrics=metrics,
+                args=vars(args)
+            )
+
+    def handle_epoch_end_s3(e):
+        log_event(mlog, e)
+        metrics = maybe_probe(mlog, "s3_finetune", int(e["epoch"]))
+        ckpt_manager.save_last(
+            encoder=encoder,
+            decoder=decoder,
+            stage="s3_finetune",
+            epoch=int(e["epoch"]),
+            args=vars(args)
+        )
+        if metrics is not None:
+            ckpt_manager.maybe_save_best(
+                encoder=encoder,
+                decoder=decoder,
+                stage="s3_finetune",
+                epoch=int(e["epoch"]),
+                probe_metrics=metrics,
+                args=vars(args)
+            )
+
+    # Resume from checkpoint if specified
+    start_epoch_s1 = 0
+    start_epoch_s2 = 0
+    start_epoch_s3 = 0
+
+    if args.resume:
+        resume_path = Path(args.resume).expanduser().resolve()
+        print(f"[QuickVoice] Resuming from checkpoint: {resume_path}")
+        ckpt_data = ckpt_manager.resume_from_checkpoint(resume_path, encoder, decoder)
+
+        # Stage-aware resume: determine which stage to resume from
+        resumed_stage = ckpt_data.get("stage", "s1")
+        resumed_epoch = ckpt_data.get("epoch", 0)
+
+        if resumed_stage == "s1":
+            start_epoch_s1 = resumed_epoch + 1
+            print(f"[QuickVoice] Resumed from Stage 1, epoch {start_epoch_s1}")
+        elif resumed_stage == "s2_encoder":
+            start_epoch_s1 = epochs_s1_total  # skip stage 1 entirely
+            start_epoch_s2 = resumed_epoch + 1
+            print(f"[QuickVoice] Resumed from Stage 2, epoch {start_epoch_s2}")
+        elif resumed_stage == "s3_finetune":
+            start_epoch_s1 = epochs_s1_total  # skip stage 1
+            start_epoch_s2 = epochs_s2        # skip stage 2
+            start_epoch_s3 = resumed_epoch + 1
+            print(f"[QuickVoice] Resumed from Stage 3, epoch {start_epoch_s3}")
+        else:
+            # Default to s1 if stage is unknown
+            start_epoch_s1 = resumed_epoch + 1
+            print(f"[QuickVoice] Resumed from epoch {start_epoch_s1} (unknown stage, defaulting to s1)")
 
     with JSONLMetricsLogger(metrics_path) as mlog:
         mlog.log(
@@ -220,7 +359,7 @@ def main() -> int:
         )
 
         if epochs_s1_total > 0:
-            print("\n[Stage 1] Decoder pretraining (multiclass)")
+            print(f"\n[Stage 1] Decoder pretraining (multiclass), starting from epoch {start_epoch_s1}")
             train_stage1(
                 decoder,
                 encoder,
@@ -229,12 +368,13 @@ def main() -> int:
                 epochs=epochs_s1_total,
                 detect_weight=float(args.detect_weight),
                 id_weight=float(args.id_weight),
-                on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
-                on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s1", int(e["epoch"]))),
+                on_step=lambda e: log_event(mlog, e) if int(args.log_steps_every) > 0 and int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
+                on_epoch_end=handle_epoch_end_s1,
+                start_epoch=start_epoch_s1,
             )
 
         if epochs_s2 > 0:
-            print("\n[Stage 2] Encoder training (decoder frozen)")
+            print(f"\n[Stage 2] Encoder training (decoder frozen), starting from epoch {start_epoch_s2}")
             train_stage2(
                 encoder,
                 decoder,
@@ -244,13 +384,14 @@ def main() -> int:
                 reverb_prob=float(args.reverb_prob),
                 detect_weight=float(args.detect_weight),
                 id_weight=float(args.id_weight),
-                on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
-                on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s2_encoder", int(e["epoch"]))),
+                on_step=lambda e: log_event(mlog, e) if int(args.log_steps_every) > 0 and int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
+                on_epoch_end=handle_epoch_end_s2,
                 finetune_mode=False,
+                start_epoch=start_epoch_s2,
             )
 
         if epochs_s3 > 0:
-            print("\n[Stage 3] Finetuning (encoder + decoder)")
+            print(f"\n[Stage 3] Finetuning (encoder + decoder), starting from epoch {start_epoch_s3}")
             train_stage2(
                 encoder,
                 decoder,
@@ -263,14 +404,27 @@ def main() -> int:
                 detect_weight=float(args.detect_weight),
                 id_weight=float(args.id_weight),
                 freeze_detect_head=bool(args.freeze_detect_head_in_s3),
-                on_step=lambda e: log_event(mlog, e) if int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
-                on_epoch_end=lambda e: (log_event(mlog, e), maybe_probe(mlog, "s3_finetune", int(e["epoch"]))),
+                on_step=lambda e: log_event(mlog, e) if int(args.log_steps_every) > 0 and int(e.get("batch", 0)) % int(args.log_steps_every) == 0 else None,
+                on_epoch_end=handle_epoch_end_s3,
                 finetune_mode=True,
+                start_epoch=start_epoch_s3,
             )
 
+    # Save final models to run directory for compatibility (CPU-safe, atomic)
     print(f"\nSaved results to {out_dir}")
-    torch.save(encoder.state_dict(), out_dir / "encoder.pt")
-    torch.save(decoder.state_dict(), out_dir / "decoder.pt")
+    encoder_state_cpu = {k: v.detach().to("cpu") for k, v in encoder.state_dict().items()}
+    decoder_state_cpu = {k: v.detach().to("cpu") for k, v in decoder.state_dict().items()}
+
+    # Atomic save to prevent corruption on crash
+    temp_encoder_path = str(out_dir / "encoder.pt") + ".tmp"
+    temp_decoder_path = str(out_dir / "decoder.pt") + ".tmp"
+
+    torch.save(encoder_state_cpu, temp_encoder_path)
+    os.replace(temp_encoder_path, str(out_dir / "encoder.pt"))
+
+    torch.save(decoder_state_cpu, temp_decoder_path)
+    os.replace(temp_decoder_path, str(out_dir / "decoder.pt"))
+
     return 0
 
 
