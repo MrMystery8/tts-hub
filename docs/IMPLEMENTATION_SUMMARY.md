@@ -288,3 +288,34 @@ This confirms the wiring and process launch assumptions are correct.
 - “One-click” voice cache management for VoxCPM (list voices, create cache, etc.) is not implemented (only a “voice name” textbox exists).
 - No streaming HTTP audio endpoints are exposed yet (everything returns a finished file).
 - Concurrency is intentionally conservative: one generation at a time per model worker (safer for MPS / non-thread-safe inference).
+
+## 9) Watermark Module (Current Status)
+
+The provenance watermarking system (`watermark/`) is now fully functional and integrated.
+
+### 9.1 Architecture (Multiclass)
+- **Design:** Switched from legacy 32-bit payload to a simplified **(N+1)-class attribution** system (Clean + N Models).
+- **Detector:** Predicts `P(clean)` vs `P(watermarked)`.
+- **Identifier:** `K`-way classifier (via `id` head) to attribute audio to specific TTS models (IndexTTS, Chatterbox, etc.).
+- **Localization:** Uses a "watermarkness" score over time (`loc` head) to handle truncated or concatenated audio.
+
+### 9.2 Training Tools
+- **Quick Smoke Train (`watermark/scripts/quick_voice_smoke_train.py`):**
+  - The main training loop.
+  - Supports 3-stage training: Decoder Pretrain -> Encoder Train -> End-to-End Finetune.
+  - Handles on-the-fly dataset generation/augmentation (reverb, noise).
+  - **Smart Checkpointing:** Auto-saves "best" model, prioritizing robust (reverb) metrics and guarding against detector collapse.
+  
+- **Overnight Tuner (`watermark/scripts/overnight_tune_s1.py`):**
+  - Automates hyperparameter search for weight balancing (`detect_weight` vs `id_weight`).
+  - Uses a shared manifest for fair comparisons across trials.
+
+### 9.3 Visualization & Monitoring
+- **Live Dashboard (`watermark/scripts/live_dashboard.py`):**
+  - Real-time FastAPI + Chart.js dashboard.
+  - Visualizes Detection AUC, ID Accuracy, Separation, and Loss curves.
+  - Access at `http://localhost:8765` after launching.
+  
+### 9.4 Benchmarking
+- **Datasets:** Scripts to generate `mini_benchmark_data` (small, fast) and `medium_benchmark_data` (LibriSpeech subset).
+- **Evaluation:** Integrated probe steps during training ensure continuous evaluation against "unseen" data.

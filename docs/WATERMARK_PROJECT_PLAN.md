@@ -2,12 +2,13 @@
 
 ## Final Version (v17) — Comprehensive Standalone Reference
 
-> **Status**: Implemented in `watermark/` package; docs synced to hardened implementation; robust within stated threat model (benign/no-box transforms)
-> 
+> **Status**: Implemented in `watermark/` package; docs synced to hardened implementation; robust within stated threat model (benign/no-box transforms).
+> **New**: Live Dashboard (`watermark/scripts/live_dashboard.py`) and Overnight Tuner (`overnight_tune_s1.py`) added for operational efficiency.
+
 > This document consolidates **17 iterative refinements** based on extensive AI-assisted critique + benchmark hardening. It is designed to be **fully self-contained**: any AI or human reading this document should be able to understand and implement the complete system without additional context.
 
 > [!IMPORTANT]
-> **Source of truth**: The runnable reference implementation lives in `watermark/`. This document mirrors that implementation and explains the “why”; if any snippet ever drifts, treat the codebase as authoritative.
+> **Source of truth**: The runnable reference implementation lives in `watermark/`. This document mirrors that implementation and explains the "why"; if any snippet ever drifts, treat the codebase as authoritative.
 
 > [!NOTE]
 > **How to read this document**: Start with the Executive Summary, then Architecture Overview. The "Why" sections explain rationale. Complete implementation code is in Section 4. Training pipeline in Section 5. Lessons Learned (Section 7) documents pitfalls that were caught during design—**do not skip this section**.
@@ -42,6 +43,7 @@ A complete audio watermarking system trained from scratch:
 | Decision | Rationale | Alternatives Rejected |
 |----------|-----------|----------------------|
 | Train encoder from scratch | Stronger FYP claim than using pre-trained; full control over architecture | Use AudioSeal/WavMark pre-trained (weaker claim) |
+| Multiclass Attribution | Switched from 32-bit payload (CRC/ECC complex) to N-way classification (simpler, sufficient for "Which model made this?") | Bit-payload (param-heavy, harder to train reliably) |
 | FiLM conditioning | Message creates (γ, β) that modulate conv features—different messages produce different watermark shapes, not just amplitude scaling | Concatenate message to input (less expressive); Amplitude scaling only (trivially removable) |
 | Sliding window + voting | Robust to cropping and time-shift; works on arbitrary-length audio | Single-pass (fails on cropped audio); Fixed-length only (not practical) |
 | 2-stage training | Train decoder first (Stage 1), then encoder (Stage 2). Prevents collapse where encoder outputs zeros and decoder always predicts "watermarked" | Joint training from start (prone to collapse) |
@@ -57,6 +59,8 @@ A complete audio watermarking system trained from scratch:
 3. Dataset generation pipeline with codec precomputation
 4. Evaluation report with AUC, TPR@FPR, ViSQOL
 5. Integrated TTS Hub demo
+6. **Live Training Dashboard** (FastAPI/Chart.js) - Supports both step-level (real-time) and epoch-level aggregation.
+7. **Automated Hyperparameter Tuner** (S1 weights)
 
 ---
 

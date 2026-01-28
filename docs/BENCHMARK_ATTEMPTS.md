@@ -31,3 +31,11 @@ Evaluation in Attempt 12 reached the evaluation phase without "plumbing" crashes
 1. **Convergence**: AUC 0.46 in Attempt 12 suggests the model needs more data/epochs than the current "Mini-BM" configuration to show robust detection.
 2. **CPU Eval Speed**: Running evaluation on CPU is stable but slower; monitoring performance.
 
+## Conclusion (Stable State)
+The engineering hardening (Attempts 1-12) successfully stabilized the pipeline. The system now uses a strict `(B, 1, T)` contract and processes attacks safely on CPU.
+
+Current benchmarks are run using:
+- **Mini-Benchmark**: `watermark.scripts.quick_voice_smoke_train` (default)
+- **Medium Benchmark**: `tools/create_medium_benchmark.py` + `tools/create_medium_manifest.py`
+
+See **[docs/WATERMARK_RUNBOOK.md](docs/WATERMARK_RUNBOOK.md)** for the latest usage instructions.

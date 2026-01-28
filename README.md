@@ -71,13 +71,20 @@ pip install -r requirements.txt
 ```
 Access the UI at: `http://localhost:7860`
 
-### 4. Run Watermark Training (Upcoming)
+### 4. Run Watermark Training
 ```bash
-# Generate dataset
-python -m dataset.generate
-# Train classifier
-python -m watermark.train
+# Quick Smoke Train (Single Run)
+./.venv/bin/python -m watermark.scripts.quick_voice_smoke_train \
+    --source_dir mini_benchmark_data \
+    --epochs_s1 6
+
+# Overnight Tuner (Auto-Optimize Weights)
+./.venv/bin/python -m watermark.scripts.overnight_tune_s1 \
+    --source_dir mini_benchmark_data \
+    --out_root outputs/dashboard_runs/overnight_01
 ```
+
+For full details, see **[docs/WATERMARK_RUNBOOK.md](docs/WATERMARK_RUNBOOK.md)**.
 
 ---
 

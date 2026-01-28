@@ -50,6 +50,15 @@ What to look at during ID tuning:
 
 ### Checkpointing and Model Reuse
 
+### Best Checkpoint Logic
+The system automatically selects the "best" checkpoint based on the schedule:
+- **Detection Phase** (Stage 1/2): Defaults to `tpr_at_fpr_1pct`.
+- **Finetune Phase** (Stage 3): Defaults to `id_acc_pos` (ID accuracy).
+
+**Important Nuances:**
+1. **Reverb Priority**: If `reverb` probe metrics are available (e.g., `tpr_at_fpr_1pct_reverb`), the checkpoint manager **automatically prefers them** over clean metrics. This ensures "best" actually implies "robust".
+2. **Collapse Guardrail**: When optimizing for `id_acc_pos`, the system enforces a **hard guardrail**: it will REJECT a new "best" ID checkpoint if `tpr_at_fpr_1pct < 0.30`. This prevents saving a model that has excellent attribution but cannot detect the watermark at all.
+
 The quick smoke train now supports robust checkpointing with the following artifacts saved in each run directory:
 
 - `encoder.pt` / `decoder.pt` - Always saved (best model weights for easy reuse)
@@ -71,7 +80,9 @@ Additional CLI arguments for checkpointing control:
 - `--best_metric <name>` - Metric to use for best checkpoint (default: auto-select)
 - `--best_mode {max,min}` - Maximize/minimize best metric (default: max)
 - `--save_every <N>` - Save last checkpoint every N epochs (0 to save every epoch, default: 1)
-- `--resume <path>` - Resume from checkpoint path
+- `--save_every <N>` - Save last checkpoint every N epochs (0 to save every epoch, default: 1)
+- `--resume <path>` - Resume from checkpoint path (automatically detects stage and skips to correct epoch)
+- `--extend_to_epochs_s1 <N>` - When resuming Stage 1, extend training to this many total epochs (useful for "add more epochs" workflow)
 
 #### Default Best Metric Selection
 
@@ -99,6 +110,30 @@ Recommended sizes on MPS (rough guidance):
 - Medium (more stable): `--num_clips 2048`, `--probe_clips 1024`
 - Large (overnight-ish): `--num_clips 8192+`, `--probe_clips 2048`
 
+## Overnight Auto-Tuning (S1 Weights)
+
+For finding the best balance of `detect_weight`, `id_weight`, and `neg_weight` without manual babysitting, use the overnight tuner.
+
+### How it works
+- Generates a **shared manifest** so all trials use the exact same data split.
+- Runs **multiple phases** (A -> B -> C), promoting only the best performing trials.
+- Optimizes for a **Composite Score** (`TPR@1%FPR * ID_Accuracy`).
+- Respects a **Time Budget** (e.g., 7.5 hours).
+
+### Usage
+```bash
+# Run from root
+./.venv/bin/python -m watermark.scripts.overnight_tune_s1 \
+  --source_dir mini_benchmark_data \
+  --out_root outputs/dashboard_runs/overnight_tune_001 \
+  --max_hours 7.5 \
+  --num_initial 6
+```
+
+### Monitoring the Tuner
+The tuner creates a standard run directory for each trial (e.g., `trial_001_...`). You can point the dashboard at any specific trial's `metrics.jsonl` to see its progress, or simply tail the tuner logs.
+
+
 ## If detection improves in Stage 1 but regresses in Stage 2/3
 
 This is currently the most important failure mode seen in practice. Typical mitigations:
@@ -107,6 +142,35 @@ This is currently the most important failure mode seen in practice. Typical miti
 - Increase `detect_weight` during Stage 2.
 - Keep `id_weight` low until detection is stable.
 - In Stage 3, use `--freeze_detect_head_in_s3` and keep non-trivial `detect_weight` so detection doesn’t drift.
+
+
+## Benchmark Workflows
+
+### 1. Mini Benchmark (Default)
+The repo comes with a small committed dataset in `mini_benchmark_data/`. This is used by default if no other source is specified.
+- **Size**: ~500 clips
+- **Use case**: Quick smoke tests, development iteration.
+
+### 2. Medium Benchmark (LibriSpeech 100h Subset)
+For more robust evaluation, use the "Medium" benchmark derived from LibriSpeech `train-clean-100`.
+
+**Setup:**
+1. Download and extract the data (~20k clips):
+   ```bash
+   python tools/create_medium_benchmark.py
+   ```
+2. Generate the training manifest (balanced 50/50 watermark/clean):
+   ```bash
+   python tools/create_medium_manifest.py
+   ```
+   This creates `medium_benchmark_train.json` and `medium_benchmark_test.json`.
+
+**Running Training:**
+```bash
+./.venv/bin/python -m watermark.scripts.quick_voice_smoke_train \
+    --manifest medium_benchmark_train.json \
+    --epochs_s1 6 --epochs_s2 6
+```
 
 ## Local CLI smoke tests (engineering contract)
 
