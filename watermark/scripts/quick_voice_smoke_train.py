@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import random
+import numpy as np
 from pathlib import Path
 
 import torch
@@ -127,13 +128,28 @@ def main() -> int:
     parser.add_argument("--best_mode", type=str, choices=["min", "max"], default="max", help="Minimize or maximize best metric (default: max)")
     parser.add_argument("--save_every", type=int, default=1, help="Save last checkpoint every N epochs (0 to save every epoch)")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
+    parser.add_argument(
+        "--extend_to_epochs_s1",
+        type=int,
+        default=None,
+        help="If resuming Stage 1, extend training UNTIL this total epoch count is reached.",
+    )
 
     args = parser.parse_args()
 
     print(f"[QuickVoice] Using device: {DEVICE}")
     print(f"[QuickVoice] N_MODELS={N_MODELS} N_CLASSES={N_CLASSES}")
 
-    rng = random.Random(int(args.seed))
+    # Reproducibility
+    seed = int(args.seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    # MPS reproducibility if needed, but manual_seed usually covers it.
+    
+    rng = random.Random(seed)
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -251,6 +267,10 @@ def main() -> int:
             device=DEVICE,
             compute_reverb=bool(reverb),
         )
+        # Calculate composite score if available
+        if "tpr_at_fpr_1pct" in metrics and "id_acc_pos" in metrics:
+            metrics["composite_score"] = float(metrics["tpr_at_fpr_1pct"]) * float(metrics["id_acc_pos"])
+
         log_event(logger, {"type": "probe", "stage": stage, "epoch": int(epoch), **metrics})
         return metrics
 
@@ -329,8 +349,18 @@ def main() -> int:
         resumed_epoch = ckpt_data.get("epoch", 0)
 
         if resumed_stage == "s1":
-            start_epoch_s1 = resumed_epoch + 1
-            print(f"[QuickVoice] Resumed from Stage 1, epoch {start_epoch_s1}")
+            # Handle extend logic
+            if args.extend_to_epochs_s1 is not None:
+                target = int(args.extend_to_epochs_s1)
+                remaining = max(0, target - resumed_epoch)
+                epochs_s1_total = remaining  # Override total epochs to run
+                start_epoch_s1 = resumed_epoch
+                
+                # If we're already past the target, this will result in 0 epochs, which is correct
+                print(f"[QuickVoice] Extending Stage 1: resumed at {resumed_epoch}, target {target}, running {remaining} more epochs")
+            else:
+                start_epoch_s1 = resumed_epoch
+                print(f"[QuickVoice] Resumed from Stage 1, epoch {start_epoch_s1+1}") # Print +1 for user friendliness matching log
         elif resumed_stage == "s2_encoder":
             start_epoch_s1 = epochs_s1_total  # skip stage 1 entirely
             start_epoch_s2 = resumed_epoch + 1
@@ -344,6 +374,10 @@ def main() -> int:
             # Default to s1 if stage is unknown
             start_epoch_s1 = resumed_epoch + 1
             print(f"[QuickVoice] Resumed from epoch {start_epoch_s1} (unknown stage, defaulting to s1)")
+    
+    # Handle non-resume extend case (just override total)
+    elif args.extend_to_epochs_s1 is not None:
+         epochs_s1_total = int(args.extend_to_epochs_s1)
 
     with JSONLMetricsLogger(metrics_path) as mlog:
         mlog.log(

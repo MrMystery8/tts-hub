@@ -236,6 +236,7 @@ class CheckpointManager:
             "metric_name": self.best_metric,
             "metric_value": current_value,
             "global_step": global_step,
+            "probe_metrics": probe_metrics,
         }
         self._save_json_atomic(self.checkpoints_dir / "best_meta.json", meta)
 

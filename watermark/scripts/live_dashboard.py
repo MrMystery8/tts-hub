@@ -1405,6 +1405,7 @@ def _make_controller_app(runs_dir: Path):
         allow = {
             "watermark.scripts.quick_voice_smoke_train": "quick_voice_smoke_train",
             "watermark.scripts.train_full": "train_full",
+            "watermark.scripts.overnight_tune_s1": "overnight_tune_s1",
         }
         if module not in allow:
             raise ValueError(f"unsupported module: {module}")
@@ -2222,7 +2223,7 @@ def _make_controller_app(runs_dir: Path):
 	          const meta = events.find(e => e.type === "meta") || {};
 	          const targets = (meta && meta.targets) ? meta.targets : {};
 	          const probes = events.filter(e => e.type === "probe");
-	          const s2 = events.filter(e => e.type === "epoch" && (e.stage === "s2_encoder" || e.stage === "s3_finetune"));
+	          const s2 = events.filter(e => e.type === "epoch" && (e.stage === "s1" || e.stage === "s2_encoder" || e.stage === "s3_finetune"));
 
 	          const latestProbe = probes.length ? probes[probes.length - 1] : null;
 	          if (latestProbe) {
@@ -2548,46 +2549,96 @@ def _make_controller_app(runs_dir: Path):
             done_epochs += min(float(pe), max(0.0, de))
         progress = (float(done_epochs) / float(planned_total)) if planned_total > 0 else 0.0
 
+        # --- Robust ETA Logic ---
         est_total = None
         est_remaining = None
-        eta_text = f"Elapsed: {_fmt_dur(elapsed)}"
-        if sess.get("kind") == "quick_voice_smoke_train" and planned_total > 0:
-            nclips = _num_clips_from_meta_or_cmd(sess, meta)
-            try:
-                est = _estimate_seconds_for_quick_voice(
-                    runs_dir=runs_dir,
-                    num_clips=int(nclips),
-                    epochs_s1=int(planned.get("s1", 0)),
-                    epochs_s1b=0,
-                    epochs_s2=int(planned.get("s2_encoder", 0)),
-                    epochs_s1b_post=int(planned.get("s3_finetune", 0)),
-                )
-                if est and isinstance(est.get("total_seconds"), (int, float)):
-                    est_total = float(est["total_seconds"])
-                    est_remaining = max(0.0, est_total - elapsed)
-            except Exception:
-                pass
+        prog_text = "Progress: —"
+        prog_text_extra = ""
 
+        # Strategy 1: Time Budget (Overnight Tuner)
+        # This is the most robust method for budget-constrained runs.
+        cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+        if sess.get("kind") == "overnight_tune_s1":
+            # Tuner uses max_hours
+            max_hours = float(cfg.get("max_hours", 0))
+            if max_hours > 0:
+                est_total = max_hours * 3600.0
+                est_remaining = max(0.0, est_total - elapsed)
+                progress = min(1.0, elapsed / est_total)
+                prog_text = f"Progress: {progress*100:.1f}% (Budget: {max_hours}h)"
+
+        # Strategy 2: Epoch-based Extrapolation (Train runs)
+        # Fallback to historical heuristic if very early, otherwise use actual speed.
+        elif planned_total > 0 and (sess.get("kind") in ("quick_voice_smoke_train", "train_full")):
+            # 2a. Try Historical Heuristic first (good for t=0)
+            heuristic_total = None
+            if sess.get("kind") == "quick_voice_smoke_train":
+                nclips = _num_clips_from_meta_or_cmd(sess, meta)
+                try:
+                    est = _estimate_seconds_for_quick_voice(
+                        runs_dir=runs_dir,
+                        num_clips=int(nclips),
+                        epochs_s1=int(planned.get("s1", 0)),
+                        epochs_s1b=0,
+                        epochs_s2=int(planned.get("s2_encoder", 0)),
+                        epochs_s1b_post=int(planned.get("s3_finetune", 0)),
+                    )
+                    if est and isinstance(est.get("total_seconds"), (int, float)):
+                        heuristic_total = float(est["total_seconds"])
+                except Exception:
+                    pass
+
+            # 2b. Use Linear Extrapolation if we have meaningful progress (> 5% or > 2 mins)
+            # This self-corrects for hardware differences (MPS vs CPU vs CUDA).
+            extrapolated_total = None
+            if progress > 0.05 or elapsed > 120:
+                if done_epochs > 0:
+                    sec_per_epoch = elapsed / done_epochs
+                    extrapolated_total = sec_per_epoch * planned_total
+
+            # Decision: reliable extrapolation > heuristic > none
+            if extrapolated_total is not None:
+                est_total = extrapolated_total
+                prog_text_extra = " (live est)"
+            elif heuristic_total is not None:
+                est_total = heuristic_total
+                prog_text_extra = " (hist est)"
+            
+            if est_total is not None:
+                est_remaining = max(0.0, est_total - elapsed)
+
+        # Format Outputs
         if est_total is not None:
-            eta_text = f"ETA remaining: ~{_fmt_dur(est_remaining)} (est total ~{_fmt_dur(est_total)}) · elapsed {_fmt_dur(elapsed)}"
+            eta_text = f"ETA: ~{_fmt_dur(est_remaining)} left (total ~{_fmt_dur(est_total)}) · elapsed {_fmt_dur(elapsed)}"
         else:
             eta_text = f"Elapsed: {_fmt_dur(elapsed)}"
 
         if is_done:
             eta_text = f"Finished in {_fmt_dur(elapsed)}"
+            progress = 1.0
+            if sess.get("kind") == "overnight_tune_s1":
+                 prog_text = "Progress: Done (Budget Loop)"
+            elif planned_total > 0:
+                 prog_text = f"Progress: {planned_total}/{planned_total} epochs (100%)"
 
-        if current_stage and current_epoch is not None and planned_total > 0:
-            if current_batch is not None and current_n_batches is not None:
-                prog_text = (
-                    f"Progress: {current_stage} e{current_epoch} b{current_batch + 1}/{current_n_batches}"
-                    f" · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
-                )
+        # Standard Progress Text for Epoch Runs (if not overwritten by Tuner logic)
+        if sess.get("kind") != "overnight_tune_s1":
+            if current_stage and current_epoch is not None and planned_total > 0:
+                if current_batch is not None and current_n_batches is not None:
+                    prog_text = (
+                        f"Progress: {current_stage} e{current_epoch} b{current_batch + 1}/{current_n_batches}"
+                        f" · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
+                    )
+                else:
+                    prog_text = f"Progress: {current_stage} e{current_epoch} · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
+            elif planned_total > 0:
+                prog_text = f"Progress: epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
             else:
-                prog_text = f"Progress: {current_stage} e{current_epoch} · epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
-        elif planned_total > 0:
-            prog_text = f"Progress: epochs {done_epochs:.2f}/{planned_total} ({progress*100:.1f}%)"
-        else:
-            prog_text = "Progress: —"
+                prog_text = "Progress: —"
+        
+        # Append extra info tag
+        if prog_text_extra:
+             eta_text += prog_text_extra
 
         return {
             "elapsed_seconds": elapsed,
