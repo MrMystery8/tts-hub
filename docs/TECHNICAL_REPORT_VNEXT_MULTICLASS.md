@@ -443,6 +443,9 @@ Reported metrics (core):
   - `id_acc_pos`: ID accuracy on positives (ignores detection threshold; uses argmax over ID head)
   - `wm_acc`: “product-style” accuracy on positives, after thresholding
   - `attr_acc`: “product-style” accuracy over all clips, after thresholding
+- Imperceptibility / budget diagnostics (positives only):
+  - `wm_snr_db_mean`: mean SNR between carrier and encoded audio (higher is quieter)
+  - `wm_budget_ok_frac`: fraction meeting the configured budget target (see `BUDGET_TARGET_DB` in `watermark/config.py`)
 - Confusions:
   - `confusion`: full `(K+1)×(K+1)` confusion **after thresholding at FPR=1%**
   - `confusion_attr`: `K×K` confusion on **watermarked-only** subset (no clean row/col)
@@ -458,6 +461,7 @@ Important interpretation note:
 Optional reverb probe:
 
 - `*_reverb` variants are computed by applying the `reverb` attack to the already-encoded carrier and decoding again.
+- Additional attacks can be computed by passing `extra_attacks` into `compute_probe_metrics`, producing suffix keys like `tpr_at_fpr_1pct_resample_8k`.
 
 ---
 
@@ -513,6 +517,7 @@ What it does:
    - Stage 2: encoder train (epochs = `epochs_s2`)
    - Stage 3: finetune (epochs = `epochs_s1b_post`)
 5. Writes `metrics.jsonl` (append-only) for the live dashboard.
+6. Logs a final held-out `test_probe` (attack suite controlled by `--test_attacks`, default: `resample_8k,noise_white_20db`).
 
 Important notes:
 

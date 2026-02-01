@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from watermark.config import SAMPLE_RATE
+from watermark.config import BUDGET_TARGET_DB, SAMPLE_RATE
 from watermark.training.losses import CachedSTFTLoss, EnergyBudgetLoss, UncertaintyLossWrapper
 
 
@@ -137,7 +137,7 @@ def train_stage2(
 
     aug = DifferentiableAugmenter(device, reverb_prob=reverb_prob)
     stft_loss = CachedSTFTLoss().to(device)
-    budget_loss = EnergyBudgetLoss(target_db=-30.0, limit_type="hard").to(device)
+    budget_loss = EnergyBudgetLoss(target_db=float(BUDGET_TARGET_DB), limit_type="hard").to(device)
 
     loss_wrapper = UncertaintyLossWrapper(num_losses=(5 if finetune_mode else 4)).to(device)
 

@@ -350,17 +350,21 @@ def _make_single_log_app(log_path: Path):
 
         <div class="card" style="grid-column: span 12;">
           <h2>Recent Events</h2>
-          <div class="tiny">Last ~50 events (epoch + probe) from the log.</div>
+	          <div class="tiny">Last ~50 events (epoch + probe + test_probe + summary) from the log.</div>
           <div style="height: 8px;"></div>
           <div style="overflow-x:auto;">
             <table>
               <thead>
-                <tr>
-                  <th>time</th><th>type</th><th>stage</th><th>epoch</th>
-                  <th>loss</th><th>mini_auc</th><th>auc_reverb</th><th>tpr@1%fpr</th><th>probe_wm_acc</th><th>attr_acc</th><th>wm_acc</th>
-                </tr>
-              </thead>
-              <tbody id="eventsTable"></tbody>
+	                <tr>
+	                  <th>time</th><th>type</th><th>stage</th><th>epoch</th>
+	                  <th>loss</th><th>mini_auc</th><th>auc_reverb</th>
+	                  <th>tpr@1%fpr</th><th>tpr@1%fpr_r</th>
+	                  <th>id_acc_pos</th><th>id_acc_pos_r</th>
+	                  <th>snr_db</th><th>budget_ok</th>
+	                  <th>wm_acc</th>
+	                </tr>
+	              </thead>
+	              <tbody id="eventsTable"></tbody>
             </table>
           </div>
         </div>
@@ -375,56 +379,62 @@ def _make_single_log_app(log_path: Path):
     </div>
 
     <script>
-      const DEFAULT_TARGETS = {
-        mini_auc: 0.95,
-        mini_auc_reverb: 0.85,
-        tpr_at_fpr_1pct: 0.90,
-        tpr_at_fpr_1pct_reverb: 0.70,
-        attr_acc: 0.70,
-        wm_acc: 0.70,
-        attr_acc_reverb: 0.60,
-        wm_acc_reverb: 0.60,
-        id_acc_pos: 0.40,
-        wm_prob_loc_pos_mean: 0.70,
-        wm_prob_loc_neg_mean: 0.30,
-        p_clean_pos_mean: 0.30, // legacy calibration signal (derived)
-        p_clean_neg_mean: 0.90, // legacy calibration signal (derived)
-        loss_budget: 0.05,
-      };
+	      const DEFAULT_TARGETS = {
+	        mini_auc: 0.95,
+	        mini_auc_reverb: 0.85,
+	        tpr_at_fpr_1pct: 0.90,
+	        tpr_at_fpr_1pct_reverb: 0.70,
+	        attr_acc: 0.70,
+	        wm_acc: 0.70,
+	        attr_acc_reverb: 0.60,
+	        wm_acc_reverb: 0.60,
+	        id_acc_pos: 0.40,
+	        wm_snr_db_mean: 30.0,
+	        wm_budget_ok_frac: 0.80,
+	        wm_prob_loc_pos_mean: 0.70,
+	        wm_prob_loc_neg_mean: 0.30,
+	        p_clean_pos_mean: 0.30, // legacy calibration signal (derived)
+	        p_clean_neg_mean: 0.90, // legacy calibration signal (derived)
+	        loss_budget: 0.05,
+	      };
 
-      const DIRECTIONS = {
-        mini_auc: "gte",
-        mini_auc_reverb: "gte",
-        tpr_at_fpr_1pct: "gte",
-        tpr_at_fpr_1pct_reverb: "gte",
-        attr_acc: "gte",
-        wm_acc: "gte",
-        attr_acc_reverb: "gte",
-        wm_acc_reverb: "gte",
-        id_acc_pos: "gte",
-        wm_prob_loc_pos_mean: "gte",
-        wm_prob_loc_neg_mean: "lte",
-        p_clean_pos_mean: "lte",
-        p_clean_neg_mean: "gte",
-        loss_budget: "lte",
-      };
+	      const DIRECTIONS = {
+	        mini_auc: "gte",
+	        mini_auc_reverb: "gte",
+	        tpr_at_fpr_1pct: "gte",
+	        tpr_at_fpr_1pct_reverb: "gte",
+	        attr_acc: "gte",
+	        wm_acc: "gte",
+	        attr_acc_reverb: "gte",
+	        wm_acc_reverb: "gte",
+	        id_acc_pos: "gte",
+	        wm_snr_db_mean: "gte",
+	        wm_budget_ok_frac: "gte",
+	        wm_prob_loc_pos_mean: "gte",
+	        wm_prob_loc_neg_mean: "lte",
+	        p_clean_pos_mean: "lte",
+	        p_clean_neg_mean: "gte",
+	        loss_budget: "lte",
+	      };
 
-      const EXPLAIN = {
-        mini_auc: "AUC clean vs watermarked (0.5=random, 1.0=perfect). Higher is better.",
-        mini_auc_reverb: "AUC under reverb. Higher is better.",
-        tpr_at_fpr_1pct: "TPR when we allow only 1% false positives (strict). Higher is better.",
-        tpr_at_fpr_1pct_reverb: "Same strict operating point under reverb. Higher is better.",
-        attr_acc: "Overall multiclass accuracy across probe items (clean + model classes).",
-        wm_acc: "Accuracy on watermarked-only probe items (model attribution).",
-        attr_acc_reverb: "Overall accuracy under reverb attack.",
-        wm_acc_reverb: "Watermarked-only attribution under reverb attack.",
-        id_acc_pos: "ID-head accuracy on watermarked probe items (ignores detection threshold).",
-        wm_prob_loc_pos_mean: "Mean localization-pooled watermark score on watermarked probe items. Higher is better.",
-        wm_prob_loc_neg_mean: "Mean localization-pooled watermark score on clean probe items. Lower is better.",
-        p_clean_pos_mean: "Mean P(clean) on watermarked probe items (derived from class_probs). Lower is better.",
-        p_clean_neg_mean: "Mean P(clean) on clean probe items (derived from class_probs). Higher is better.",
-        loss_budget: "Penalty for exceeding energy budget (-30dB). Should be 0.0.",
-      };
+	      const EXPLAIN = {
+	        mini_auc: "AUC clean vs watermarked (0.5=random, 1.0=perfect). Higher is better.",
+	        mini_auc_reverb: "AUC under reverb. Higher is better.",
+	        tpr_at_fpr_1pct: "TPR when we allow only 1% false positives (strict). Higher is better.",
+	        tpr_at_fpr_1pct_reverb: "Same strict operating point under reverb. Higher is better.",
+	        attr_acc: "Overall multiclass accuracy across probe items (clean + model classes).",
+	        wm_acc: "Accuracy on watermarked-only probe items (model attribution).",
+	        attr_acc_reverb: "Overall accuracy under reverb attack.",
+	        wm_acc_reverb: "Watermarked-only attribution under reverb attack.",
+	        id_acc_pos: "ID-head accuracy on watermarked probe items (ignores detection threshold).",
+	        wm_snr_db_mean: "Mean watermark SNR in dB on positive probe items (higher is quieter).",
+	        wm_budget_ok_frac: "Fraction of positive probe items meeting the configured budget target (≈ SNR≥30dB when BUDGET_TARGET_DB=-30dB).",
+	        wm_prob_loc_pos_mean: "Mean localization-pooled watermark score on watermarked probe items. Higher is better.",
+	        wm_prob_loc_neg_mean: "Mean localization-pooled watermark score on clean probe items. Lower is better.",
+	        p_clean_pos_mean: "Mean P(clean) on watermarked probe items (derived from class_probs). Lower is better.",
+	        p_clean_neg_mean: "Mean P(clean) on clean probe items (derived from class_probs). Higher is better.",
+	        loss_budget: "Penalty for exceeding energy budget (-30dB). Should be 0.0.",
+	      };
 
       function fmt(x) {
         if (x === null || x === undefined) return "—";
@@ -602,8 +612,10 @@ def _make_single_log_app(log_path: Path):
         const targets = (meta && meta.targets) ? meta.targets : DEFAULT_TARGETS;
         const epochs = events.filter(e => e.type === "epoch");
         const probes = events.filter(e => e.type === "probe");
+        const testProbes = events.filter(e => e.type === "test_probe");
         const latestEpoch = epochs.length ? epochs[epochs.length - 1] : null;
         const latestProbe = probes.length ? probes[probes.length - 1] : null;
+        const latestTestProbe = testProbes.length ? testProbes[testProbes.length - 1] : null;
 
         // Header + file status
         document.getElementById("logPath").textContent = (meta && meta.metrics_path) ? meta.metrics_path : "metrics.jsonl";
@@ -637,12 +649,33 @@ def _make_single_log_app(log_path: Path):
           if (meta.out_dir) info.push(kvRow("out_dir", `<code>${meta.out_dir}</code>`));
           if (meta.output_dir) info.push(kvRow("output_dir", `<code>${meta.output_dir}</code>`));
           if (meta.manifest) info.push(kvRow("manifest", `<code>${meta.manifest}</code>`));
+          if (meta.manifest_train) info.push(kvRow("manifest_train", `<code>${meta.manifest_train}</code>`));
+          if (meta.manifest_val) info.push(kvRow("manifest_val", `<code>${meta.manifest_val}</code>`));
+          if (meta.manifest_test) info.push(kvRow("manifest_test", `<code>${meta.manifest_test}</code>`));
           if (meta.config && meta.config.num_clips !== undefined) info.push(kvRow("num_clips", fmt(meta.config.num_clips)));
+          if (meta.config && meta.config.train_frac !== undefined) info.push(kvRow("train_frac", fmt(meta.config.train_frac)));
+          if (meta.config && meta.config.val_frac !== undefined) info.push(kvRow("val_frac", fmt(meta.config.val_frac)));
+          if (meta.config && meta.config.test_frac !== undefined) info.push(kvRow("test_frac", fmt(meta.config.test_frac)));
+          if (meta.config && meta.config.split_seed !== undefined && meta.config.split_seed !== null) info.push(kvRow("split_seed", fmt(meta.config.split_seed)));
           if (meta.config && meta.config.probe_n !== undefined) info.push(kvRow("probe_n", fmt(meta.config.probe_n)));
           if (meta.config && meta.config.reverb_prob !== undefined) info.push(kvRow("reverb_prob", fmt(meta.config.reverb_prob)));
           if (meta.config && meta.config.model_ce_weight !== undefined) info.push(kvRow("model_ce_weight", fmt(meta.config.model_ce_weight)));
           if (meta.config && meta.config.version_ce_weight !== undefined) info.push(kvRow("version_ce_weight", fmt(meta.config.version_ce_weight)));
         }
+	        if (latestTestProbe) {
+	          if (latestTestProbe.mini_auc !== undefined) info.push(kvRow("test.mini_auc", fmt(latestTestProbe.mini_auc)));
+	          if (latestTestProbe.tpr_at_fpr_1pct !== undefined) info.push(kvRow("test.tpr_at_fpr_1pct", fmt(latestTestProbe.tpr_at_fpr_1pct)));
+	          if (latestTestProbe.tpr_at_fpr_1pct_reverb !== undefined) info.push(kvRow("test.tpr_at_fpr_1pct_reverb", fmt(latestTestProbe.tpr_at_fpr_1pct_reverb)));
+	          if (latestTestProbe.wm_acc !== undefined) info.push(kvRow("test.wm_acc", fmt(latestTestProbe.wm_acc)));
+	          if (latestTestProbe.id_acc_pos !== undefined) info.push(kvRow("test.id_acc_pos", fmt(latestTestProbe.id_acc_pos)));
+	          if (latestTestProbe.id_acc_pos_reverb !== undefined) info.push(kvRow("test.id_acc_pos_reverb", fmt(latestTestProbe.id_acc_pos_reverb)));
+	          if (latestTestProbe.wm_snr_db_mean !== undefined) info.push(kvRow("test.wm_snr_db_mean", fmt(latestTestProbe.wm_snr_db_mean)));
+	          if (latestTestProbe.wm_budget_ok_frac !== undefined) info.push(kvRow("test.wm_budget_ok_frac", fmt(latestTestProbe.wm_budget_ok_frac)));
+	          if (latestTestProbe.tpr_at_fpr_1pct_resample_8k !== undefined) info.push(kvRow("test.tpr_at_fpr_1pct_resample_8k", fmt(latestTestProbe.tpr_at_fpr_1pct_resample_8k)));
+	          if (latestTestProbe.id_acc_pos_resample_8k !== undefined) info.push(kvRow("test.id_acc_pos_resample_8k", fmt(latestTestProbe.id_acc_pos_resample_8k)));
+	          if (latestTestProbe.tpr_at_fpr_1pct_noise_white_20db !== undefined) info.push(kvRow("test.tpr_at_fpr_1pct_noise_white_20db", fmt(latestTestProbe.tpr_at_fpr_1pct_noise_white_20db)));
+	          if (latestTestProbe.id_acc_pos_noise_white_20db !== undefined) info.push(kvRow("test.id_acc_pos_noise_white_20db", fmt(latestTestProbe.id_acc_pos_noise_white_20db)));
+	        }
         if (latestEpoch) {
           info.push(kvRow("latest_loss", fmt(latestEpoch.loss)));
           if (latestEpoch.lr !== undefined) info.push(kvRow("lr", fmt(latestEpoch.lr)));
@@ -651,15 +684,17 @@ def _make_single_log_app(log_path: Path):
 
         // Health panel
         const hk = [];
-        const keys = [
-          "mini_auc",
-          "mini_auc_reverb",
-          "tpr_at_fpr_1pct",
-          "tpr_at_fpr_1pct_reverb",
-          "wm_prob_loc_pos_mean",
-          "wm_prob_loc_neg_mean",
-          "attr_acc",
-          "wm_acc",
+	        const keys = [
+	          "mini_auc",
+	          "mini_auc_reverb",
+	          "tpr_at_fpr_1pct",
+	          "tpr_at_fpr_1pct_reverb",
+	          "wm_snr_db_mean",
+	          "wm_budget_ok_frac",
+	          "wm_prob_loc_pos_mean",
+	          "wm_prob_loc_neg_mean",
+	          "attr_acc",
+	          "wm_acc",
           "id_acc_pos",
           "attr_acc_reverb",
           "wm_acc_reverb",
@@ -874,28 +909,35 @@ def _make_single_log_app(log_path: Path):
         );
         makeMatrix(document.getElementById("matrix_version"), null, "true ", "pred ");
 
-        // Recent events table
-        const rows = [];
-        const recent = events.slice(-50);
-        for (const e of recent.reverse()) {
-          const dt = e.ts ? new Date(e.ts*1000).toLocaleTimeString() : "—";
-          const tpr = (e.type === "probe") ? (e.tpr_at_fpr_1pct !== undefined ? e.tpr_at_fpr_1pct : e.tpr_at_fpr_1pct_reverb) : null;
-          const wmAccEv = (e.type === "probe") ? e.wm_acc : null;
-          rows.push(`<tr>
-            <td class="mono">${dt}</td>
-            <td>${e.type || ""}</td>
-            <td>${e.stage || ""}</td>
-            <td>${e.epoch !== undefined ? e.epoch : ""}</td>
-            <td class="mono">${e.loss !== undefined ? fmt(e.loss) : ""}</td>
-            <td class="mono">${e.mini_auc !== undefined ? fmt(e.mini_auc) : ""}</td>
-            <td class="mono">${e.mini_auc_reverb !== undefined ? fmt(e.mini_auc_reverb) : ""}</td>
-            <td class="mono">${tpr !== null && tpr !== undefined ? fmt(tpr) : ""}</td>
-            <td class="mono">${wmAccEv !== null && wmAccEv !== undefined ? fmt(wmAccEv) : ""}</td>
-            <td class="mono">${e.attr_acc !== undefined ? fmt(e.attr_acc) : ""}</td>
-            <td class="mono">${e.wm_acc !== undefined ? fmt(e.wm_acc) : ""}</td>
-          </tr>`);
-        }
-        document.getElementById("eventsTable").innerHTML = rows.join("");
+	        // Recent events table
+	        const rows = [];
+	        const recent = events.filter(e => (e.type === "epoch" || e.type === "probe" || e.type === "test_probe" || e.type === "summary")).slice(-50);
+	        for (const e of recent.reverse()) {
+	          const dt = e.ts ? new Date(e.ts*1000).toLocaleTimeString() : "—";
+	          const tpr = (e.tpr_at_fpr_1pct !== undefined) ? e.tpr_at_fpr_1pct : null;
+	          const tprR = (e.tpr_at_fpr_1pct_reverb !== undefined) ? e.tpr_at_fpr_1pct_reverb : null;
+	          const idp = (e.id_acc_pos !== undefined) ? e.id_acc_pos : null;
+	          const idpR = (e.id_acc_pos_reverb !== undefined) ? e.id_acc_pos_reverb : null;
+	          const snr = (e.wm_snr_db_mean !== undefined) ? e.wm_snr_db_mean : null;
+	          const bok = (e.wm_budget_ok_frac !== undefined) ? e.wm_budget_ok_frac : null;
+	          rows.push(`<tr>
+	            <td class="mono">${dt}</td>
+	            <td>${e.type || ""}</td>
+	            <td>${e.stage || ""}</td>
+	            <td>${e.epoch !== undefined ? e.epoch : ""}</td>
+	            <td class="mono">${e.loss !== undefined ? fmt(e.loss) : ""}</td>
+	            <td class="mono">${e.mini_auc !== undefined ? fmt(e.mini_auc) : ""}</td>
+	            <td class="mono">${e.mini_auc_reverb !== undefined ? fmt(e.mini_auc_reverb) : ""}</td>
+	            <td class="mono">${tpr !== null ? fmt(tpr) : ""}</td>
+	            <td class="mono">${tprR !== null ? fmt(tprR) : ""}</td>
+	            <td class="mono">${idp !== null ? fmt(idp) : ""}</td>
+	            <td class="mono">${idpR !== null ? fmt(idpR) : ""}</td>
+	            <td class="mono">${snr !== null ? fmt(snr) : ""}</td>
+	            <td class="mono">${bok !== null ? fmt(bok) : ""}</td>
+	            <td class="mono">${e.wm_acc !== undefined ? fmt(e.wm_acc) : ""}</td>
+	          </tr>`);
+	        }
+	        document.getElementById("eventsTable").innerHTML = rows.join("");
 
         // Decode report (best-effort)
         try {
@@ -1632,25 +1674,41 @@ def _make_controller_app(runs_dir: Path):
                 <div><label>load_decoder (optional)</label><input class="input" id="q_load_decoder" placeholder="e.g. outputs/.../decoder.pt" /></div>
               </div>
               <div style="height:10px"></div>
-	            <div class="grid2">
-	              <div><label>source_dir</label><input class="input" id="q_source_dir" value="mini_benchmark_data" /></div>
-	              <div><label>num_clips</label><input class="input" id="q_num_clips" value="512" /></div>
-	            </div>
+		            <div class="grid2">
+		              <div><label>source_dir</label><input class="input" id="q_source_dir" value="mini_benchmark_data" /></div>
+		              <div><label>num_clips</label><input class="input" id="q_num_clips" value="512" /></div>
+		            </div>
+		            <div style="height:10px"></div>
+                <div class="grid3">
+                  <div><label>train_frac</label><input class="input" id="q_train_frac" value="0.8" /></div>
+                  <div><label>val_frac</label><input class="input" id="q_val_frac" value="0.1" /></div>
+                  <div><label>test_frac</label><input class="input" id="q_test_frac" value="0.1" /></div>
+                </div>
+                <div style="height:10px"></div>
+                <div class="grid2">
+                  <div><label>split_seed (optional)</label><input class="input" id="q_split_seed" placeholder="defaults to seed" /></div>
+                  <div class="tiny">Split is by unique <code>path</code> (no leakage). Probes use <b>val</b>; final report logs a held-out <b>test</b> probe.</div>
+                </div>
+                <div style="height:10px"></div>
+		            <div class="grid3">
+		              <div><label>epochs_s1</label><input class="input" id="q_epochs_s1" value="6" /></div>
+		              <div><label>epochs_s1b</label><input class="input" id="q_epochs_s1b" value="1" /></div>
+		              <div><label>epochs_s2</label><input class="input" id="q_epochs_s2" value="12" /></div>
+		            </div>
 	            <div style="height:10px"></div>
-	            <div class="grid3">
-	              <div><label>epochs_s1</label><input class="input" id="q_epochs_s1" value="6" /></div>
-	              <div><label>epochs_s1b</label><input class="input" id="q_epochs_s1b" value="1" /></div>
-	              <div><label>epochs_s2</label><input class="input" id="q_epochs_s2" value="12" /></div>
-	            </div>
-	            <div style="height:10px"></div>
-	            <div class="grid3">
-	              <div><label>epochs_s1b_post</label><input class="input" id="q_epochs_s1b_post" value="12" /></div>
-	              <div><label>probe_clips</label><input class="input" id="q_probe_clips" value="1024" /></div>
-	              <div><label>reverb_prob</label><input class="input" id="q_reverb_prob" value="0.0" /></div>
-	            </div>
-	            <div style="height:10px"></div>
-	            <div class="grid3">
-	              <div><label>msg_weight</label><input class="input" id="q_msg_weight" value="1.0" /></div>
+		            <div class="grid3">
+		              <div><label>epochs_s1b_post</label><input class="input" id="q_epochs_s1b_post" value="12" /></div>
+		              <div><label>probe_clips</label><input class="input" id="q_probe_clips" value="1024" /></div>
+		              <div><label>reverb_prob</label><input class="input" id="q_reverb_prob" value="0.0" /></div>
+		            </div>
+		            <div style="height:10px"></div>
+		            <div class="grid2">
+		              <div><label>test_attacks</label><input class="input" id="q_test_attacks" value="resample_8k,noise_white_20db" /></div>
+		              <div class="tiny">Extra attacks evaluated in the final <code>test_probe</code> (comma-separated). Leave blank to disable extra attacks.</div>
+		            </div>
+		            <div style="height:10px"></div>
+		            <div class="grid3">
+		              <div><label>msg_weight</label><input class="input" id="q_msg_weight" value="1.0" /></div>
 	              <div>
 	                <label>stage2_payload_on_all</label>
 	                <select id="q_stage2_payload_on_all">
@@ -2065,13 +2123,17 @@ def _make_controller_app(runs_dir: Path):
 
       function formKind() { return document.getElementById("kind").value; }
 
-	      function readQuickVoiceArgs() {
-	        const args = {
+		      function readQuickVoiceArgs() {
+		        const args = {
             manifest: (document.getElementById("q_manifest").value || "").trim() || null,
             load_encoder: (document.getElementById("q_load_encoder").value || "").trim() || null,
             load_decoder: (document.getElementById("q_load_decoder").value || "").trim() || null,
 	          source_dir: document.getElementById("q_source_dir").value,
 	          num_clips: parseInt(document.getElementById("q_num_clips").value, 10),
+            train_frac: parseFloat(document.getElementById("q_train_frac").value),
+            val_frac: parseFloat(document.getElementById("q_val_frac").value),
+            test_frac: parseFloat(document.getElementById("q_test_frac").value),
+            split_seed: ((document.getElementById("q_split_seed").value || "").trim() ? parseInt(document.getElementById("q_split_seed").value, 10) : null),
 	          epochs_s1: parseInt(document.getElementById("q_epochs_s1").value, 10),
 	          epochs_s1b: parseInt(document.getElementById("q_epochs_s1b").value, 10),
 	          epochs_s2: parseInt(document.getElementById("q_epochs_s2").value, 10),
@@ -2079,16 +2141,17 @@ def _make_controller_app(runs_dir: Path):
             detect_weight: parseFloat(document.getElementById("q_detect_weight").value),
             id_weight: parseFloat(document.getElementById("q_id_weight").value),
             freeze_detect_head_in_s3: (document.getElementById("q_freeze_detect_head_in_s3").value === "1"),
-	          msg_weight: parseFloat(document.getElementById("q_msg_weight").value),
-	          stage2_payload_on_all: (document.getElementById("q_stage2_payload_on_all").value === "1"),
-		          probe_clips: parseInt(document.getElementById("q_probe_clips").value, 10),
-		          probe_every: parseInt(document.getElementById("q_probe_every").value, 10),
-		          probe_reverb_every: parseInt(document.getElementById("q_probe_reverb_every").value, 10),
-		          log_steps_every: parseInt(document.getElementById("q_log_steps_every").value, 10),
-		          reverb_prob: parseFloat(document.getElementById("q_reverb_prob").value),
-	          unknown_ce_weight: parseFloat(document.getElementById("q_unknown_ce_weight").value),
-	          model_ce_weight: parseFloat(document.getElementById("q_model_ce_weight").value),
-          version_ce_weight: parseFloat(document.getElementById("q_version_ce_weight").value),
+		          msg_weight: parseFloat(document.getElementById("q_msg_weight").value),
+		          stage2_payload_on_all: (document.getElementById("q_stage2_payload_on_all").value === "1"),
+			          probe_clips: parseInt(document.getElementById("q_probe_clips").value, 10),
+			          probe_every: parseInt(document.getElementById("q_probe_every").value, 10),
+			          probe_reverb_every: parseInt(document.getElementById("q_probe_reverb_every").value, 10),
+			          log_steps_every: parseInt(document.getElementById("q_log_steps_every").value, 10),
+			          reverb_prob: parseFloat(document.getElementById("q_reverb_prob").value),
+		          test_attacks: (document.getElementById("q_test_attacks").value || "").trim(),
+		          unknown_ce_weight: parseFloat(document.getElementById("q_unknown_ce_weight").value),
+		          model_ce_weight: parseFloat(document.getElementById("q_model_ce_weight").value),
+	          version_ce_weight: parseFloat(document.getElementById("q_version_ce_weight").value),
           pair_ce_weight: parseFloat(document.getElementById("q_pair_ce_weight").value),
           neg_weight: parseFloat(document.getElementById("q_neg_weight").value),
           neg_preamble_target: parseFloat(document.getElementById("q_neg_preamble_target").value),
@@ -2667,8 +2730,8 @@ def _make_controller_app(runs_dir: Path):
         metrics_path = sdir / "metrics.jsonl"
         stdout_path = sdir / "stdout.log"
 
-        if kind == "quick_voice_smoke_train":
-            cmd = [
+	        if kind == "quick_voice_smoke_train":
+	            cmd = [
                 _preferred_python_executable(),
                 "-m",
                 "watermark.scripts.quick_voice_smoke_train",
@@ -2676,6 +2739,12 @@ def _make_controller_app(runs_dir: Path):
                 str(args.get("source_dir", "mini_benchmark_data")),
                 "--num_clips",
                 str(int(args.get("num_clips", 512))),
+                "--train_frac",
+                str(float(args.get("train_frac", 0.8))),
+                "--val_frac",
+                str(float(args.get("val_frac", 0.1))),
+                "--test_frac",
+                str(float(args.get("test_frac", 0.1))),
                 "--seed",
                 str(int(args.get("seed", 1337))),
                 "--epochs_s1",
@@ -2700,10 +2769,10 @@ def _make_controller_app(runs_dir: Path):
                 str(float(args.get("neg_weight", 5.0))),
                 "--neg_preamble_target",
                 str(float(args.get("neg_preamble_target", 0.5))),
-                "--reverb_prob",
-                str(float(args.get("reverb_prob", 0.0))),
-                "--probe_clips",
-                str(int(args.get("probe_clips", 1024))),
+	                "--reverb_prob",
+	                str(float(args.get("reverb_prob", 0.0))),
+	                "--probe_clips",
+	                str(int(args.get("probe_clips", 1024))),
                 "--probe_every",
                 str(int(args.get("probe_every", 1))),
                 "--probe_reverb_every",
@@ -2714,14 +2783,20 @@ def _make_controller_app(runs_dir: Path):
                 str(float(args.get("id_weight", 2.0))),
                 "--log_steps_every",
                 str(int(args.get("log_steps_every", 25))),
-                "--log_metrics",
-                str(metrics_path),
-                "--out",
-                str(sdir),
-            ]
-            manifest = str(args.get("manifest") or "").strip()
-            if manifest:
-                cmd.extend(["--manifest", manifest])
+	                "--log_metrics",
+	                str(metrics_path),
+	                "--out",
+	                str(sdir),
+	            ]
+	            test_attacks = str(args.get("test_attacks", "") or "").strip()
+	            if test_attacks:
+	                cmd.extend(["--test_attacks", test_attacks])
+	            manifest = str(args.get("manifest") or "").strip()
+	            if manifest:
+	                cmd.extend(["--manifest", manifest])
+            split_seed = args.get("split_seed", None)
+            if split_seed is not None and str(split_seed).strip() != "":
+                cmd.extend(["--split_seed", str(int(split_seed))])
             load_encoder = str(args.get("load_encoder") or "").strip()
             if load_encoder:
                 cmd.extend(["--load_encoder", load_encoder])
