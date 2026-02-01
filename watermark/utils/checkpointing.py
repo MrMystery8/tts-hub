@@ -22,6 +22,7 @@ class CheckpointManager:
     - Last checkpoint (overwrite-safe)
     - Best checkpoint (based on metric)
     - Resume functionality
+    - Adaptive architecture state (s1_arch, balancer_state)
     """
 
     def __init__(
@@ -75,6 +76,7 @@ class CheckpointManager:
         global_step: Optional[int] = None,
         optimizer_encoder: Optional[torch.optim.Optimizer] = None,
         optimizer_decoder: Optional[torch.optim.Optimizer] = None,
+        balancer: Optional[torch.nn.Module] = None,
         metrics: Optional[Dict[str, Any]] = None,
         args: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -90,6 +92,7 @@ class CheckpointManager:
             global_step: Global step (optional)
             optimizer_encoder: Encoder optimizer (optional)
             optimizer_decoder: Decoder optimizer (optional)
+            balancer: Loss balancer model (optional)
             metrics: Metrics dictionary (optional)
             args: Training arguments (optional)
         """
@@ -102,8 +105,10 @@ class CheckpointManager:
             "decoder": self._to_cpu_state_dict(decoder.state_dict()),
             "opt_encoder": optimizer_encoder.state_dict() if optimizer_encoder else None,
             "opt_decoder": optimizer_decoder.state_dict() if optimizer_decoder else None,
+            "balancer_state": self._to_cpu_state_dict(balancer.state_dict()) if balancer else None,
             "metrics": metrics,
             "args": args,
+            "s1_arch": args.get("s1_arch", "static") if args else "static",
         }
 
         # Save to temporary file first, then atomically replace
@@ -124,6 +129,7 @@ class CheckpointManager:
         global_step: Optional[int] = None,
         optimizer_encoder: Optional[torch.optim.Optimizer] = None,
         optimizer_decoder: Optional[torch.optim.Optimizer] = None,
+        balancer: Optional[torch.nn.Module] = None,
         metrics: Optional[Dict[str, Any]] = None,
         args: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -141,6 +147,7 @@ class CheckpointManager:
             global_step=global_step,
             optimizer_encoder=optimizer_encoder,
             optimizer_decoder=optimizer_decoder,
+            balancer=balancer,
             metrics=metrics,
             args=args,
         )
@@ -163,6 +170,7 @@ class CheckpointManager:
         global_step: Optional[int] = None,
         optimizer_encoder: Optional[torch.optim.Optimizer] = None,
         optimizer_decoder: Optional[torch.optim.Optimizer] = None,
+        balancer: Optional[torch.nn.Module] = None,
         args: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
@@ -225,6 +233,7 @@ class CheckpointManager:
             global_step=global_step,
             optimizer_encoder=optimizer_encoder,
             optimizer_decoder=optimizer_decoder,
+            balancer=balancer,
             metrics=probe_metrics,
             args=args,
         )
@@ -301,6 +310,7 @@ class CheckpointManager:
         decoder: torch.nn.Module,
         optimizer_encoder: Optional[torch.optim.Optimizer] = None,
         optimizer_decoder: Optional[torch.optim.Optimizer] = None,
+        balancer: Optional[torch.nn.Module] = None,
     ) -> Dict[str, Any]:
         """
         Resume training from a checkpoint.
@@ -311,6 +321,7 @@ class CheckpointManager:
             decoder: Decoder model to load weights into
             optimizer_encoder: Encoder optimizer to load state into (optional)
             optimizer_decoder: Decoder optimizer to load state into (optional)
+            balancer: Balancer model to load weights into (optional)
             
         Returns:
             Dictionary containing checkpoint metadata
@@ -320,6 +331,10 @@ class CheckpointManager:
         # Load model weights
         encoder.load_state_dict(ckpt["encoder"])
         decoder.load_state_dict(ckpt["decoder"])
+        
+        # Load balancer weights if present and model provided
+        if balancer is not None and "balancer_state" in ckpt and ckpt["balancer_state"] is not None:
+             balancer.load_state_dict(ckpt["balancer_state"])
         
         # Load optimizer states if provided
         if optimizer_encoder and ckpt.get("opt_encoder"):

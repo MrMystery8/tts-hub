@@ -141,7 +141,11 @@ This contract is the reason the project stopped “benchmarking crashes” and s
 | `path` | string | Absolute path to audio file |
 | `has_watermark` | int | 1 = watermarked, 0 = clean |
 | `model_id` | int/null | 0-7 for watermarked |
-| `source_idx` | int | Unique ID for train/test splitting |
+| `source_idx` | int | (Recommended) stable ID for train/val/test splitting (prevents leakage across splits) |
+
+Note:
+- Some scripts (notably `watermark/scripts/quick_voice_smoke_train.py`) currently perform splitting by unique `path` because the lightweight benchmark manifests do not always include `source_idx`.
+- For “real” datasets, prefer adding a stable `source_idx` (or equivalent grouping key) so variants/duplicates of the same underlying clip never land in different splits.
 
 ### File Structure
 

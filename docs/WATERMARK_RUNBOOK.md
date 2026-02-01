@@ -25,6 +25,21 @@ This runbook documents how to iterate quickly on the watermark system on macOS/M
 
 Runs controller mode and stores runs under `outputs/dashboard_runs/`.
 
+### A note on splits (train/val/test)
+
+`quick_voice_smoke_train` now creates a proper split (defaults: `0.8/0.1/0.1`, split **by unique file path** to avoid leakage):
+
+- `manifest_train.json` (used for training)
+- `manifest_val.json` (used for per-epoch `probe` metrics)
+- `manifest_test.json` (used for final `test_probe` once at the end)
+- `manifest.json` is an alias of `manifest_train.json` for compatibility
+
+The final `test_probe` now reports:
+- Clean metrics (e.g. `tpr_at_fpr_1pct`, `id_acc_pos`)
+- Reverb robustness metrics (e.g. `tpr_at_fpr_1pct_reverb`, `id_acc_pos_reverb`)
+- Optional extra attack metrics (suffix `_<attack_name>`), controlled by `--test_attacks` (default: `resample_8k,noise_white_20db`)
+- Imperceptibility diagnostics: `wm_snr_db_mean`, `wm_budget_ok_frac` (uses `BUDGET_TARGET_DB` from `watermark/config.py`)
+
 ### Goal 1: detection-first small run (fast)
 
 `./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 512 --epochs_s1 6 --epochs_s2 10 --epochs_s1b_post 0 --reverb_prob 0.25 --detect_weight 6.0 --id_weight 0.1 --probe_clips 512 --probe_every 1 --probe_reverb_every 1`
@@ -35,6 +50,29 @@ What "good" looks like:
 - `tpr_at_fpr_1pct` rises and stays stable.
 - `thr_at_fpr_1pct` does not drift toward 1.0.
 - Under reverb (`*_reverb`), you should still see separation (AUC not collapsing).
+- Under resampling/noise (`*_resample_8k`, `*_noise_white_20db`), `tpr_at_fpr_1pct_*` should not collapse compared to clean.
+
+If you suspect S2 “isn’t helping”, evaluate the same run under attacks + budget metrics:
+
+`./.venv/bin/python3 watermark/scripts/eval_run_suite.py --run outputs/dashboard_runs/<RUN_ID> --n 256`
+
+Or compare a batch of recent dashboard runs:
+
+`./.venv/bin/python3 watermark/scripts/compare_dashboard_runs.py --limit 12 --n 256`
+
+Important: this goal is intentionally *detection-first*. With `id_weight=0.1`, you should expect weak attribution (`id_acc_pos` barely above chance) unless you later do explicit ID training.
+
+### Goal 1b: balanced run (detection + ID, single run)
+
+If you want a *deployable* encoder+decoder that can both detect and attribute, don’t start with `id_weight=0.1`.
+
+Good starting point:
+
+`./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 2048 --epochs_s1 6 --epochs_s2 20 --epochs_s1b_post 0 --reverb_prob 0.25 --detect_weight 6.0 --id_weight 1.0 --probe_clips 1024 --probe_every 1 --probe_reverb_every 1`
+
+Notes:
+- This typically preserves strong detection while encouraging the encoder+decoder to actually learn attribution signal early.
+- If `id_acc_pos` still lags, only then consider Stage 3 finetune.
 
 ### Goal 2: ID finetune (reuse the detection run)
 
@@ -42,11 +80,42 @@ Use the previous run directory (under `outputs/dashboard_runs/<RUN_ID>/`) as the
 
 `./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --manifest outputs/dashboard_runs/<RUN_ID>/manifest.json --load_encoder outputs/dashboard_runs/<RUN_ID>/encoder.pt --load_decoder outputs/dashboard_runs/<RUN_ID>/decoder.pt --epochs_s1 0 --epochs_s2 0 --epochs_s1b_post 6 --reverb_prob 0.25 --detect_weight 3.0 --id_weight 3.0 --neg_weight 1.0 --freeze_detect_head_in_s3 --probe_clips 512 --probe_every 1 --probe_reverb_every 1`
 
+Note: If the source run folder contains `manifest_train.json`/`manifest_val.json`/`manifest_test.json`, the script will **reuse those exact splits** (it won’t resplit).
+
 What to look at during ID tuning:
 
 - `id_acc_pos` (ID head accuracy on positives; ignores detection threshold).
 - `confusion_attr` (K×K, watermarked-only confusion).
 - Keep an eye on detection regression (`tpr_at_fpr_1pct` and `*_reverb`).
+
+#### When the “runbook pipeline” underperforms for ID
+
+Recent split-based dashboard runs suggest the common failure mode is:
+
+- Detection-first run achieves strong detection on held-out test (`tpr_at_fpr_1pct` high),
+- but the subsequent Stage 3 ID finetune only modestly improves `id_acc_pos`, sometimes while reducing detection.
+
+Why this happens:
+
+- Stage 1 explicitly trains the decoder against a **frozen** encoder. If you set `id_weight` very low in S1, the decoder’s ID head won’t learn much signal.
+- Stage 2 freezes the decoder, so it cannot “catch up” on ID if it was undertrained in S1.
+- Then Stage 3 has to learn ID while also juggling quality/budget constraints and (often) reverb augmentation — which can be slow and can move the model away from the strong-detection basin.
+
+Practical recommendation (attribution-focused training):
+
+1) Don’t set `id_weight` extremely low if you intend to ship attribution.
+   - A good starting point is `detect_weight≈6`, `id_weight≈1` for S1+S2.
+2) Treat Stage 3 as optional.
+   - For detection-only watermarking: S1+S2 is usually enough.
+   - For attribution: use Stage 3 only if val/test `id_acc_pos` is still weak, and keep it short + monitored.
+
+If you already ran a detection-first job with `id_weight=0.1` and want to “recover” attribution:
+
+- Do a **decoder-only ID warmup** first (same encoder, just teach the decoder’s ID head):
+
+`./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --manifest outputs/dashboard_runs/<RUN_ID>/manifest.json --load_encoder outputs/dashboard_runs/<RUN_ID>/encoder.pt --load_decoder outputs/dashboard_runs/<RUN_ID>/decoder.pt --epochs_s1 10 --epochs_s2 0 --epochs_s1b_post 0 --reverb_prob 0.25 --detect_weight 6.0 --id_weight 2.0 --probe_clips 512 --probe_every 1 --probe_reverb_every 1`
+
+- Then, if needed, continue with encoder training (Stage 2) and only then finetune (Stage 3).
 
 ### Checkpointing and Model Reuse
 
@@ -63,7 +132,8 @@ The quick smoke train now supports robust checkpointing with the following artif
 
 - `encoder.pt` / `decoder.pt` - Always saved (best model weights for easy reuse)
 - `config.json` - Full CLI arguments and derived settings
-- `manifest.json` - Self-contained manifest copy (copied from source)
+- `manifest_train.json` / `manifest_val.json` / `manifest_test.json` - Split manifests (train/val/test)
+- `manifest.json` - Alias of `manifest_train.json` for compatibility
 - `checkpoints/` directory containing:
   - `last.pt` - Crash-safe checkpoint (overwritten each save interval)
   - `best.pt` - Best model based on chosen metric

@@ -318,4 +318,8 @@ The provenance watermarking system (`watermark/`) is now fully functional and in
   
 ### 9.4 Benchmarking
 - **Datasets:** Scripts to generate `mini_benchmark_data` (small, fast) and `medium_benchmark_data` (LibriSpeech subset).
-- **Evaluation:** Integrated probe steps during training ensure continuous evaluation against "unseen" data.
+- **Evaluation:** `quick_voice_smoke_train` uses a held-out **validation split** for per-epoch probes and logs a final held-out **test** probe at the end (split by unique file path to avoid leakage).
+- **Robustness + budget metrics:** The probe/test suite now reports:
+  - attack robustness (`*_reverb`, plus optional `*_resample_8k` and `*_noise_white_20db`)
+  - imperceptibility diagnostics (`wm_snr_db_mean`, `wm_budget_ok_frac`)
+- **Eval helpers:** `watermark/scripts/eval_run_suite.py` (single run) and `watermark/scripts/compare_dashboard_runs.py` (batch compare).

@@ -491,6 +491,11 @@ select {
   background: rgba(99, 102, 241, 0.05);
 }
 
+.file-upload.drag-over {
+  border-color: var(--accent-primary);
+  background: rgba(99, 102, 241, 0.10);
+}
+
 .file-upload-icon {
   font-size: 32px;
   margin-bottom: var(--space-sm);
@@ -509,7 +514,15 @@ select {
 }
 
 input[type="file"] {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Checkboxes */
@@ -807,6 +820,8 @@ audio::-webkit-media-controls-panel {
   padding: var(--space-2xl);
   color: var(--text-muted);
   font-size: 13px;
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 .output-actions {

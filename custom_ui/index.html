@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=watermark1" />
 </head>
 
 <body>
@@ -606,6 +606,67 @@
           </div>
 
           <!-- Recent Generations Panel -->
+          <!-- Watermarking Panel -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Watermarking</div>
+                <div class="panel-subtitle">Embed an attribution watermark into generated audio</div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <div class="checkbox-group">
+                <input type="checkbox" id="watermarkEnabled" />
+                <label class="checkbox-label" for="watermarkEnabled">Embed watermark in output</label>
+              </div>
+              <div class="form-hint" id="watermarkHint">Supported models: IndexTTS2, Chatterbox Multilingual</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="watermarkRun">Watermark run</label>
+              <select id="watermarkRun"></select>
+              <div class="form-hint">Pick a completed run (expects `encoder.pt` + `decoder.pt`).</div>
+            </div>
+
+            <pre class="output-placeholder" id="watermarkRunDetails">Select a run to see details</pre>
+          </div>
+
+          <!-- Watermark Test Panel -->
+	          <div class="panel">
+	            <div class="panel-header">
+	              <div>
+	                <div class="panel-title">Watermark Test</div>
+	                <div class="panel-subtitle">Upload audio to detect watermark + attribute model ID</div>
+	              </div>
+	              <div class="panel-actions">
+	                <button class="btn btn-secondary" id="watermarkTestClear" disabled>Clear</button>
+	              </div>
+	            </div>
+	
+	            <div class="form-group">
+	              <label class="file-upload" id="watermarkTestDropZone" for="watermarkTestFile" title="Click to choose a file, or drag & drop here">
+	                <div class="file-upload-icon">🧪</div>
+	                <div class="file-upload-text">Choose Audio File</div>
+	                <div class="file-upload-hint">WAV, MP3, FLAC, M4A… (or drag & drop)</div>
+	              </label>
+	              <input type="file" id="watermarkTestFile" accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,audio/*" />
+	              <div class="form-hint" id="watermarkTestFileInfo"></div>
+	            </div>
+
+	            <audio id="watermarkTestPreview" class="audio-player hidden" controls></audio>
+	
+	            <div class="form-row" style="justify-content: space-between; align-items: end;">
+	              <div class="form-row" style="gap: var(--space-sm); align-items: center;">
+	                <label class="form-label" for="watermarkThreshold" style="width: auto;">Threshold</label>
+	                <input type="number" id="watermarkThreshold" min="0" max="1" step="0.01" value="0.80" style="width: 90px;" />
+              </div>
+              <button class="btn btn-secondary" id="watermarkTestBtn">Analyze</button>
+            </div>
+
+            <pre class="output-placeholder" id="watermarkTestResult">No file analyzed yet</pre>
+          </div>
+
           <div class="panel">
             <div class="panel-header">
               <div>
@@ -628,7 +689,7 @@
     </main>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=watermark1"></script>
 </body>
 
 </html>

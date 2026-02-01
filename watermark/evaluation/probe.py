@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import torch
 
-from watermark.config import CLASS_CLEAN, N_CLASSES
+from watermark.config import BUDGET_TARGET_DB, CLASS_CLEAN, N_CLASSES
 from watermark.evaluation.attacks import ATTACKS, apply_attack_safe
 
 
@@ -27,32 +27,37 @@ def _wm_score_from_out(out: dict[str, Any]) -> float:
     return float(score.item()) if hasattr(score, "item") else float(score)
 
 
-def compute_probe_metrics(
-    items: Iterable[ProbeItem],
+_ATTACK_METRIC_KEYS: tuple[str, ...] = (
+    "mini_auc",
+    "detect_pos_mean",
+    "detect_neg_mean",
+    "thr_at_fpr_1pct",
+    "tpr_at_fpr_1pct",
+    "attr_acc",
+    "wm_acc",
+    "id_acc_pos",
+    "pred_clean_rate",
+    "pred_pos_rate",
+    "p_clean_mean",
+    "p_clean_pos_mean",
+    "p_clean_neg_mean",
+    "wm_prob_loc_mean",
+    "wm_prob_loc_pos_mean",
+    "wm_prob_loc_neg_mean",
+)
+
+
+def _probe_once(
+    items_list: list[ProbeItem],
     *,
     encoder: torch.nn.Module,
     decoder: torch.nn.Module,
     device: torch.device,
-    compute_reverb: bool = True,
+    attack_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     max_items: Optional[int] = None,
     num_classes: int = N_CLASSES,
-    # Compatibility: older call sites passed a codec object; ignored in multiclass mode.
-    codec: Any = None,
+    include_confusion: bool = True,
 ) -> dict[str, Any]:
-    """
-    Lightweight mid-training probe for multiclass attribution.
-
-    - Watermark score: `1 - P(class0)` (aka `clip_wm_prob`)
-    - Attribution: argmax class (0..K)
-    """
-    _ = codec
-    enc_was_training = encoder.training
-    dec_was_training = decoder.training
-    encoder.eval()
-    decoder.eval()
-
-    items_list = list(items)
-
     from sklearn.metrics import roc_auc_score
     import numpy as np
 
@@ -62,6 +67,9 @@ def compute_probe_metrics(
     y_pred_id: list[int] = []  # argmax id head (0..K-1), meaningless for clean but still recorded
     p_clean: list[float] = []
     win_wm_scores: list[float] = []
+
+    wm_snr_db: list[float] = []
+    wm_delta_peak_abs: list[float] = []
 
     n = 0
     for it in items_list:
@@ -74,16 +82,33 @@ def compute_probe_metrics(
         y_t = torch.tensor([y], device=device, dtype=torch.long)
 
         with torch.no_grad():
-            if y != int(CLASS_CLEAN):
-                inp = encoder(clip, y_t)
-            else:
-                inp = clip
-            out = decoder(inp)
+            inp = encoder(clip, y_t) if y != int(CLASS_CLEAN) else clip
+
+        if y != int(CLASS_CLEAN):
+            orig_ct = clip.squeeze(0).detach().cpu().to(dtype=torch.float32)
+            wm_ct = inp.squeeze(0).detach().cpu().to(dtype=torch.float32)
+            delta = wm_ct - orig_ct
+            power_orig = float(orig_ct.pow(2).mean().item())
+            power_delta = float(delta.pow(2).mean().item())
+            eps = 1e-12
+            snr = 10.0 * float(np.log10((power_orig + eps) / (power_delta + eps)))
+            wm_snr_db.append(snr)
+            wm_delta_peak_abs.append(float(delta.abs().max().item()))
+
+        if attack_fn is not None:
+            attacked = apply_attack_safe(inp.squeeze(0).detach().cpu(), attack_fn).unsqueeze(0).to(device=device, dtype=torch.float32)
+            inp_for_dec = attacked
+        else:
+            inp_for_dec = inp
+
+        with torch.no_grad():
+            out = decoder(inp_for_dec)
 
         score = _wm_score_from_out(out)
         win_score = out.get("clip_wm_prob_loc", out.get("clip_wm_prob", out.get("clip_detect_prob")))
         if win_score is not None:
             win_wm_scores.append(float(win_score.item()) if hasattr(win_score, "item") else float(win_score))
+
         id_logits = out.get("clip_id_logits")
         if id_logits is None:
             # Back-compat: fall back to multiclass logits and map to id space.
@@ -100,7 +125,6 @@ def compute_probe_metrics(
             pred_id = int(torch.argmax(id_logits, dim=-1).item())
             class_probs = out.get("clip_class_probs")
             if class_probs is None:
-                # derive via detect + id if present; otherwise approximate from class logits
                 logits = out.get("clip_class_logits")
                 if logits is None:
                     raise KeyError("decoder output missing clip_class_probs/clip_class_logits")
@@ -113,8 +137,8 @@ def compute_probe_metrics(
         y_pred_id.append(pred_id)
         p_clean.append(p0)
 
-    # Binary detection metrics
     metrics: dict[str, Any] = {"n_items": int(len(y_true_wm)), "n_classes": int(num_classes)}
+
     if len(set(y_true_wm)) > 1:
         metrics["mini_auc"] = float(roc_auc_score(y_true_wm, y_score))
     else:
@@ -134,47 +158,43 @@ def compute_probe_metrics(
         metrics["thr_at_fpr_1pct"] = thr_1pct
         metrics["tpr_at_fpr_1pct"] = tpr_1pct
 
-    # Attribution metrics
     if y_true_class:
-        # Thresholded (product-style) prediction: if not detected -> clean else id+1
-        thr = float(thr_1pct) if thr_1pct is not None else 0.5
+        thr_use = float(thr_1pct) if thr_1pct is not None else 0.5
         y_pred_class_thr: list[int] = []
         for s, pid in zip(y_score, y_pred_id):
-            y_pred_class_thr.append(int(pid + 1) if float(s) >= thr else int(CLASS_CLEAN))
+            y_pred_class_thr.append(int(pid + 1) if float(s) >= thr_use else int(CLASS_CLEAN))
 
-        correct_thr = [1.0 if t == p else 0.0 for t, p in zip(y_true_class, y_pred_class_thr)]
-        metrics["attr_acc"] = float(np.mean(correct_thr))
-
-        wm_idx = [i for i, y in enumerate(y_true_class) if y != int(CLASS_CLEAN)]
-        if wm_idx:
-            metrics["wm_acc"] = float(np.mean([correct_thr[i] for i in wm_idx]))
-            # ID-only accuracy on positives, independent of detection threshold
-            id_correct = [1.0 if (y_pred_id[i] == (int(y_true_class[i]) - 1)) else 0.0 for i in wm_idx]
-            metrics["id_acc_pos"] = float(np.mean(id_correct))
+        correct = [1.0 if t == p else 0.0 for t, p in zip(y_true_class, y_pred_class_thr)]
+        if correct:
+            metrics["attr_acc"] = float(np.mean(correct))
+            wm_idx = [i for i, y in enumerate(y_true_class) if y != int(CLASS_CLEAN)]
+            if wm_idx:
+                metrics["wm_acc"] = float(np.mean([correct[i] for i in wm_idx]))
+                id_correct = [1.0 if (y_pred_id[i] == (int(y_true_class[i]) - 1)) else 0.0 for i in wm_idx]
+                metrics["id_acc_pos"] = float(np.mean(id_correct))
 
         metrics["pred_clean_rate"] = float(np.mean([1.0 if p == int(CLASS_CLEAN) else 0.0 for p in y_pred_class_thr]))
         metrics["pred_pos_rate"] = 1.0 - float(metrics["pred_clean_rate"])
-        metrics["thr_used_for_confusion"] = float(thr)
+        metrics["thr_used_for_confusion"] = float(thr_use)
 
-        # Full (K+1)x(K+1) confusion (thresholded prediction)
-        cm = torch.zeros((int(num_classes), int(num_classes)), dtype=torch.long)
-        for t, p in zip(y_true_class, y_pred_class_thr):
-            if 0 <= t < int(num_classes) and 0 <= p < int(num_classes):
-                cm[t, p] += 1
-        metrics["confusion"] = cm.tolist()
+        if include_confusion:
+            cm = torch.zeros((int(num_classes), int(num_classes)), dtype=torch.long)
+            for t, p in zip(y_true_class, y_pred_class_thr):
+                if 0 <= t < int(num_classes) and 0 <= p < int(num_classes):
+                    cm[t, p] += 1
+            metrics["confusion"] = cm.tolist()
 
-        # Attribution-only confusion (KxK) on watermarked subset (no clean row/col).
-        if wm_idx:
-            k = int(num_classes) - 1
-            cm_id = torch.zeros((k, k), dtype=torch.long)
-            for i in wm_idx:
-                true_id = int(y_true_class[i]) - 1
-                pred_id = int(y_pred_id[i])
-                if 0 <= true_id < k and 0 <= pred_id < k:
-                    cm_id[true_id, pred_id] += 1
-            metrics["confusion_attr"] = cm_id.tolist()
+            wm_idx = [i for i, y in enumerate(y_true_class) if y != int(CLASS_CLEAN)]
+            if wm_idx:
+                k = int(num_classes) - 1
+                cm_id = torch.zeros((k, k), dtype=torch.long)
+                for i in wm_idx:
+                    true_id = int(y_true_class[i]) - 1
+                    pred_id = int(y_pred_id[i])
+                    if 0 <= true_id < k and 0 <= pred_id < k:
+                        cm_id[true_id, pred_id] += 1
+                metrics["confusion_attr"] = cm_id.tolist()
 
-    # P(clean) diagnostics
     if p_clean:
         metrics["p_clean_mean"] = float(np.mean(p_clean))
         pos_p0 = [p for p, y in zip(p_clean, y_true_wm) if y == 1.0]
@@ -184,7 +204,6 @@ def compute_probe_metrics(
         if neg_p0:
             metrics["p_clean_neg_mean"] = float(np.mean(neg_p0))
 
-    # Localization pooled score diagnostics (if available)
     if win_wm_scores:
         metrics["wm_prob_loc_mean"] = float(np.mean(win_wm_scores))
         pos_loc = [s for s, y in zip(win_wm_scores, y_true_wm) if y == 1.0]
@@ -194,59 +213,104 @@ def compute_probe_metrics(
         if neg_loc:
             metrics["wm_prob_loc_neg_mean"] = float(np.mean(neg_loc))
 
-    # Reverb probe (attack only, no re-encoding; attack is applied to the carrier used above)
-    if compute_reverb and "reverb" in ATTACKS and y_true_class:
-        y_score_r: list[float] = []
-        y_pred_id_r: list[int] = []
-        for it in items_list[: (int(max_items) if max_items is not None else len(items_list))]:
-            y = int(it.y_class)
-            clip = _to_device_audio_bt(it.audio, device)
-            y_t = torch.tensor([y], device=device, dtype=torch.long)
+    if wm_snr_db:
+        target_snr_db = float(-float(BUDGET_TARGET_DB))
+        snrs = np.array(wm_snr_db, dtype=np.float32)
+        metrics["wm_budget_target_db"] = float(BUDGET_TARGET_DB)
+        metrics["wm_snr_db_mean"] = float(np.mean(snrs))
+        metrics["wm_snr_db_p10"] = float(np.quantile(snrs, 0.10))
+        metrics["wm_snr_db_p50"] = float(np.quantile(snrs, 0.50))
+        metrics["wm_snr_db_p90"] = float(np.quantile(snrs, 0.90))
+        metrics["wm_budget_ok_frac"] = float(np.mean(snrs >= target_snr_db))
+        metrics["wm_delta_power_db_mean"] = float(-metrics["wm_snr_db_mean"])
 
-            with torch.no_grad():
-                inp = encoder(clip, y_t) if y != int(CLASS_CLEAN) else clip
+    if wm_delta_peak_abs:
+        peaks = np.array(wm_delta_peak_abs, dtype=np.float32)
+        metrics["wm_delta_peak_abs_mean"] = float(np.mean(peaks))
+        metrics["wm_delta_peak_abs_p90"] = float(np.quantile(peaks, 0.90))
 
-            attacked = apply_attack_safe(inp.squeeze(0).cpu(), ATTACKS["reverb"]).unsqueeze(0).to(device=device, dtype=torch.float32)
-            with torch.no_grad():
-                out_r = decoder(attacked)
+    return metrics
 
-            y_score_r.append(_wm_score_from_out(out_r))
-            id_logits_r = out_r.get("clip_id_logits")
-            if id_logits_r is None:
-                logits_r = out_r["clip_class_logits"]
-                pred_class_r = int(torch.argmax(logits_r, dim=-1).item())
-                y_pred_id_r.append(max(0, pred_class_r - 1))
-            else:
-                y_pred_id_r.append(int(torch.argmax(id_logits_r, dim=-1).item()))
 
-        if len(set(y_true_wm)) > 1 and y_score_r:
-            metrics["mini_auc_reverb"] = float(roc_auc_score(y_true_wm[: len(y_score_r)], y_score_r))
+def compute_probe_metrics(
+    items: Iterable[ProbeItem],
+    *,
+    encoder: torch.nn.Module,
+    decoder: torch.nn.Module,
+    device: torch.device,
+    compute_reverb: bool = True,
+    max_items: Optional[int] = None,
+    num_classes: int = N_CLASSES,
+    extra_attacks: Optional[Iterable[str]] = None,
+    include_confusion: bool = True,
+    # Compatibility: older call sites passed a codec object; ignored in multiclass mode.
+    codec: Any = None,
+) -> dict[str, Any]:
+    """
+    Lightweight mid-training probe for multiclass attribution.
 
-        # Thresholded predictions under reverb (use reverb-neg threshold if available)
-        pos_scores_r = [s for s, y in zip(y_score_r, y_true_wm[: len(y_score_r)]) if y == 1.0]
-        neg_scores_r = [s for s, y in zip(y_score_r, y_true_wm[: len(y_score_r)]) if y == 0.0]
-        thr_r = None
-        if pos_scores_r and neg_scores_r:
-            thr_r = float(np.quantile(neg_scores_r, 0.99))
-            tpr_1pct_r = float(np.mean([1.0 if s >= thr_r else 0.0 for s in pos_scores_r]))
-            metrics["thr_at_fpr_1pct_reverb"] = thr_r
-            metrics["tpr_at_fpr_1pct_reverb"] = tpr_1pct_r
+    Base (clean) metrics are always computed.
+    Optionally computes attack metrics (reverb + any names in `extra_attacks`) by applying the attack
+    AFTER embedding (for positives) and BEFORE decoding.
+    """
+    _ = codec
+    enc_was_training = encoder.training
+    dec_was_training = decoder.training
+    encoder.eval()
+    decoder.eval()
 
-        thr_use_r = float(thr_r) if thr_r is not None else 0.5
-        y_true_r = y_true_class[: len(y_pred_id_r)]
-        y_pred_class_thr_r: list[int] = []
-        for s, pid in zip(y_score_r, y_pred_id_r):
-            y_pred_class_thr_r.append(int(pid + 1) if float(s) >= thr_use_r else int(CLASS_CLEAN))
+    items_list = list(items)
 
-        correct_r = [1.0 if t == p else 0.0 for t, p in zip(y_true_r, y_pred_class_thr_r)]
-        if correct_r:
-            metrics["attr_acc_reverb"] = float(np.mean(correct_r))
-            wm_idx_r = [i for i, y in enumerate(y_true_r) if y != int(CLASS_CLEAN)]
-            if wm_idx_r:
-                metrics["wm_acc_reverb"] = float(np.mean([correct_r[i] for i in wm_idx_r]))
-                id_correct_r = [1.0 if (y_pred_id_r[i] == (int(y_true_r[i]) - 1)) else 0.0 for i in wm_idx_r]
-                metrics["id_acc_pos_reverb"] = float(np.mean(id_correct_r))
+    metrics = _probe_once(
+        items_list,
+        encoder=encoder,
+        decoder=decoder,
+        device=device,
+        attack_fn=None,
+        max_items=max_items,
+        num_classes=num_classes,
+        include_confusion=bool(include_confusion),
+    )
+
+    def merge_attack_metrics(suffix: str, attacked: dict[str, Any]) -> None:
+        for k in _ATTACK_METRIC_KEYS:
+            if k in attacked:
+                metrics[f"{k}{suffix}"] = attacked[k]
+
+    if compute_reverb and "reverb" in ATTACKS:
+        m_r = _probe_once(
+            items_list,
+            encoder=encoder,
+            decoder=decoder,
+            device=device,
+            attack_fn=ATTACKS["reverb"],
+            max_items=max_items,
+            num_classes=num_classes,
+            include_confusion=False,
+        )
+        merge_attack_metrics("_reverb", m_r)
+
+    if extra_attacks:
+        for name in extra_attacks:
+            a = str(name).strip()
+            if not a or a in {"clean", "reverb"}:
+                continue
+            fn = ATTACKS.get(a)
+            if fn is None:
+                continue
+            m_a = _probe_once(
+                items_list,
+                encoder=encoder,
+                decoder=decoder,
+                device=device,
+                attack_fn=fn,
+                max_items=max_items,
+                num_classes=num_classes,
+                include_confusion=False,
+            )
+            merge_attack_metrics(f"_{a}", m_a)
 
     encoder.train(enc_was_training)
     decoder.train(dec_was_training)
     return metrics
+

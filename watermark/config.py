@@ -67,6 +67,14 @@ LOC_EPS = 1e-6
 LOC_CONSISTENCY_WEIGHT = 0.1  # optional: keep detect head aligned with loc pooling
 
 # =============================================================================
+# Encoder Budget (Imperceptibility)
+# =============================================================================
+# Used by training (Stage 2/3) and evaluation as a shared target.
+# Meaning: watermark delta power should be <= original power * 10^(BUDGET_TARGET_DB/10).
+# Example: -30dB => delta power <= 0.1% of carrier power (≈ 30dB SNR).
+BUDGET_TARGET_DB = -30.0
+
+# =============================================================================
 # Device Detection
 # =============================================================================
 def get_device() -> torch.device:

@@ -114,6 +114,20 @@ const el = {
   outputActions: $('outputActions'),
   download: $('download'),
   outputInfo: $('outputInfo'),
+
+  // Watermarking
+  watermarkEnabled: $('watermarkEnabled'),
+  watermarkHint: $('watermarkHint'),
+  watermarkRun: $('watermarkRun'),
+  watermarkRunDetails: $('watermarkRunDetails'),
+  watermarkTestFile: $('watermarkTestFile'),
+  watermarkTestFileInfo: $('watermarkTestFileInfo'),
+  watermarkTestDropZone: $('watermarkTestDropZone'),
+  watermarkTestClear: $('watermarkTestClear'),
+  watermarkTestPreview: $('watermarkTestPreview'),
+  watermarkThreshold: $('watermarkThreshold'),
+  watermarkTestBtn: $('watermarkTestBtn'),
+  watermarkTestResult: $('watermarkTestResult'),
   
   // Settings
   modelDescription: $('modelDescription'),
@@ -233,6 +247,17 @@ const MODEL_ICONS = {
   'voxcpm-ane': '🧠',
 };
 
+// Watermarking: for now only these TTS models have an attribution ID mapping.
+// pred_model_id is 0..K-1 (decoder output), encoder class_id is 1..K.
+const WATERMARK_MODEL_MAP = {
+  'index-tts2': 0,
+  'chatterbox-multilingual': 1,
+};
+
+let watermarkRuns = [];
+let watermarkDefaultRunId = null;
+let watermarkTestFileOverride = null;
+
 // ============================================
 // Utilities
 // ============================================
@@ -255,6 +280,10 @@ function formatTime(seconds) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function isWatermarkSupported(modelId) {
+  return Object.prototype.hasOwnProperty.call(WATERMARK_MODEL_MAP, modelId);
 }
 
 // ============================================
@@ -332,6 +361,7 @@ function selectModel(modelId) {
   el.noModelSelected.classList.toggle('hidden', !!modelId);
   
   updateVisibility();
+  updateWatermarkUI();
 }
 
 // ============================================
@@ -357,6 +387,185 @@ function updateVisibility() {
   // CosyVoice instruct
   if (modelId === 'cosyvoice3-mlx') {
     el.cosyInstructRow?.classList.toggle('hidden', el.cosyMode?.value !== 'instruct');
+  }
+}
+
+// ============================================
+// Watermarking
+// ============================================
+async function fetchWatermarkRuns() {
+  try {
+    const res = await fetch('/api/watermark/runs');
+    if (!res.ok) return;
+    const data = await res.json();
+    watermarkRuns = data.runs || [];
+    watermarkDefaultRunId = data.default_run_id || null;
+  } catch (e) {
+    console.warn('Failed to fetch watermark runs:', e);
+  }
+}
+
+async function fetchWatermarkRunDetails(runId) {
+  try {
+    const qs = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+    const res = await fetch(`/api/watermark/run_details${qs}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+}
+
+function renderWatermarkRuns() {
+  if (!el.watermarkRun) return;
+  el.watermarkRun.innerHTML = '';
+
+  const optAuto = document.createElement('option');
+  optAuto.value = '';
+  optAuto.textContent = 'Auto (latest completed)';
+  el.watermarkRun.appendChild(optAuto);
+
+  for (const r of watermarkRuns) {
+    const opt = document.createElement('option');
+    opt.value = r.id;
+    const status = r.status ? ` · ${r.status}` : '';
+    opt.textContent = `${r.label || r.id}${status}`;
+    el.watermarkRun.appendChild(opt);
+  }
+
+  const savedRun = SessionStore.load('watermarkRun', '');
+  if (savedRun) el.watermarkRun.value = savedRun;
+}
+
+async function updateWatermarkRunDetails() {
+  if (!el.watermarkRunDetails) return;
+  if (!watermarkRuns || watermarkRuns.length === 0) {
+    el.watermarkRunDetails.textContent = 'No watermark runs found';
+    return;
+  }
+
+  const selected = el.watermarkRun?.value || '';
+  const effectiveRun = selected || watermarkDefaultRunId || '';
+  if (!effectiveRun) {
+    el.watermarkRunDetails.textContent = 'No default run available';
+    return;
+  }
+
+  el.watermarkRunDetails.textContent = 'Loading run details...';
+  const details = await fetchWatermarkRunDetails(selected || '');
+  if (details.error) {
+    el.watermarkRunDetails.textContent = `Error: ${details.error}`;
+    return;
+  }
+
+  const lines = [];
+  lines.push(`Run: ${details.id || effectiveRun}${selected ? '' : ' (auto)'}`);
+  if (details.status) lines.push(`Status: ${details.status}`);
+  if (details.updated_at) lines.push(`Updated: ${new Date(details.updated_at * 1000).toLocaleString()}`);
+  if (details.metrics?.stage || details.metrics?.epoch) {
+    const stage = details.metrics.stage || '?';
+    const epoch = details.metrics.epoch ?? '?';
+    lines.push(`Metrics: stage=${stage} epoch=${epoch}`);
+    const keys = ['wm_acc', 'tpr_at_fpr_1pct', 'tpr_at_fpr_1pct_reverb', 'id_acc_pos'];
+    for (const k of keys) {
+      if (typeof details.metrics[k] === 'number') lines.push(`  ${k}: ${details.metrics[k].toFixed(4)}`);
+    }
+  }
+  if (details.report_excerpt) {
+    lines.push('');
+    lines.push('Report (excerpt):');
+    lines.push(details.report_excerpt.trim());
+  }
+
+  el.watermarkRunDetails.textContent = lines.join('\n');
+}
+
+function updateWatermarkUI() {
+  if (!el.watermarkEnabled || !el.watermarkHint) return;
+  const supported = !!currentModelId && isWatermarkSupported(currentModelId);
+  const hasRuns = watermarkRuns.length > 0;
+
+  el.watermarkEnabled.disabled = !(supported && hasRuns);
+
+  if (!supported) {
+    el.watermarkEnabled.checked = false;
+    SessionStore.save('watermarkEnabled', false);
+    el.watermarkHint.textContent = 'Watermarking currently supported for: IndexTTS2, Chatterbox Multilingual';
+    return;
+  }
+
+  if (!hasRuns) {
+    el.watermarkEnabled.checked = false;
+    SessionStore.save('watermarkEnabled', false);
+    el.watermarkHint.textContent = 'No watermark runs found (expected: outputs/*/encoder.pt + decoder.pt)';
+    return;
+  }
+
+  const mappedId = WATERMARK_MODEL_MAP[currentModelId];
+  el.watermarkHint.textContent = `This model will embed attribution ID ${mappedId} (class ${mappedId + 1}).`;
+}
+
+function setWatermarkTestFile(file, source = 'selected') {
+  watermarkTestFileOverride = file || null;
+  if (el.watermarkTestFileInfo) {
+    if (!file) el.watermarkTestFileInfo.textContent = '';
+    else {
+      const size = formatBytes(file.size);
+      el.watermarkTestFileInfo.textContent = `Selected (${source}): ${file.name}${size ? ` • ${size}` : ''}`;
+    }
+  }
+  if (el.watermarkTestClear) el.watermarkTestClear.disabled = !file;
+  if (el.watermarkTestPreview) {
+    if (!file) {
+      el.watermarkTestPreview.classList.add('hidden');
+      el.watermarkTestPreview.removeAttribute('src');
+      el.watermarkTestPreview.load();
+    } else {
+      const url = URL.createObjectURL(file);
+      el.watermarkTestPreview.src = url;
+      el.watermarkTestPreview.classList.remove('hidden');
+    }
+  }
+}
+
+async function runWatermarkTest() {
+  const file = watermarkTestFileOverride || el.watermarkTestFile?.files?.[0];
+  if (!file) {
+    el.watermarkTestResult.textContent = 'Please choose an audio file first.';
+    return;
+  }
+  const threshold = parseFloat(el.watermarkThreshold?.value || '0.8');
+  const runId = el.watermarkRun?.value || '';
+
+  el.watermarkTestBtn.disabled = true;
+  el.watermarkTestResult.textContent = 'Analyzing...';
+
+  try {
+    const form = new FormData();
+    form.append('audio', file);
+    form.append('wm_threshold', String(isFinite(threshold) ? threshold : 0.8));
+    if (runId) form.append('watermark_run', runId);
+
+    const res = await fetch('/api/watermark/detect', { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    const lines = [];
+    lines.push(`Detected: ${data.detected ? 'YES' : 'NO'}`);
+    if (typeof data.wm_prob === 'number') lines.push(`WM prob: ${data.wm_prob.toFixed(3)}`);
+    if (data.detected) {
+      const mid = (data.model?.id ?? null);
+      const name = data.model?.name || 'Unknown';
+      lines.push(`Model: ${name}${mid === null ? '' : ` (ID ${mid})`}`);
+    }
+    if (data.run?.id) lines.push(`Run: ${data.run.id}`);
+
+    el.watermarkTestResult.textContent = lines.join('\n');
+  } catch (e) {
+    el.watermarkTestResult.textContent = `Error: ${e.message || String(e)}`;
+  } finally {
+    el.watermarkTestBtn.disabled = false;
   }
 }
 
@@ -572,6 +781,14 @@ async function generate() {
   // Model-specific params
   appendModelParams(form, modelId);
 
+  // Watermarking (server-side post-processing)
+  const wmEnabled = !!el.watermarkEnabled?.checked;
+  if (wmEnabled) {
+    form.append('watermark', '1');
+    const runId = el.watermarkRun?.value || '';
+    if (runId) form.append('watermark_run', runId);
+  }
+
   setGenerating(true);
   setStatus(`Generating with ${modelId}...`, 'loading');
   el.outputPlaceholder.classList.remove('hidden');
@@ -593,7 +810,7 @@ async function generate() {
     el.output.classList.remove('hidden');
     el.outputPlaceholder.classList.add('hidden');
     el.download.href = url;
-    el.download.download = `${modelId}.${el.outputFormat.value}`;
+    el.download.download = `${modelId}${wmEnabled ? '_wm' : ''}.${el.outputFormat.value}`;
     el.outputActions.classList.remove('hidden');
     
     addToHistory({ modelId, timestamp: Date.now(), url, format: el.outputFormat.value });
@@ -778,6 +995,11 @@ async function restoreSession() {
   if (savedAudio) {
     setVoicePreview(savedAudio, 'Restored');
   }
+
+  // Restore watermark settings
+  const wmEnabled = !!SessionStore.load('watermarkEnabled', false);
+  if (el.watermarkEnabled) el.watermarkEnabled.checked = wmEnabled;
+  if (el.watermarkRun) el.watermarkRun.value = SessionStore.load('watermarkRun', '');
 }
 
 // ============================================
@@ -787,6 +1009,49 @@ el.promptFile.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) setVoicePreviewFromFile(file);
 });
+
+el.watermarkEnabled?.addEventListener('change', () => {
+  SessionStore.save('watermarkEnabled', !!el.watermarkEnabled.checked);
+});
+el.watermarkRun?.addEventListener('change', () => {
+  SessionStore.save('watermarkRun', el.watermarkRun.value || '');
+  updateWatermarkRunDetails();
+});
+el.watermarkTestBtn?.addEventListener('click', runWatermarkTest);
+el.watermarkTestFile?.addEventListener('change', () => {
+  const file = el.watermarkTestFile?.files?.[0];
+  setWatermarkTestFile(file, 'picker');
+  if (el.watermarkTestResult?.textContent === 'Please choose an audio file first.') {
+    el.watermarkTestResult.textContent = 'Ready to analyze.';
+  }
+});
+el.watermarkTestClear?.addEventListener('click', () => {
+  watermarkTestFileOverride = null;
+  if (el.watermarkTestFile) el.watermarkTestFile.value = '';
+  setWatermarkTestFile(null);
+  el.watermarkTestResult.textContent = 'No file analyzed yet';
+});
+
+function attachWatermarkDropZone() {
+  const zone = el.watermarkTestDropZone;
+  if (!zone) return;
+
+  const setOver = (on) => zone.classList.toggle('drag-over', !!on);
+
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    setOver(true);
+  });
+  zone.addEventListener('dragleave', () => setOver(false));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    setOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    setWatermarkTestFile(file, 'drop');
+    el.watermarkTestResult.textContent = 'Ready to analyze.';
+  });
+}
 
 el.recToggle.addEventListener('click', async () => {
   if (isRecording) {
@@ -836,9 +1101,14 @@ window.addEventListener('load', async () => {
     await SessionStore.init();
     await fetchModels();
     await fetchMeta();
+    await fetchWatermarkRuns();
+    renderWatermarkRuns();
     await restoreSession();
     renderHistory();
     updateVisibility();
+    updateWatermarkUI();
+    updateWatermarkRunDetails();
+    attachWatermarkDropZone();
     setStatus('Ready.');
   } catch (e) {
     setStatus(e.message || String(e), 'error');

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from hub.audio_utils import FfmpegNotFoundError, ffmpeg_convert_output, ffmpeg_convert_to_wav, has_ffmpeg
 from hub.hub_manager import HubManager
+from hub.watermark_service import WatermarkService
 
 
 def create_app(*, hub_root: Path) -> FastAPI:
@@ -20,6 +21,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
     static_dir = ui_dir / "static"
 
     manager = HubManager(hub_root)
+    watermark = WatermarkService(hub_root=hub_root)
 
     app = FastAPI(title="TTS Hub", version="0.1")
     app.add_middleware(
@@ -50,6 +52,84 @@ def create_app(*, hub_root: Path) -> FastAPI:
         return {
             "ffmpeg": {"available": has_ffmpeg()},
             "time": int(time.time()),
+        }
+
+    @app.get("/api/watermark/runs")
+    def watermark_runs():
+        runs = watermark.list_runs()
+        return {
+            "default_run_id": watermark.get_default_run_id(),
+            "runs": [
+                {
+                    "id": r.id,
+                    "label": r.label,
+                    "status": r.status,
+                    "updated_at": r.updated_at,
+                }
+                for r in runs
+            ]
+        }
+
+    @app.get("/api/watermark/run_details")
+    def watermark_run_details(run_id: str | None = None):
+        try:
+            details = watermark.get_run_details(run_id=run_id)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return details
+
+    @app.post("/api/watermark/detect")
+    async def watermark_detect(request: Request):
+        form = await request.form()
+
+        task_id = uuid.uuid4().hex
+        uploads_root = manager.uploads_root / f"wm_detect_{task_id}"
+        uploads_root.mkdir(parents=True, exist_ok=True)
+
+        up = form.get("audio")
+        if up is None:
+            return JSONResponse({"error": "audio is required"}, status_code=400)
+
+        filename = getattr(up, "filename", None) or "audio.bin"
+        suffix = Path(filename).suffix or ".bin"
+        input_path = uploads_root / f"input{suffix}"
+        input_path.write_bytes(up.file.read())
+
+        run_id = str(form.get("watermark_run") or "").strip() or None
+        try:
+            wm_threshold = float(form.get("wm_threshold") or 0.8)
+        except Exception:
+            wm_threshold = 0.8
+
+        # Prefer ffmpeg conversion so we can handle mp3/m4a consistently.
+        detect_path = input_path
+        if has_ffmpeg():
+            try:
+                wav_path = uploads_root / "input_16k.wav"
+                ffmpeg_convert_to_wav(input_path=input_path, output_path=wav_path, sample_rate=16000, channels=1)
+                detect_path = wav_path
+            except Exception as e:
+                return JSONResponse({"error": f"ffmpeg conversion failed: {e}"}, status_code=500)
+
+        try:
+            result = watermark.detect_from_audio_file(audio_path=detect_path, run_id=run_id, wm_threshold=wm_threshold)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        model_name = None
+        if result.get("tts_model_id"):
+            spec = next((m for m in manager.list_models() if m.id == result["tts_model_id"]), None)
+            model_name = spec.name if spec else result["tts_model_id"]
+
+        return {
+            "detected": bool(result.get("detected")),
+            "wm_prob": float(result.get("wm_prob", 0.0)),
+            "model": {
+                "id": result.get("pred_attr_id"),
+                "name": model_name,
+                "tts_model_id": result.get("tts_model_id"),
+            },
+            "run": {"id": result.get("run_id")},
         }
 
     @app.get("/api/status")
@@ -93,6 +173,8 @@ def create_app(*, hub_root: Path) -> FastAPI:
         model_id = str(form.get("model_id") or "").strip()
         text = str(form.get("text") or "").strip()
         output_format = str(form.get("output_format") or "wav").strip().lower()
+        watermark_enabled = str(form.get("watermark") or "").strip().lower() in {"1", "true", "yes", "on"}
+        watermark_run = str(form.get("watermark_run") or "").strip() or None
 
         if not model_id:
             return JSONResponse({"error": "model_id is required"}, status_code=400)
@@ -149,14 +231,32 @@ def create_app(*, hub_root: Path) -> FastAPI:
         if not out_path.exists():
             return JSONResponse({"error": f"Worker returned missing output: {out_path}"}, status_code=500)
 
-        # Optional conversion
         final_path = out_path
-        if output_format != "wav":
-            final_path = out_path.with_suffix(f".{output_format}")
+
+        # Optional watermarking (post-processing)
+        if watermark_enabled:
+            if out_path.suffix.lower() != ".wav":
+                return JSONResponse({"error": "Watermarking requires WAV output from the worker"}, status_code=500)
+            wm_path = out_path.with_name(f"{out_path.stem}_wm.wav")
             try:
-                ffmpeg_convert_output(input_wav_path=out_path, output_path=final_path)
+                watermark.embed_into_wav(
+                    input_wav_path=out_path,
+                    output_wav_path=wm_path,
+                    tts_model_id=model_id,
+                    run_id=watermark_run,
+                )
+            except Exception as e:
+                return JSONResponse({"error": f"watermarking failed: {e}"}, status_code=500)
+            final_path = wm_path
+
+        # Optional conversion
+        if output_format != "wav":
+            final_converted = final_path.with_suffix(f".{output_format}")
+            try:
+                ffmpeg_convert_output(input_wav_path=final_path, output_path=final_converted)
             except Exception as e:
                 return JSONResponse({"error": f"ffmpeg output conversion failed: {e}"}, status_code=500)
+            final_path = final_converted
 
         media_type = {
             "wav": "audio/wav",
@@ -167,7 +267,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
         return FileResponse(
             str(final_path),
             media_type=media_type,
-            filename=f"{model_id}_{task_id}.{output_format}",
+            filename=f"{model_id}_{task_id}{'_wm' if watermark_enabled else ''}.{output_format}",
         )
 
     return app
