@@ -125,7 +125,9 @@ const el = {
   watermarkTestDropZone: $('watermarkTestDropZone'),
   watermarkTestClear: $('watermarkTestClear'),
   watermarkTestPreview: $('watermarkTestPreview'),
+  watermarkThresholdAuto: $('watermarkThresholdAuto'),
   watermarkThreshold: $('watermarkThreshold'),
+  watermarkThresholdHint: $('watermarkThresholdHint'),
   watermarkTestBtn: $('watermarkTestBtn'),
   watermarkTestResult: $('watermarkTestResult'),
   
@@ -257,6 +259,7 @@ const WATERMARK_MODEL_MAP = {
 let watermarkRuns = [];
 let watermarkDefaultRunId = null;
 let watermarkTestFileOverride = null;
+let watermarkRecommendedThreshold = null;
 
 // ============================================
 // Utilities
@@ -467,9 +470,15 @@ async function updateWatermarkRunDetails() {
     const stage = details.metrics.stage || '?';
     const epoch = details.metrics.epoch ?? '?';
     lines.push(`Metrics: stage=${stage} epoch=${epoch}`);
-    const keys = ['wm_acc', 'tpr_at_fpr_1pct', 'tpr_at_fpr_1pct_reverb', 'id_acc_pos'];
+    const keys = ['wm_acc', 'tpr_at_fpr_1pct', 'thr_at_fpr_1pct', 'tpr_at_fpr_1pct_reverb', 'id_acc_pos'];
     for (const k of keys) {
       if (typeof details.metrics[k] === 'number') lines.push(`  ${k}: ${details.metrics[k].toFixed(4)}`);
+    }
+  }
+  if (details.config && typeof details.config.n_models === 'number') {
+    lines.push(`K (n_models): ${details.config.n_models}`);
+    if (details.config.n_models !== 2) {
+      lines.push('Note: TTS Hub embeds/labels only 2 models (index-tts2 + chatterbox-multilingual).');
     }
   }
   if (details.report_excerpt) {
@@ -479,6 +488,11 @@ async function updateWatermarkRunDetails() {
   }
 
   el.watermarkRunDetails.textContent = lines.join('\n');
+
+  // Cache recommended threshold for Auto mode (if present) and refresh UI.
+  const rec = details.metrics?.thr_at_fpr_1pct;
+  watermarkRecommendedThreshold = (typeof rec === 'number' && isFinite(rec)) ? rec : null;
+  syncWatermarkThresholdUI();
 }
 
 function updateWatermarkUI() {
@@ -504,6 +518,44 @@ function updateWatermarkUI() {
 
   const mappedId = WATERMARK_MODEL_MAP[currentModelId];
   el.watermarkHint.textContent = `This model will embed attribution ID ${mappedId} (class ${mappedId + 1}).`;
+}
+
+function getAutoWatermarkThreshold() {
+  if (typeof watermarkRecommendedThreshold === 'number' && isFinite(watermarkRecommendedThreshold)) {
+    return watermarkRecommendedThreshold;
+  }
+  return 0.35;
+}
+
+function syncWatermarkThresholdUI() {
+  if (!el.watermarkThreshold) return;
+  const autoEnabled = !!el.watermarkThresholdAuto?.checked;
+  el.watermarkThreshold.disabled = autoEnabled;
+
+  if (autoEnabled) {
+    const thr = getAutoWatermarkThreshold();
+    el.watermarkThreshold.value = thr.toFixed(2);
+    if (el.watermarkThresholdHint) {
+      const src = (typeof watermarkRecommendedThreshold === 'number' && isFinite(watermarkRecommendedThreshold))
+        ? 'from run (thr_at_fpr_1pct)'
+        : 'fallback';
+      el.watermarkThresholdHint.textContent = `Auto threshold: ${thr.toFixed(3)} (${src})`;
+    }
+    return;
+  }
+
+  // Manual mode: restore last manual value if present.
+  const savedManual = SessionStore.load('watermarkThresholdManual', '');
+  if (savedManual && isFinite(parseFloat(savedManual))) {
+    el.watermarkThreshold.value = savedManual;
+  }
+  if (el.watermarkThresholdHint) {
+    if (typeof watermarkRecommendedThreshold === 'number' && isFinite(watermarkRecommendedThreshold)) {
+      el.watermarkThresholdHint.textContent = `Recommended threshold (≈1% FPR): ${watermarkRecommendedThreshold.toFixed(3)}`;
+    } else {
+      el.watermarkThresholdHint.textContent = '';
+    }
+  }
 }
 
 function setWatermarkTestFile(file, source = 'selected') {
@@ -535,7 +587,9 @@ async function runWatermarkTest() {
     el.watermarkTestResult.textContent = 'Please choose an audio file first.';
     return;
   }
-  const threshold = parseFloat(el.watermarkThreshold?.value || '0.8');
+  const threshold = (el.watermarkThresholdAuto?.checked)
+    ? getAutoWatermarkThreshold()
+    : parseFloat(el.watermarkThreshold?.value || '0.35');
   const runId = el.watermarkRun?.value || '';
 
   el.watermarkTestBtn.disabled = true;
@@ -544,7 +598,7 @@ async function runWatermarkTest() {
   try {
     const form = new FormData();
     form.append('audio', file);
-    form.append('wm_threshold', String(isFinite(threshold) ? threshold : 0.8));
+    form.append('wm_threshold', String(isFinite(threshold) ? threshold : 0.35));
     if (runId) form.append('watermark_run', runId);
 
     const res = await fetch('/api/watermark/detect', { method: 'POST', body: form });
@@ -1000,6 +1054,11 @@ async function restoreSession() {
   const wmEnabled = !!SessionStore.load('watermarkEnabled', false);
   if (el.watermarkEnabled) el.watermarkEnabled.checked = wmEnabled;
   if (el.watermarkRun) el.watermarkRun.value = SessionStore.load('watermarkRun', '');
+  const autoThr = SessionStore.load('watermarkThresholdAuto', '1');
+  if (el.watermarkThresholdAuto) el.watermarkThresholdAuto.checked = (String(autoThr) !== '0');
+  const savedManual = SessionStore.load('watermarkThresholdManual', '');
+  if (el.watermarkThreshold && savedManual) el.watermarkThreshold.value = savedManual;
+  syncWatermarkThresholdUI();
 }
 
 // ============================================
@@ -1018,6 +1077,13 @@ el.watermarkRun?.addEventListener('change', () => {
   updateWatermarkRunDetails();
 });
 el.watermarkTestBtn?.addEventListener('click', runWatermarkTest);
+el.watermarkThresholdAuto?.addEventListener('change', () => {
+  SessionStore.save('watermarkThresholdAuto', el.watermarkThresholdAuto.checked ? '1' : '0');
+  syncWatermarkThresholdUI();
+});
+el.watermarkThreshold?.addEventListener('input', () => {
+  SessionStore.save('watermarkThresholdManual', el.watermarkThreshold.value || '');
+});
 el.watermarkTestFile?.addEventListener('change', () => {
   const file = el.watermarkTestFile?.files?.[0];
   setWatermarkTestFile(file, 'picker');

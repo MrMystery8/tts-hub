@@ -97,9 +97,9 @@ def create_app(*, hub_root: Path) -> FastAPI:
 
         run_id = str(form.get("watermark_run") or "").strip() or None
         try:
-            wm_threshold = float(form.get("wm_threshold") or 0.8)
+            wm_threshold = float(form.get("wm_threshold") or 0.35)
         except Exception:
-            wm_threshold = 0.8
+            wm_threshold = 0.35
 
         # Prefer ffmpeg conversion so we can handle mp3/m4a consistently.
         detect_path = input_path

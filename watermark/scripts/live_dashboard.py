@@ -375,6 +375,13 @@ def _make_single_log_app(log_path: Path):
           <div style="height: 8px;"></div>
           <pre id="decodeReport">Loading…</pre>
         </div>
+
+        <div class="card" style="grid-column: span 12;">
+          <h2>Latest Metrics (Raw)</h2>
+          <div class="tiny">Shows all keys from the latest probe + test_probe, including per-attack metrics that may not appear in the tables.</div>
+          <div style="height: 8px;"></div>
+          <pre id="latestMetricsRaw">Loading…</pre>
+        </div>
       </div>
     </div>
 
@@ -476,6 +483,14 @@ def _make_single_log_app(log_path: Path):
       }
 
       function maybeNumber(x) { return (typeof x === "number") ? x : null; }
+
+      function stripHeavy(m) {
+        if (!m) return null;
+        const o = { ...m };
+        delete o.confusion;
+        delete o.confusion_attr;
+        return o;
+      }
 
       function makeMatrix(container, mat, rowLabelPrefix, colLabelPrefix) {
         if (!mat || !Array.isArray(mat) || !mat.length) {
@@ -946,6 +961,17 @@ def _make_single_log_app(log_path: Path):
           document.getElementById("decodeReport").textContent = text.trim() ? text : "No decode_report.txt found next to this metrics log.";
         } catch {
           document.getElementById("decodeReport").textContent = "Could not load decode_report.txt";
+        }
+
+        // Raw metrics (latest probe + test_probe)
+        try {
+          const raw = {
+            latest_probe: stripHeavy(latestProbe),
+            latest_test_probe: stripHeavy(latestTestProbe),
+          };
+          document.getElementById("latestMetricsRaw").textContent = JSON.stringify(raw, null, 2);
+        } catch {
+          document.getElementById("latestMetricsRaw").textContent = "Could not render raw metrics.";
         }
       }
 
@@ -2730,8 +2756,8 @@ def _make_controller_app(runs_dir: Path):
         metrics_path = sdir / "metrics.jsonl"
         stdout_path = sdir / "stdout.log"
 
-	        if kind == "quick_voice_smoke_train":
-	            cmd = [
+        if kind == "quick_voice_smoke_train":
+            cmd = [
                 _preferred_python_executable(),
                 "-m",
                 "watermark.scripts.quick_voice_smoke_train",
@@ -2769,10 +2795,10 @@ def _make_controller_app(runs_dir: Path):
                 str(float(args.get("neg_weight", 5.0))),
                 "--neg_preamble_target",
                 str(float(args.get("neg_preamble_target", 0.5))),
-	                "--reverb_prob",
-	                str(float(args.get("reverb_prob", 0.0))),
-	                "--probe_clips",
-	                str(int(args.get("probe_clips", 1024))),
+                "--reverb_prob",
+                str(float(args.get("reverb_prob", 0.0))),
+                "--probe_clips",
+                str(int(args.get("probe_clips", 1024))),
                 "--probe_every",
                 str(int(args.get("probe_every", 1))),
                 "--probe_reverb_every",
@@ -2783,26 +2809,39 @@ def _make_controller_app(runs_dir: Path):
                 str(float(args.get("id_weight", 2.0))),
                 "--log_steps_every",
                 str(int(args.get("log_steps_every", 25))),
-	                "--log_metrics",
-	                str(metrics_path),
-	                "--out",
-	                str(sdir),
-	            ]
-	            test_attacks = str(args.get("test_attacks", "") or "").strip()
-	            if test_attacks:
-	                cmd.extend(["--test_attacks", test_attacks])
-	            manifest = str(args.get("manifest") or "").strip()
-	            if manifest:
-	                cmd.extend(["--manifest", manifest])
+                "--log_metrics",
+                str(metrics_path),
+                "--out",
+                str(sdir),
+            ]
+
+            n_models = args.get("n_models", None)
+            if n_models is not None and str(n_models).strip() != "":
+                cmd.extend(["--n_models", str(int(n_models))])
+
+            test_attacks = str(args.get("test_attacks", "") or "")
+            # UI: blank means disable extra attacks. Our CLI supports `--test_attacks` with no value.
+            if test_attacks.strip():
+                cmd.extend(["--test_attacks", test_attacks.strip()])
+            else:
+                cmd.append("--test_attacks")
+
+            manifest = str(args.get("manifest") or "").strip()
+            if manifest:
+                cmd.extend(["--manifest", manifest])
+
             split_seed = args.get("split_seed", None)
             if split_seed is not None and str(split_seed).strip() != "":
                 cmd.extend(["--split_seed", str(int(split_seed))])
+
             load_encoder = str(args.get("load_encoder") or "").strip()
             if load_encoder:
                 cmd.extend(["--load_encoder", load_encoder])
+
             load_decoder = str(args.get("load_decoder") or "").strip()
             if load_decoder:
                 cmd.extend(["--load_decoder", load_decoder])
+
             if bool(args.get("freeze_detect_head_in_s3")):
                 cmd.append("--freeze_detect_head_in_s3")
             if bool(args.get("stage2_payload_on_all")):
@@ -3036,17 +3075,35 @@ def _make_controller_app(runs_dir: Path):
                 pass
             # Escalate if it doesn't exit soon.
             def _escalate() -> None:
-                time.sleep(10.0)
+                # Give the training script time to finish the current epoch, run test_probe,
+                # export encoder.pt/decoder.pt, and exit cleanly.
+                time.sleep(180.0)
                 with lock:
                     pp = procs.get(sid)
                 if not pp:
                     return
                 try:
                     if pp.poll() is None:
+                        # First try SIGTERM, then SIGKILL if needed.
                         try:
-                            os.killpg(int(pp.pid), signal.SIGKILL)
+                            os.killpg(int(pp.pid), signal.SIGTERM)
                         except Exception:
-                            pp.kill()
+                            try:
+                                pp.terminate()
+                            except Exception:
+                                pass
+                        time.sleep(60.0)
+                        with lock:
+                            pp2 = procs.get(sid)
+                        if not pp2 or pp2.poll() is not None:
+                            return
+                        try:
+                            os.killpg(int(pp2.pid), signal.SIGKILL)
+                        except Exception:
+                            try:
+                                pp2.kill()
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 

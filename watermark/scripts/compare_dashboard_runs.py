@@ -54,6 +54,21 @@ def _read_config(run_dir: Path) -> dict[str, Any]:
         return {}
 
 
+def _num_classes_from_config(cfg: dict[str, Any]) -> int | None:
+    v = cfg.get("num_classes", None)
+    if v is None:
+        v = cfg.get("n_classes", None)
+    if v is None and cfg.get("n_models", None) is not None:
+        try:
+            return int(cfg.get("n_models")) + 1
+        except Exception:
+            return None
+    try:
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Compare watermark dashboard runs.")
     ap.add_argument("--runs_dir", type=str, default="outputs/dashboard_runs")
@@ -94,12 +109,16 @@ def main() -> int:
         except Exception:
             continue
 
-        encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
-        decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+        cfg = _read_config(rd)
+        num_classes = _num_classes_from_config(cfg) or int(N_CLASSES)
+        n_models = max(1, int(num_classes) - 1)
+
+        encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=num_classes)).to(DEVICE)
+        decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=num_classes)).to(DEVICE)
         encoder.load_state_dict(_load_state_dict(enc_path), strict=True)
         decoder.load_state_dict(_load_state_dict(dec_path), strict=True)
 
-        ds = WatermarkDataset(str(manifest_path), training=False)
+        ds = WatermarkDataset(str(manifest_path), training=False, n_models=n_models)
         n = min(max(0, int(args.n)), len(ds))
         if n <= 0:
             continue
@@ -117,12 +136,14 @@ def main() -> int:
             compute_reverb=not bool(args.no_reverb),
             extra_attacks=extra_attacks,
             include_confusion=False,
+            num_classes=num_classes,
         )
 
-        cfg = _read_config(rd)
         row: dict[str, Any] = {
             "run": rd.name,
             "manifest": str(manifest_path.name),
+            "n_models": cfg.get("n_models", n_models),
+            "num_classes": cfg.get("num_classes", num_classes),
             "epochs_s1": cfg.get("epochs_s1"),
             "epochs_s2": cfg.get("epochs_s2"),
             "epochs_s1b_post": cfg.get("epochs_s1b_post"),

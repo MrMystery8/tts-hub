@@ -650,19 +650,24 @@
 	                <div class="file-upload-text">Choose Audio File</div>
 	                <div class="file-upload-hint">WAV, MP3, FLAC, M4A… (or drag & drop)</div>
 	              </label>
-	              <input type="file" id="watermarkTestFile" accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,audio/*" />
+	              <input type="file" id="watermarkTestFile" accept="audio/*" />
 	              <div class="form-hint" id="watermarkTestFileInfo"></div>
 	            </div>
 
 	            <audio id="watermarkTestPreview" class="audio-player hidden" controls></audio>
 	
 	            <div class="form-row" style="justify-content: space-between; align-items: end;">
-	              <div class="form-row" style="gap: var(--space-sm); align-items: center;">
+	              <div class="form-row" style="gap: var(--space-sm); align-items: center; flex-wrap: wrap;">
+	                <div class="checkbox-group" style="margin: 0;">
+	                  <input type="checkbox" id="watermarkThresholdAuto" checked />
+	                  <label class="checkbox-label" for="watermarkThresholdAuto">Auto threshold</label>
+	                </div>
 	                <label class="form-label" for="watermarkThreshold" style="width: auto;">Threshold</label>
-	                <input type="number" id="watermarkThreshold" min="0" max="1" step="0.01" value="0.80" style="width: 90px;" />
-              </div>
-              <button class="btn btn-secondary" id="watermarkTestBtn">Analyze</button>
-            </div>
+	                <input type="number" id="watermarkThreshold" min="0" max="1" step="0.01" value="0.35" style="width: 90px;" />
+	              </div>
+	              <button class="btn btn-secondary" id="watermarkTestBtn">Analyze</button>
+	            </div>
+	            <div class="form-hint" id="watermarkThresholdHint"></div>
 
             <pre class="output-placeholder" id="watermarkTestResult">No file analyzed yet</pre>
           </div>

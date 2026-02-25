@@ -140,6 +140,14 @@ class WatermarkService:
         if metrics_path.exists():
             metrics = self._read_latest_probe_metrics(metrics_path)
 
+        run_config = None
+        config_path = run_dir / "config.json"
+        if config_path.exists():
+            try:
+                run_config = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                run_config = None
+
         return {
             "id": str(run_id_used),
             "label": label or run_dir.name,
@@ -147,6 +155,7 @@ class WatermarkService:
             "updated_at": updated_at,
             "report_excerpt": report_excerpt,
             "metrics": metrics,
+            "config": run_config,
         }
 
     def embed_into_wav(
@@ -236,8 +245,28 @@ class WatermarkService:
             from watermark.models.decoder import SlidingWindowDecoder, WatermarkDecoder
             from watermark.models.encoder import OverlapAddEncoder, WatermarkEncoder
 
-            encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
-            decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+            num_classes = int(N_CLASSES)
+            cfg_path = run_dir / "config.json"
+            if cfg_path.exists():
+                try:
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    if cfg.get("num_classes", None) is not None:
+                        num_classes = int(cfg.get("num_classes"))
+                    elif cfg.get("n_classes", None) is not None:
+                        num_classes = int(cfg.get("n_classes"))
+                    elif cfg.get("n_models", None) is not None:
+                        num_classes = int(cfg.get("n_models")) + 1
+                except Exception:
+                    num_classes = int(N_CLASSES)
+
+            if int(num_classes) < 3:
+                raise ValueError(
+                    f"Watermark run has num_classes={num_classes} (<3). "
+                    "Need at least clean + 2 model IDs for the hub mapping."
+                )
+
+            encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=num_classes)).to(DEVICE)
+            decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=num_classes)).to(DEVICE)
 
             encoder_state = torch.load(run_dir / "encoder.pt", map_location="cpu")
             decoder_state = torch.load(run_dir / "decoder.pt", map_location="cpu")
@@ -345,7 +374,8 @@ class WatermarkService:
     def _read_latest_probe_metrics(self, path: Path) -> dict[str, Any] | None:
         """
         Best-effort extraction of the latest metrics from a JSONL log.
-        Prefers the most recent record with `type == "probe"`.
+        Prefers `type == "test_probe"` (end-of-run held-out test), otherwise falls back to the most
+        recent `type == "probe"` (validation probe during training).
         """
         import os
 
@@ -377,16 +407,36 @@ class WatermarkService:
                 continue
             if isinstance(obj, dict):
                 fallback = obj
-                if obj.get("type") == "probe":
+                if obj.get("type") == "test_probe":
                     best = obj
                     break
+                if best is None and obj.get("type") == "probe":
+                    best = obj
 
         obj = best or fallback
         if not isinstance(obj, dict):
             return None
 
         out: dict[str, Any] = {}
-        for k in ("stage", "epoch", "wm_acc", "tpr_at_fpr_1pct", "tpr_at_fpr_1pct_reverb", "id_acc_pos"):
+        for k in (
+            "type",
+            "stage",
+            "epoch",
+            "mini_auc",
+            "mini_auc_reverb",
+            "detect_pos_mean",
+            "detect_neg_mean",
+            "thr_at_fpr_1pct",
+            "tpr_at_fpr_1pct",
+            "tpr_at_fpr_1pct_reverb",
+            "id_acc_pos",
+            "id_acc_pos_reverb",
+            "attr_acc",
+            "wm_acc",
+            "wm_acc_reverb",
+            "wm_snr_db_mean",
+            "wm_budget_ok_frac",
+        ):
             if k in obj:
                 out[k] = obj[k]
         return out or None

@@ -9,13 +9,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any, Optional
 
 import torch
 from torch.utils.data import DataLoader
 
-from watermark.config import DEVICE, N_CLASSES
+from watermark.config import DEVICE, N_CLASSES, N_MODELS
 from watermark.evaluation.probe import ProbeItem, compute_probe_metrics
 from watermark.models.decoder import SlidingWindowDecoder, WatermarkDecoder
 from watermark.models.encoder import OverlapAddEncoder, WatermarkEncoder
@@ -25,12 +26,47 @@ from watermark.training.stage2 import train_stage2
 from watermark.utils.metrics_logger import JSONLMetricsLogger
 
 
+def _infer_n_models_from_manifest(manifest_path: Path, *, default: int) -> int:
+    """
+    Infer K (number of attribution IDs) from a manifest by taking max(model_id)+1 over positives.
+    Falls back to `default` if inference fails or there are no positive samples.
+    """
+    try:
+        entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(entries, list):
+            return int(default)
+        max_id = -1
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            has_wm = float(e.get("has_watermark", 0.0) or 0.0)
+            if has_wm < 0.5:
+                continue
+            mid = e.get("model_id", None)
+            if mid is None:
+                continue
+            m = int(mid)
+            if m >= 0:
+                max_id = max(max_id, m)
+        if max_id >= 0:
+            return int(max_id + 1)
+        return int(default)
+    except Exception:
+        return int(default)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Watermark Training Pipeline (Multiclass)")
     parser.add_argument("--manifest", type=str, required=True, help="Path to manifest JSON")
     parser.add_argument("--output", type=str, required=True, help="Output directory for checkpoints")
     parser.add_argument("--load_encoder", type=str, default=None, help="Optional: path to encoder .pt state_dict")
     parser.add_argument("--load_decoder", type=str, default=None, help="Optional: path to decoder .pt state_dict")
+    parser.add_argument(
+        "--n_models",
+        type=int,
+        default=None,
+        help="Optional K (number of attribution IDs). If omitted, inferred from the manifest.",
+    )
 
     parser.add_argument("--epochs_s1", type=int, default=20, help="Stage 1 epochs (decoder pretrain)")
     parser.add_argument("--epochs_s1b", type=int, default=0, help="Legacy: folded into Stage 1 epochs")
@@ -72,12 +108,18 @@ def main() -> int:
     if not manifest_path.exists():
         raise FileNotFoundError(f"manifest not found: {manifest_path}")
 
+    n_models = int(args.n_models) if args.n_models is not None else _infer_n_models_from_manifest(manifest_path, default=int(N_MODELS))
+    if n_models <= 0:
+        raise ValueError(f"n_models must be >= 1, got {n_models}")
+    num_classes = int(n_models + 1)
+
     print(f"Using device: {DEVICE}")
-    print(f"N_CLASSES={N_CLASSES}")
+    print(f"N_CLASSES(default)={N_CLASSES} N_MODELS(default)={N_MODELS}")
+    print(f"n_models(K)={n_models} num_classes(K+1)={num_classes}")
 
     # Models
-    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
-    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=num_classes)).to(DEVICE)
+    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=num_classes)).to(DEVICE)
 
     if args.load_encoder:
         p = Path(args.load_encoder).expanduser().resolve()
@@ -94,13 +136,13 @@ def main() -> int:
         print(f"Loaded decoder weights: {p}")
 
     # Data
-    dataset = WatermarkDataset(str(manifest_path), training=True)
+    dataset = WatermarkDataset(str(manifest_path), training=True, n_models=n_models)
     batch_size = 16
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     # Probe cache (center crop, deterministic)
     probe_items: list[ProbeItem] = []
-    probe_dataset = WatermarkDataset(str(manifest_path), training=False)
+    probe_dataset = WatermarkDataset(str(manifest_path), training=False, n_models=n_models)
     probe_n = min(max(0, int(args.probe_clips)), len(probe_dataset))
     for i in range(probe_n):
         it = probe_dataset[i]
@@ -122,6 +164,7 @@ def main() -> int:
             decoder=decoder,
             device=DEVICE,
             compute_reverb=bool(do_reverb),
+            num_classes=num_classes,
         )
         logger.log({"type": "probe", "stage": stage, "epoch": epoch, **m})
         return m
@@ -154,14 +197,21 @@ def main() -> int:
                 "metrics_path": str(metrics_path),
                 "output_dir": str(output_dir),
                 "manifest": str(manifest_path),
-                "n_classes": int(N_CLASSES),
+                "n_models": int(n_models),
+                "num_classes": int(num_classes),
+                "n_classes": int(num_classes),  # backward compat
                 "config": {
+                    "n_models": int(n_models),
+                    "num_classes": int(num_classes),
+                    "n_classes": int(num_classes),
                     "epochs_s1": int(args.epochs_s1),
                     "epochs_s1b": int(args.epochs_s1b),
                     "epochs_s2": int(args.epochs_s2),
                     "epochs_s1b_post": int(args.epochs_s1b_post),
                     "neg_weight": float(args.neg_weight),
                     "reverb_prob": float(args.reverb_prob),
+                    "detect_weight": float(args.detect_weight),
+                    "id_weight": float(args.id_weight),
                     "probe_n": int(probe_n),
                     "probe_every": int(probe_every),
                     "probe_reverb_every": int(probe_reverb_every),

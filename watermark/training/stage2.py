@@ -117,6 +117,7 @@ def train_stage2(
     neg_weight: float = 1.0,
     stage2_payload_on_all: bool = False,
     start_epoch: int = 0,
+    should_stop: Optional[Callable[[], bool]] = None,
 ):
     """
     Stage 2: Encoder Training (or Stage 3: Finetuning).
@@ -165,12 +166,16 @@ def train_stage2(
     opt = torch.optim.AdamW(params, lr=lr)
 
     for epoch in range(start_epoch, start_epoch + int(epochs)):
+        if should_stop is not None and bool(should_stop()):
+            print(f"[{stage_name}] Stop requested before epoch {epoch+1}; exiting.")
+            break
         epoch_loss = 0.0
         epoch_stats: dict[str, float] = {"loss_detect": 0.0, "loss_id": 0.0, "loss_qual": 0.0, "loss_budget": 0.0}
         if finetune_mode:
             epoch_stats["loss_clean_detect"] = 0.0
 
         batch_count = 0
+        stop_requested_this_epoch = False
         try:
             n_batches = int(len(loader))
         except Exception:
@@ -301,6 +306,11 @@ def train_stage2(
             if i % int(log_interval) == 0:
                 print(f"Epoch {epoch+1} | Batch {i} | Loss: {loss.item():.4f}")
 
+            if should_stop is not None and bool(should_stop()):
+                stop_requested_this_epoch = True
+                print(f"[{stage_name}] Stop requested during epoch {epoch+1}; finishing epoch early.")
+                break
+
         avg_loss = float(epoch_loss / max(1, batch_count))
         for k in list(epoch_stats.keys()):
             epoch_stats[k] = float(epoch_stats[k] / max(1, batch_count))
@@ -317,5 +327,9 @@ def train_stage2(
                     **epoch_stats,
                     "lr": float(opt.param_groups[0].get("lr", lr)),
                     "log_vars": loss_wrapper.log_vars.detach().cpu().numpy().tolist(),
+                    "stop_requested": bool(stop_requested_this_epoch),
                 }
             )
+
+        if stop_requested_this_epoch:
+            break

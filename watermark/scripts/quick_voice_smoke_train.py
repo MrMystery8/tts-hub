@@ -16,6 +16,7 @@ import json
 import os
 import random
 import numpy as np
+import signal
 from pathlib import Path
 
 import torch
@@ -69,7 +70,13 @@ def collect_audio_files(source_dir: Path) -> list[Path]:
     return files
 
 
-def build_manifest(paths: list[Path], out_dir: Path, *, filename: str = "manifest.json") -> Path:
+def build_manifest(
+    paths: list[Path],
+    out_dir: Path,
+    *,
+    filename: str = "manifest.json",
+    n_models: int = N_MODELS,
+) -> Path:
     """
     Manifest format (compat):
       - has_watermark: 0/1
@@ -78,12 +85,15 @@ def build_manifest(paths: list[Path], out_dir: Path, *, filename: str = "manifes
     """
     manifest: list[dict[str, object]] = []
     pos_idx = 0
+    n_models = int(n_models)
+    if n_models <= 0:
+        raise ValueError(f"n_models must be >= 1, got {n_models}")
     for i, p in enumerate(paths):
         is_pos = (i % 2 == 0)
         if is_pos:
-            pair = pos_idx % (N_MODELS * 16)
-            model_id = pair % N_MODELS
-            version = (pair // N_MODELS) % 16
+            pair = pos_idx % (n_models * 16)
+            model_id = pair % n_models
+            version = (pair // n_models) % 16
             pos_idx += 1
         else:
             model_id = -1
@@ -173,6 +183,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Quick voice smoke train (Dashboard Compatible)")
     parser.add_argument("--source_dir", type=str, default="mini_benchmark_data")
     parser.add_argument(
+        "--n_models",
+        type=int,
+        default=int(N_MODELS),
+        help="Number of attribution IDs (K). Class 0 is clean; classes 1..K are IDs.",
+    )
+    parser.add_argument(
         "--manifest",
         type=str,
         default=None,
@@ -219,6 +235,8 @@ def main() -> int:
     parser.add_argument(
         "--test_attacks",
         type=str,
+        nargs="?",
+        const="",
         default="resample_8k,noise_white_20db",
         help="Comma-separated extra attacks to evaluate in the final held-out test_probe (in addition to clean + reverb).",
     )
@@ -275,8 +293,34 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    stop_requested = {"flag": False, "sig": None}
+
+    def _handle_stop(sig: int, _frame) -> None:
+        stop_requested["flag"] = True
+        stop_requested["sig"] = int(sig)
+        try:
+            name = signal.Signals(sig).name
+        except Exception:
+            name = str(sig)
+        print(f"[QuickVoice] Stop requested via {name}. Will stop gracefully soon (finishes partial epoch + test_probe).")
+
+    try:
+        signal.signal(signal.SIGINT, _handle_stop)
+        signal.signal(signal.SIGTERM, _handle_stop)
+    except Exception:
+        pass
+
+    def should_stop() -> bool:
+        return bool(stop_requested["flag"])
+
+    n_models = int(args.n_models)
+    if n_models <= 0:
+        raise ValueError(f"--n_models must be >= 1, got {n_models}")
+    num_classes = int(n_models + 1)
+
     print(f"[QuickVoice] Using device: {DEVICE}")
-    print(f"[QuickVoice] N_MODELS={N_MODELS} N_CLASSES={N_CLASSES}")
+    print(f"[QuickVoice] N_MODELS(default)={N_MODELS} N_CLASSES(default)={N_CLASSES}")
+    print(f"[QuickVoice] n_models(K)={n_models} num_classes(K+1)={num_classes}")
 
     # Reproducibility
     seed = int(args.seed)
@@ -356,7 +400,7 @@ def main() -> int:
                 while len(selected) < num_clips:
                     selected.append(rng.choice(audio_files))
 
-            full_manifest_path = build_manifest(selected, out_dir, filename="manifest_full.json")
+            full_manifest_path = build_manifest(selected, out_dir, filename="manifest_full.json", n_models=n_models)
             entries = json.loads(full_manifest_path.read_text(encoding="utf-8"))
 
             train_entries, val_entries, test_entries = _split_by_path(
@@ -379,8 +423,8 @@ def main() -> int:
     print(f"[QuickVoice] Schedule: s1={epochs_s1_total}, s2_encoder={epochs_s2}, s3_finetune={epochs_s3}")
 
     # Models
-    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
-    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=num_classes)).to(DEVICE)
+    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=num_classes)).to(DEVICE)
 
     if args.load_encoder:
         p = Path(args.load_encoder).expanduser().resolve()
@@ -425,7 +469,11 @@ def main() -> int:
     # Save config.json and copy manifest for self-contained run directory
     config_path = out_dir / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(vars(args), f, indent=2)
+        cfg = dict(vars(args))
+        cfg["n_models"] = int(n_models)
+        cfg["num_classes"] = int(num_classes)
+        cfg["n_classes"] = int(num_classes)  # backward compat
+        json.dump(cfg, f, indent=2)
 
     # Save train/val/test manifests into the run directory (and also write manifest.json for compatibility).
     try:
@@ -434,12 +482,12 @@ def main() -> int:
         pass
 
     # Data
-    train_dataset = WatermarkDataset(str(manifest_train_path), training=True)
+    train_dataset = WatermarkDataset(str(manifest_train_path), training=True, n_models=n_models)
     loader = DataLoader(train_dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
 
     # Probe cache (validation; deterministic center crop)
     probe_items: list[ProbeItem] = []
-    probe_dataset = WatermarkDataset(str(manifest_val_path), training=False)
+    probe_dataset = WatermarkDataset(str(manifest_val_path), training=False, n_models=n_models)
     probe_n = min(max(0, int(args.probe_clips)), len(probe_dataset))
     for i in range(probe_n):
         it = probe_dataset[i]
@@ -478,6 +526,7 @@ def main() -> int:
             decoder=decoder,
             device=DEVICE,
             compute_reverb=bool(reverb),
+            num_classes=num_classes,
         )
         # Calculate composite score if available
         if "tpr_at_fpr_1pct" in metrics and "id_acc_pos" in metrics:
@@ -608,14 +657,21 @@ def main() -> int:
             {
                 "type": "meta",
                 "run_name": out_dir.name,
-                "config": vars(args),
+                "config": {
+                    **vars(args),
+                    "n_models": int(n_models),
+                    "num_classes": int(num_classes),
+                    "n_classes": int(num_classes),
+                },
                 "device": str(DEVICE),
                 "metrics_path": str(metrics_path),
                 "manifest": str(manifest_train_path),
                 "manifest_train": str(manifest_train_path),
                 "manifest_val": str(manifest_val_path),
                 "manifest_test": str(manifest_test_path),
-                "n_classes": int(N_CLASSES),
+                "n_models": int(n_models),
+                "num_classes": int(num_classes),
+                "n_classes": int(num_classes),  # backward compat
             }
         )
 
@@ -634,6 +690,7 @@ def main() -> int:
                     on_step=mlog.log,
                     on_epoch_end=handle_epoch_end_s1,
                     start_epoch=start_epoch_s1,
+                    should_stop=should_stop,
                 )
             elif args.s1_arch == "adaptive_uncertainty":
                 print(f"\n[Stage 1] Decoder pretraining (multiclass, adaptive), starting from epoch {start_epoch_s1}")
@@ -654,9 +711,22 @@ def main() -> int:
                     on_step=mlog.log,
                     on_epoch_end=handle_epoch_end_s1,
                     start_epoch=start_epoch_s1,
+                    should_stop=should_stop,
                 )
             else:
                 raise ValueError(f"Unknown architecture: {args.s1_arch}")
+
+        if should_stop():
+            log_event(
+                mlog,
+                {
+                    "type": "summary",
+                    "stage": "control",
+                    "epoch": -1,
+                    "stopped_early": True,
+                    "signal": stop_requested.get("sig"),
+                },
+            )
 
         if epochs_s2 > 0:
             print(f"\n[Stage 2] Encoder training (decoder frozen), starting from epoch {start_epoch_s2}")
@@ -674,6 +744,19 @@ def main() -> int:
                 on_epoch_end=handle_epoch_end_s2,
                 finetune_mode=False,
                 start_epoch=start_epoch_s2,
+                should_stop=should_stop,
+            )
+
+        if should_stop():
+            log_event(
+                mlog,
+                {
+                    "type": "summary",
+                    "stage": "control",
+                    "epoch": -1,
+                    "stopped_early": True,
+                    "signal": stop_requested.get("sig"),
+                },
             )
 
         if epochs_s3 > 0:
@@ -695,11 +778,12 @@ def main() -> int:
                 on_epoch_end=handle_epoch_end_s3,
                 finetune_mode=True,
                 start_epoch=start_epoch_s3,
+                should_stop=should_stop,
             )
 
         # Final held-out test probe (optional; uses test split, no reverb attack by default).
         try:
-            test_dataset = WatermarkDataset(str(manifest_test_path), training=False)
+            test_dataset = WatermarkDataset(str(manifest_test_path), training=False, n_models=n_models)
             test_n = min(max(0, int(args.probe_clips)), len(test_dataset))
             if test_n > 0:
                 test_items: list[ProbeItem] = []
@@ -713,6 +797,7 @@ def main() -> int:
                     device=DEVICE,
                     compute_reverb=True,
                     extra_attacks=[a.strip() for a in str(args.test_attacks).split(",") if a.strip()],
+                    num_classes=num_classes,
                 )
                 log_event(mlog, {"type": "test_probe", "stage": "test", "epoch": -1, **test_metrics})
                 print(

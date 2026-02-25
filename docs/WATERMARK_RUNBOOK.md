@@ -40,6 +40,20 @@ The final `test_probe` now reports:
 - Optional extra attack metrics (suffix `_<attack_name>`), controlled by `--test_attacks` (default: `resample_8k,noise_white_20db`)
 - Imperceptibility diagnostics: `wm_snr_db_mean`, `wm_budget_ok_frac` (uses `BUDGET_TARGET_DB` from `watermark/config.py`)
 
+### Hub mode (K=2 for the two supported TTS models)
+
+TTS Hub currently maps only two TTS models to attribution IDs:
+
+- `index-tts2` → `pred_model_id=0` (encoder `class_id=1`)
+- `chatterbox-multilingual` → `pred_model_id=1` (encoder `class_id=2`)
+
+For clean-audio iteration you can train a smaller head with `K=2` via `--n_models 2` (so `num_classes=3` including clean).
+The hub reads `config.json` from the selected run to instantiate the correct class count.
+
+Example (fast K=2 run):
+
+`./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --n_models 2 --source_dir mini_benchmark_data --num_clips 2048 --epochs_s1 40 --epochs_s2 0 --epochs_s1b_post 0 --reverb_prob 0.0 --detect_weight 8.0 --id_weight 5.0 --neg_weight 3.0 --probe_every 1 --probe_reverb_every 0 --probe_clips 512 --test_attacks ""`
+
 ### Goal 1: detection-first small run (fast)
 
 `./.venv/bin/python3 -m watermark.scripts.quick_voice_smoke_train --source_dir mini_benchmark_data --num_clips 512 --epochs_s1 6 --epochs_s2 10 --epochs_s1b_post 0 --reverb_prob 0.25 --detect_weight 6.0 --id_weight 0.1 --probe_clips 512 --probe_every 1 --probe_reverb_every 1`

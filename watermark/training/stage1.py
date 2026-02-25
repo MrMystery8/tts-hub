@@ -36,6 +36,7 @@ def train_stage1(
     on_step: Optional[Callable[[dict], None]] = None,
     on_epoch_end: Optional[Callable[[dict], None]] = None,
     start_epoch: int = 0,
+    should_stop: Optional[Callable[[], bool]] = None,
 ):
     """
     Stage 1: Decoder Pretraining.
@@ -54,10 +55,14 @@ def train_stage1(
     print(f"Starting Stage 1: Decoder Pretraining for {epochs} epochs")
     
     for epoch in range(start_epoch, start_epoch + epochs):
+        if should_stop is not None and bool(should_stop()):
+            print(f"[Stage1] Stop requested before epoch {epoch+1}; exiting Stage 1.")
+            break
         epoch_loss = 0.0
         epoch_loss_detect = 0.0
         epoch_loss_id = 0.0
         batch_count = 0
+        stop_requested_this_epoch = False
         try:
             n_batches = int(len(loader))
         except Exception:
@@ -155,6 +160,11 @@ def train_stage1(
             
             if i % log_interval == 0:
                 print(f"Epoch {epoch+1}/{epochs} | Batch {i} | Loss: {loss.item():.4f}")
+
+            if should_stop is not None and bool(should_stop()):
+                stop_requested_this_epoch = True
+                print(f"[Stage1] Stop requested during epoch {epoch+1}; finishing epoch early.")
+                break
         
         avg_loss = epoch_loss / max(1, batch_count)
         avg_loss_detect = epoch_loss_detect / max(1, batch_count)
@@ -172,7 +182,11 @@ def train_stage1(
                     "loss_detect": avg_loss_detect,
                     "loss_id": avg_loss_id,
                     "lr": opt.param_groups[0].get("lr"),
+                    "stop_requested": bool(stop_requested_this_epoch),
                 }
             )
+
+        if stop_requested_this_epoch:
+            break
         
     return loss_hist

@@ -5,13 +5,24 @@ import json
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
 # MPS memory guardrails (must be set before torch import)
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "1.1")
-os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "1.0")
+if "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
+    # Default to no MPS high-watermark cap for IndexTTS2.
+    # Override with INDEXTTS2_MPS_HIGH_WATERMARK_RATIO (or PYTORCH_* directly) if desired.
+    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = os.getenv(
+        "INDEXTTS2_MPS_HIGH_WATERMARK_RATIO", "0.0"
+    )
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4\.53\.0\..*",
+    category=FutureWarning,
+)
 
 from _worker_protocol import recv, send
 
@@ -99,12 +110,25 @@ def _load_model(model_dir: Path) -> Any:
     )
     _tts_model_dir = model_dir
 
-    # Optional per-process MPS memory fraction
+    # Optional per-process MPS memory fraction (unset by default: no hard cap)
     try:
         import torch
 
-        if hasattr(torch, "mps") and torch.backends.mps.is_available():
-            torch.mps.set_per_process_memory_fraction(0.60)
+        mps_mem_fraction = os.getenv("INDEXTTS2_MPS_MEMORY_FRACTION")
+        if (
+            mps_mem_fraction
+            and hasattr(torch, "mps")
+            and torch.backends.mps.is_available()
+        ):
+            mem_fraction = float(mps_mem_fraction)
+            if 0.0 < mem_fraction <= 1.0:
+                torch.mps.set_per_process_memory_fraction(mem_fraction)
+                _log(f"Applied per-process MPS memory fraction={mem_fraction:.3f}")
+            else:
+                _log(
+                    "Ignored INDEXTTS2_MPS_MEMORY_FRACTION "
+                    f"(must be in (0, 1], got {mps_mem_fraction!r})"
+                )
     except Exception:
         pass
 

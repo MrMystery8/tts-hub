@@ -40,6 +40,31 @@ def _pick_manifest(run_dir: Path) -> Path:
     raise FileNotFoundError(f"No manifest found in {run_dir}")
 
 
+def _read_config(run_dir: Path) -> dict[str, Any]:
+    p = run_dir / "config.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _num_classes_from_config(cfg: dict[str, Any]) -> int | None:
+    v = cfg.get("num_classes", None)
+    if v is None:
+        v = cfg.get("n_classes", None)
+    if v is None and cfg.get("n_models", None) is not None:
+        try:
+            return int(cfg.get("n_models")) + 1
+        except Exception:
+            return None
+    try:
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Evaluate a watermark run using the probe metric suite.")
     ap.add_argument("--run", type=str, required=True, help="Run directory containing encoder.pt + decoder.pt")
@@ -74,12 +99,16 @@ def main() -> int:
     print(f"Manifest: {manifest_path}")
     print(f"Device: {DEVICE}")
 
-    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=N_CLASSES)).to(DEVICE)
-    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=N_CLASSES)).to(DEVICE)
+    cfg = _read_config(run_dir)
+    num_classes = _num_classes_from_config(cfg) or int(N_CLASSES)
+    n_models = max(1, int(num_classes) - 1)
+
+    encoder = OverlapAddEncoder(WatermarkEncoder(num_classes=num_classes)).to(DEVICE)
+    decoder = SlidingWindowDecoder(WatermarkDecoder(num_classes=num_classes)).to(DEVICE)
     encoder.load_state_dict(_load_state_dict(enc_path), strict=True)
     decoder.load_state_dict(_load_state_dict(dec_path), strict=True)
 
-    ds = WatermarkDataset(str(manifest_path), training=False)
+    ds = WatermarkDataset(str(manifest_path), training=False, n_models=n_models)
     n = min(max(0, int(args.n)), len(ds))
     if n <= 0:
         raise RuntimeError("No clips available for evaluation (n<=0).")
@@ -97,6 +126,7 @@ def main() -> int:
         compute_reverb=not bool(args.no_reverb),
         extra_attacks=extra_attacks,
         include_confusion=False,
+        num_classes=num_classes,
     )
 
     # Print a compact summary first (keys most useful for stage comparisons).
