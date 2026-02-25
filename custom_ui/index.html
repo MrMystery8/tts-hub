@@ -72,6 +72,19 @@
               </div>
             </div>
 
+            <!-- Saved Voice Library -->
+            <div class="form-row" style="align-items: center; gap: var(--space-sm); margin-top: var(--space-sm);">
+              <label class="form-label" for="savedVoiceSelect" style="width: auto; min-width: 90px;">Saved Voice</label>
+              <select id="savedVoiceSelect" style="flex: 1;">
+                <option value="">(Use uploaded/recorded)</option>
+              </select>
+              <button class="btn btn-secondary" id="saveVoiceBtn" title="Save the currently uploaded/recorded voice">Save…</button>
+              <button class="btn btn-danger" id="deleteVoiceBtn" title="Delete selected saved voice" disabled>Delete</button>
+            </div>
+            <div class="form-hint" style="margin-top: var(--space-xs);">
+              Saved voices persist on disk and can be reused without re-uploading.
+            </div>
+
             <!-- Voice Input Methods -->
             <div class="voice-section">
               <!-- Upload -->

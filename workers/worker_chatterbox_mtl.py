@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import os
 import sys
 import time
@@ -66,6 +68,35 @@ def _clear_mps() -> None:
     except Exception:
         pass
     gc.collect()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _atomic_write_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _update_voice_meta_cache(*, voice_dir: Path, cache_key: str, entry: dict[str, Any]) -> None:
+    meta_path = voice_dir / "meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        caches = dict(meta.get("caches") or {})
+        caches[cache_key] = entry
+        meta["caches"] = caches
+        _atomic_write_json(meta_path, meta)
+    except Exception:
+        return
 
 def _get_deepfilter():
     global _df_model, _df_state
@@ -244,6 +275,7 @@ def write_wav_mono_int16(path: Path, audio: "np.ndarray", sr: int) -> None:
 def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
     fields = dict(req.get("fields") or {})
     hub_root = Path(req.get("hub_root") or ".").resolve()
+    cache_meta: dict[str, Any] = {}
     out_dir = hub_root / "outputs" / "chatterbox-multilingual"
     out_dir.mkdir(parents=True, exist_ok=True)
     request_id = req.get("request_id") or str(int(time.time()))
@@ -268,8 +300,97 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
 
     prompt_audio_path = req.get("prompt_audio_path")
     use_prompt = _bool(fields.get("use_prompt_audio"), bool(prompt_audio_path))
+    voice_id = (fields.get("voice_id") or "").strip().lower() or None
+    if voice_id and (len(voice_id) != 32 or any(c not in "0123456789abcdef" for c in voice_id)):
+        voice_id = None
 
     model = _load_model()
+
+    # Prepare voice conditionals once per request (and optionally persist to disk for saved voices).
+    if use_prompt:
+        if not prompt_audio_path:
+            raise ValueError("use_prompt_audio is enabled but no prompt_audio_path was provided.")
+
+        if voice_id:
+            voice_dir = (hub_root / "outputs" / "voices" / voice_id).resolve()
+            conds_path = voice_dir / "caches" / "chatterbox-multilingual" / "conds.pt"
+            meta_path = voice_dir / "meta.json"
+            try:
+                prompt_path = Path(prompt_audio_path).resolve()
+                audio_sha = _sha256_file(prompt_path)
+            except Exception:
+                audio_sha = None
+
+            want_load = False
+            if conds_path.exists() and meta_path.exists() and audio_sha:
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    cached = (meta.get("caches") or {}).get("chatterbox-multilingual") or {}
+                    want_load = cached.get("source_sha256") == audio_sha
+                except Exception:
+                    want_load = False
+
+            if want_load:
+                from chatterbox.mtl_tts import Conditionals
+
+                t_load0 = time.perf_counter()
+                model.conds = Conditionals.load(conds_path).to(_device)
+                load_ms = (time.perf_counter() - t_load0) * 1000.0
+                _log(f"Loaded saved conditionals from {conds_path}")
+                cache_meta.update(
+                    {
+                        "conds_cache_status": "hit",
+                        "conds_cache_voice_id": voice_id,
+                        "conds_cache_load_ms": round(float(load_ms), 2),
+                    }
+                )
+            else:
+                t_prep0 = time.perf_counter()
+                model.prepare_conditionals(str(prompt_audio_path), exaggeration=float(exaggeration))
+                prep_ms = (time.perf_counter() - t_prep0) * 1000.0
+                try:
+                    conds_path.parent.mkdir(parents=True, exist_ok=True)
+                    if getattr(model, "conds", None) is not None:
+                        t_save0 = time.perf_counter()
+                        model.conds.save(conds_path)
+                        save_ms = (time.perf_counter() - t_save0) * 1000.0
+                        if audio_sha:
+                            _update_voice_meta_cache(
+                                voice_dir=voice_dir,
+                                cache_key="chatterbox-multilingual",
+                                entry={
+                                    "path": "caches/chatterbox-multilingual/conds.pt",
+                                    "source_sha256": audio_sha,
+                                    "prepared_at": int(time.time()),
+                                },
+                            )
+                        _log(f"Saved conditionals to {conds_path}")
+                        cache_meta.update(
+                            {
+                                "conds_cache_status": "miss_saved",
+                                "conds_cache_voice_id": voice_id,
+                                "conds_cache_prepare_ms": round(float(prep_ms), 2),
+                                "conds_cache_save_ms": round(float(save_ms), 2),
+                            }
+                        )
+                except Exception as e:
+                    _log(f"WARNING: failed to save conditionals: {e}")
+                    cache_meta.update(
+                        {
+                            "conds_cache_status": "miss_failed",
+                            "conds_cache_voice_id": voice_id,
+                            "conds_cache_prepare_ms": round(float(prep_ms), 2),
+                            "conds_cache_error": str(e),
+                        }
+                    )
+        else:
+            # Upload-based prompt: still avoid reprocessing per chunk.
+            t_prep0 = time.perf_counter()
+            model.prepare_conditionals(str(prompt_audio_path), exaggeration=float(exaggeration))
+            prep_ms = (time.perf_counter() - t_prep0) * 1000.0
+            cache_meta.update({"conds_cache_status": "upload_prepared", "conds_cache_prepare_ms": round(float(prep_ms), 2)})
+    else:
+        cache_meta.update({"conds_cache_status": "none"})
 
     chunks = [text]
     if enable_chunking:
@@ -287,9 +408,8 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
             "exaggeration": float(exaggeration),
             "fast_mode": bool(fast_mode),
         }
-        if use_prompt and prompt_audio_path:
-            kwargs["audio_prompt_path"] = str(prompt_audio_path)
-
+        # IMPORTANT: after prepare_conditionals(), keep audio_prompt_path unset so we don't
+        # reprocess the reference voice per chunk.
         wav = model.generate(chunk, **kwargs)
         chunk_audio = wav.squeeze(0).detach().cpu().numpy().astype(np.float32, copy=False)
         audio_chunks.append(chunk_audio)
@@ -321,6 +441,7 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
             "sr": int(out_sr),
             "chunks": len(audio_chunks),
             "seconds": round(dt, 3),
+            **cache_meta,
         },
     }
 

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from hub.audio_utils import FfmpegNotFoundError, ffmpeg_convert_output, ffmpeg_convert_to_wav, has_ffmpeg
 from hub.hub_manager import HubManager
+from hub.voice_library import VoiceLibrary
 from hub.watermark_service import WatermarkService
 
 
@@ -21,6 +22,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
     static_dir = ui_dir / "static"
 
     manager = HubManager(hub_root)
+    voices = VoiceLibrary(hub_root=hub_root)
     watermark = WatermarkService(hub_root=hub_root)
 
     app = FastAPI(title="TTS Hub", version="0.1")
@@ -53,6 +55,69 @@ def create_app(*, hub_root: Path) -> FastAPI:
             "ffmpeg": {"available": has_ffmpeg()},
             "time": int(time.time()),
         }
+
+    @app.get("/api/voices")
+    def list_voices():
+        return {
+            "voices": [
+                {
+                    "id": v.id,
+                    "name": v.name,
+                    "created_at": v.created_at,
+                    "duration_s": v.duration_s,
+                    "has_caches": v.has_caches,
+                }
+                for v in voices.list_voices()
+            ]
+        }
+
+    @app.post("/api/voices")
+    async def create_voice(request: Request):
+        form = await request.form()
+        name = str(form.get("name") or "").strip()
+        up = form.get("prompt_audio")
+        if not name:
+            return JSONResponse({"error": "name is required"}, status_code=400)
+        if up is None:
+            return JSONResponse({"error": "prompt_audio is required"}, status_code=400)
+        filename = getattr(up, "filename", None) or "prompt.bin"
+        try:
+            meta = voices.create_voice(name=name, input_bytes=up.file.read(), filename=filename)
+        except FfmpegNotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return meta
+
+    @app.get("/api/voices/{voice_id}")
+    def get_voice(voice_id: str):
+        try:
+            meta = voices.get_voice_meta(voice_id)
+        except FileNotFoundError:
+            return JSONResponse({"error": "voice not found"}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return meta
+
+    @app.get("/api/voices/{voice_id}/audio")
+    def get_voice_audio(voice_id: str):
+        try:
+            wav_path = voices.get_voice_audio_path(voice_id)
+        except FileNotFoundError:
+            return JSONResponse({"error": "voice not found"}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return FileResponse(str(wav_path), media_type="audio/wav", filename="prompt.wav")
+
+    @app.delete("/api/voices/{voice_id}")
+    def delete_voice(voice_id: str):
+        try:
+            voices.delete_voice(voice_id)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return {"ok": True}
 
     @app.get("/api/watermark/runs")
     def watermark_runs():
@@ -172,6 +237,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
 
         model_id = str(form.get("model_id") or "").strip()
         text = str(form.get("text") or "").strip()
+        voice_id = str(form.get("voice_id") or "").strip() or None
         output_format = str(form.get("output_format") or "wav").strip().lower()
         watermark_enabled = str(form.get("watermark") or "").strip().lower() in {"1", "true", "yes", "on"}
         watermark_run = str(form.get("watermark_run") or "").strip() or None
@@ -183,34 +249,51 @@ def create_app(*, hub_root: Path) -> FastAPI:
         if output_format not in {"wav", "mp3", "flac"}:
             return JSONResponse({"error": "output_format must be wav|mp3|flac"}, status_code=400)
 
-        task_id = uuid.uuid4().hex
-        uploads_root = manager.uploads_root / task_id
-        uploads_root.mkdir(parents=True, exist_ok=True)
-
         def _save_upload(field: str) -> Path | None:
             up = form.get(field)
             if up is None:
                 return None
+            if uploads_root is None:
+                raise RuntimeError("uploads_root not initialized")
             filename = getattr(up, "filename", None) or f"{field}.bin"
             suffix = Path(filename).suffix or ".bin"
             out_path = uploads_root / f"{field}{suffix}"
             out_path.write_bytes(up.file.read())
             return out_path
 
-        prompt_audio_in = _save_upload("prompt_audio")
+        uploads_root: Path | None = None
+        need_uploads_root = (voice_id is None and form.get("prompt_audio") is not None) or (form.get("emo_audio") is not None)
+        if need_uploads_root:
+            task_id = uuid.uuid4().hex
+            uploads_root = manager.uploads_root / task_id
+            uploads_root.mkdir(parents=True, exist_ok=True)
+
+        prompt_audio_in = None
+        if voice_id is None:
+            prompt_audio_in = _save_upload("prompt_audio")
         emo_audio_in = _save_upload("emo_audio")
 
         # Convert uploaded audio to wav (keep worker dependencies smaller / consistent).
         prompt_audio_wav = None
         emo_audio_wav = None
         try:
-            if prompt_audio_in:
+            if voice_id:
+                # Use stable on-disk voice reference; do not stage prompt upload.
+                voices.ensure_audio_meta(voice_id)
+                prompt_audio_wav = voices.get_voice_audio_path(voice_id)
+            elif prompt_audio_in:
                 prompt_audio_wav = uploads_root / "prompt.wav"
                 ffmpeg_convert_to_wav(input_path=prompt_audio_in, output_path=prompt_audio_wav)
             if emo_audio_in:
                 emo_audio_wav = uploads_root / "emo.wav"
                 ffmpeg_convert_to_wav(input_path=emo_audio_in, output_path=emo_audio_wav)
         except FfmpegNotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        except FileNotFoundError:
+            return JSONResponse({"error": "voice_id not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
         model_request = {
@@ -222,10 +305,15 @@ def create_app(*, hub_root: Path) -> FastAPI:
             "hub_root": str(manager.hub_root),
         }
 
+        if model_id in {"index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx"} and not prompt_audio_wav:
+            return JSONResponse({"error": "prompt_audio or voice_id is required for this model"}, status_code=400)
+
+        t0 = time.perf_counter()
         try:
             result = manager.generate(model_id=model_id, request=model_request)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
+        hub_worker_ms = (time.perf_counter() - t0) * 1000.0
 
         out_path = result.output_path
         if not out_path.exists():
@@ -264,10 +352,35 @@ def create_app(*, hub_root: Path) -> FastAPI:
             "flac": "audio/flac",
         }[output_format]
 
+        download_id = out_path.stem
+        if watermark_enabled:
+            download_id = f"{download_id}_wm"
+
+        headers: dict[str, str] = {
+            "X-Hub-Worker-MS": f"{hub_worker_ms:.2f}",
+        }
+        meta = result.meta or {}
+        # Surface a few cache-related fields for quick benchmarking/debugging.
+        for k in (
+            "speaker_cache_status",
+            "speaker_cache_load_ms",
+            "speaker_cache_compute_ms",
+            "speaker_cache_save_ms",
+            "speaker_cache_voice_id",
+            "conds_cache_status",
+            "conds_cache_load_ms",
+            "conds_cache_prepare_ms",
+            "conds_cache_save_ms",
+            "conds_cache_voice_id",
+        ):
+            if k in meta and meta[k] is not None:
+                headers[f"X-{k.replace('_', '-')}"] = str(meta[k])
+
         return FileResponse(
             str(final_path),
             media_type=media_type,
-            filename=f"{model_id}_{task_id}{'_wm' if watermark_enabled else ''}.{output_format}",
+            filename=f"{model_id}_{download_id}.{output_format}",
+            headers=headers,
         )
 
     return app

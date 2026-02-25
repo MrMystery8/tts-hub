@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import os
 import sys
@@ -88,6 +89,53 @@ def _clear_memory() -> None:
         gc.collect()
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _model_fingerprint(model_dir: Path) -> str:
+    """
+    Practical fingerprint: config.yaml bytes + (size, mtime) for large weight files.
+    """
+    h = hashlib.sha256()
+    cfg = model_dir / "config.yaml"
+    if cfg.exists():
+        h.update(cfg.read_bytes())
+    for name in ("gpt.pth", "s2mel.pth", "wav2vec2bert_stats.pt"):
+        p = model_dir / name
+        try:
+            st = p.stat()
+            h.update(f"{name}:{st.st_size}:{int(st.st_mtime)}".encode("utf-8"))
+        except Exception:
+            h.update(f"{name}:missing".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _atomic_write_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _update_voice_meta_cache(*, voice_dir: Path, cache_key: str, entry: dict[str, Any]) -> None:
+    meta_path = voice_dir / "meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        caches = dict(meta.get("caches") or {})
+        caches[cache_key] = entry
+        meta["caches"] = caches
+        _atomic_write_json(meta_path, meta)
+    except Exception:
+        return
+
+
 def _load_model(model_dir: Path) -> Any:
     global _tts, _tts_model_dir
 
@@ -139,6 +187,7 @@ def _load_model(model_dir: Path) -> Any:
 
 def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
     fields = dict(req.get("fields") or {})
+    meta: dict[str, Any] = {}
 
     hub_root = Path(req.get("hub_root") or ".").resolve()
     out_dir = hub_root / "outputs" / "index-tts2"
@@ -153,6 +202,110 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
     prompt_audio_path = req.get("prompt_audio_path")
     if not prompt_audio_path:
         raise ValueError("IndexTTS2 requires prompt_audio (reference voice).")
+
+    voice_id = (fields.get("voice_id") or "").strip().lower() or None
+    if voice_id and (len(voice_id) != 32 or any(c not in "0123456789abcdef" for c in voice_id)):
+        voice_id = None
+    if voice_id:
+        voice_dir = (hub_root / "outputs" / "voices" / voice_id).resolve()
+        cache_dir = voice_dir / "caches" / "index-tts2"
+        cache_st = cache_dir / "speaker_cache_v1.safetensors"
+        cache_meta = cache_dir / "speaker_cache_v1.json"
+
+        audio_sha = None
+        try:
+            audio_sha = _sha256_file(Path(str(prompt_audio_path)).resolve())
+        except Exception:
+            audio_sha = None
+        fp = _model_fingerprint(model_dir)
+
+        loaded = False
+        load_ms: float | None = None
+        compute_ms: float | None = None
+        save_ms: float | None = None
+        if audio_sha:
+            t_load0 = time.perf_counter()
+            loaded = bool(
+                tts.try_load_speaker_cache(
+                    str(cache_st),
+                    str(cache_meta),
+                    expected_audio_sha256=audio_sha,
+                    expected_model_fingerprint=fp,
+                    prompt_path_key=str(prompt_audio_path),
+                    emo_path_key=str(prompt_audio_path),
+                )
+            )
+            load_ms = (time.perf_counter() - t_load0) * 1000.0
+        if loaded:
+            _log(f"Loaded speaker cache for voice_id={voice_id}")
+            meta.update(
+                {
+                    "speaker_cache_status": "hit",
+                    "speaker_cache_voice_id": voice_id,
+                    "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
+                }
+            )
+        else:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                if audio_sha:
+                    t_comp0 = time.perf_counter()
+                    tensors = tts.compute_speaker_cache_tensors(
+                        spk_audio_prompt=str(prompt_audio_path),
+                        emo_audio_prompt=str(prompt_audio_path),
+                        verbose=_bool(fields.get("verbose"), False),
+                    )
+                    compute_ms = (time.perf_counter() - t_comp0) * 1000.0
+                    t_save0 = time.perf_counter()
+                    tts.save_speaker_cache(
+                        str(cache_st),
+                        str(cache_meta),
+                        audio_sha256=audio_sha,
+                        model_fingerprint=fp,
+                        tensors=tensors,
+                    )
+                    save_ms = (time.perf_counter() - t_save0) * 1000.0
+                    _update_voice_meta_cache(
+                        voice_dir=voice_dir,
+                        cache_key="index-tts2",
+                        entry={
+                            "path": "caches/index-tts2/speaker_cache_v1.safetensors",
+                            "meta_path": "caches/index-tts2/speaker_cache_v1.json",
+                            "source_sha256": audio_sha,
+                            "model_fingerprint": fp,
+                            "prepared_at": int(time.time()),
+                        },
+                    )
+                    # Ensure in-memory caches are also set for this run
+                    tts.try_load_speaker_cache(
+                        str(cache_st),
+                        str(cache_meta),
+                        expected_audio_sha256=audio_sha,
+                        expected_model_fingerprint=fp,
+                        prompt_path_key=str(prompt_audio_path),
+                        emo_path_key=str(prompt_audio_path),
+                    )
+                    _log(f"Saved speaker cache for voice_id={voice_id}")
+                    meta.update(
+                        {
+                            "speaker_cache_status": "miss_saved",
+                            "speaker_cache_voice_id": voice_id,
+                            "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
+                            "speaker_cache_compute_ms": round(float(compute_ms or 0.0), 2),
+                            "speaker_cache_save_ms": round(float(save_ms or 0.0), 2),
+                        }
+                    )
+            except Exception as e:
+                _log(f"WARNING: failed to build speaker cache: {e}")
+                meta.update(
+                    {
+                        "speaker_cache_status": "miss_failed",
+                        "speaker_cache_voice_id": voice_id,
+                        "speaker_cache_error": str(e),
+                    }
+                )
+    else:
+        meta["speaker_cache_status"] = "none"
 
     # Emotion controls
     emo_mode = (fields.get("emo_mode") or "speaker").strip()
@@ -237,6 +390,7 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
             "model": "IndexTTS2",
             "device": str(getattr(tts, "device", "unknown")),
             "seconds": round(dt, 3),
+            **meta,
         },
     }
 

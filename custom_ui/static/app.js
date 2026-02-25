@@ -2,6 +2,15 @@
 
 const $ = (id) => document.getElementById(id);
 
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 // ============================================
 // Session Persistence (localStorage + IndexedDB)
 // ============================================
@@ -88,6 +97,9 @@ const el = {
   promptInfo: $('promptInfo'),
   voicePreviewContainer: $('voicePreviewContainer'),
   clearVoice: $('clearVoice'),
+  savedVoiceSelect: $('savedVoiceSelect'),
+  saveVoiceBtn: $('saveVoiceBtn'),
+  deleteVoiceBtn: $('deleteVoiceBtn'),
   recToggle: $('recToggle'),
   recordingIndicator: $('recordingIndicator'),
   recordingTime: $('recordingTime'),
@@ -224,6 +236,7 @@ let models = [];
 let currentModelId = null;
 let promptBlob = null;
 let promptUploadedFile = null;
+let selectedVoiceId = '';
 let isRecording = false;
 let recordingStartTime = null;
 let recordingTimer = null;
@@ -720,6 +733,7 @@ async function stopRecording() {
 // Voice Preview
 // ============================================
 function setVoicePreview(blob, label) {
+  clearSavedVoiceSelection();
   promptBlob = blob;
   promptUploadedFile = null;
   const url = URL.createObjectURL(blob);
@@ -732,6 +746,7 @@ function setVoicePreview(blob, label) {
 }
 
 function setVoicePreviewFromFile(file) {
+  clearSavedVoiceSelection();
   promptUploadedFile = file;
   promptBlob = null;
   const url = URL.createObjectURL(file);
@@ -750,6 +765,7 @@ function setVoicePreviewFromFile(file) {
 function clearVoice() {
   promptBlob = null;
   promptUploadedFile = null;
+  clearSavedVoiceSelection();
   el.promptFile.value = '';
   el.promptPreview.removeAttribute('src');
   el.promptPreview.load();
@@ -796,11 +812,133 @@ async function drawWaveform(blob) {
 }
 
 // ============================================
+// Saved Voice Library
+// ============================================
+async function fetchVoices() {
+  try {
+    const res = await fetch('/api/voices');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.voices) ? data.voices : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderVoiceSelect(voices) {
+  if (!el.savedVoiceSelect) return;
+  const current = selectedVoiceId || '';
+  const options = [
+    { value: '', label: '(Use uploaded/recorded)' },
+    ...voices.map(v => ({ value: v.id, label: `${v.name}${v.duration_s ? ` (${v.duration_s.toFixed(1)}s)` : ''}` })),
+  ];
+  el.savedVoiceSelect.innerHTML = options.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('');
+  el.savedVoiceSelect.value = options.some(o => o.value === current) ? current : '';
+  selectedVoiceId = el.savedVoiceSelect.value || '';
+  SessionStore.save('selectedVoiceId', selectedVoiceId || '');
+  if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = !selectedVoiceId;
+}
+
+function clearSavedVoiceSelection() {
+  selectedVoiceId = '';
+  if (el.savedVoiceSelect) el.savedVoiceSelect.value = '';
+  SessionStore.save('selectedVoiceId', '');
+  if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = true;
+}
+
+async function selectSavedVoice(voiceId) {
+  voiceId = (voiceId || '').trim();
+  if (!voiceId) {
+    clearSavedVoiceSelection();
+    return;
+  }
+  selectedVoiceId = voiceId;
+  if (el.savedVoiceSelect) el.savedVoiceSelect.value = voiceId;
+  SessionStore.save('selectedVoiceId', voiceId);
+  if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = false;
+
+  promptBlob = null;
+  promptUploadedFile = null;
+  SessionStore.saveAudio('promptAudio', null);
+
+  const url = `/api/voices/${encodeURIComponent(voiceId)}/audio?ts=${Date.now()}`;
+  el.promptPreview.src = url;
+  el.promptInfo.textContent = `Saved voice • ${voiceId}`;
+  el.voicePreviewContainer.classList.remove('hidden');
+  el.clearVoice.disabled = false;
+
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const blob = await res.blob();
+      drawWaveform(blob);
+    }
+  } catch { }
+}
+
+async function saveCurrentVoiceToLibrary() {
+  const source = promptBlob || promptUploadedFile;
+  if (!source) {
+    setStatus('Upload or record a voice first.', 'error');
+    return;
+  }
+  const name = (window.prompt('Saved voice name:', '') || '').trim();
+  if (!name) return;
+
+  const form = new FormData();
+  form.append('name', name);
+  if (promptBlob) form.append('prompt_audio', promptBlob, 'prompt.wav');
+  else form.append('prompt_audio', promptUploadedFile);
+
+  setStatus('Saving voice...', 'loading');
+  try {
+    const res = await fetch('/api/voices', { method: 'POST', body: form });
+    if (!res.ok) {
+      let details = '';
+      try { const data = await res.json(); details = data.error || JSON.stringify(data); }
+      catch { details = await res.text(); }
+      throw new Error(details || `HTTP ${res.status}`);
+    }
+    const meta = await res.json();
+    const voices = await fetchVoices();
+    renderVoiceSelect(voices);
+    await selectSavedVoice(meta.id);
+    setStatus('Voice saved.', 'ok');
+  } catch (e) {
+    setStatus(e.message || String(e), 'error');
+  }
+}
+
+async function deleteSelectedVoice() {
+  const voiceId = selectedVoiceId || (el.savedVoiceSelect?.value || '').trim();
+  if (!voiceId) return;
+  const ok = window.confirm('Delete this saved voice? This cannot be undone.');
+  if (!ok) return;
+  setStatus('Deleting voice...', 'loading');
+  try {
+    const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      let details = '';
+      try { const data = await res.json(); details = data.error || JSON.stringify(data); }
+      catch { details = await res.text(); }
+      throw new Error(details || `HTTP ${res.status}`);
+    }
+    clearVoice();
+    const voices = await fetchVoices();
+    renderVoiceSelect(voices);
+    setStatus('Voice deleted.', 'ok');
+  } catch (e) {
+    setStatus(e.message || String(e), 'error');
+  }
+}
+
+// ============================================
 // Generation
 // ============================================
 async function generate() {
   const modelId = currentModelId;
   const text = el.text.value.trim();
+  const voiceId = (selectedVoiceId || el.savedVoiceSelect?.value || '').trim();
   
   if (!modelId) { setStatus('Please select a model.', 'error'); return; }
   if (!text) { setStatus('Please enter some text.', 'error'); return; }
@@ -809,7 +947,7 @@ async function generate() {
   const promptText = el.promptText?.value.trim() || '';
   
   // Validation
-  if (['index-tts2', 'f5-hindi-urdu', 'cosyvoice3-mlx'].includes(modelId) && !prompt) {
+  if (['index-tts2', 'f5-hindi-urdu', 'cosyvoice3-mlx'].includes(modelId) && !prompt && !voiceId) {
     setStatus('This model requires a reference audio.', 'error'); return;
   }
   if (modelId === 'cosyvoice3-mlx' && el.cosyMode.value === 'zero_shot' && !promptText) {
@@ -828,9 +966,12 @@ async function generate() {
   form.append('model_id', modelId);
   form.append('text', text);
   form.append('output_format', el.outputFormat.value);
+  if (voiceId) form.append('voice_id', voiceId);
   if (promptText) form.append('prompt_text', promptText);
-  if (promptBlob) form.append('prompt_audio', promptBlob, 'prompt.wav');
-  else if (promptUploadedFile) form.append('prompt_audio', promptUploadedFile);
+  if (!voiceId) {
+    if (promptBlob) form.append('prompt_audio', promptBlob, 'prompt.wav');
+    else if (promptUploadedFile) form.append('prompt_audio', promptUploadedFile);
+  }
 
   // Model-specific params
   appendModelParams(form, modelId);
@@ -1044,10 +1185,16 @@ async function restoreSession() {
   const savedPromptText = SessionStore.load('promptText');
   if (savedPromptText) el.promptText.value = savedPromptText;
 
-  // Restore audio
-  const savedAudio = await SessionStore.loadAudio('promptAudio');
-  if (savedAudio) {
-    setVoicePreview(savedAudio, 'Restored');
+  // Restore saved voice selection (preferred over embedded audio blob)
+  const savedVoiceId = SessionStore.load('selectedVoiceId', '');
+  if (savedVoiceId) {
+    await selectSavedVoice(savedVoiceId);
+  } else {
+    // Restore audio
+    const savedAudio = await SessionStore.loadAudio('promptAudio');
+    if (savedAudio) {
+      setVoicePreview(savedAudio, 'Restored');
+    }
   }
 
   // Restore watermark settings
@@ -1068,6 +1215,20 @@ el.promptFile.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) setVoicePreviewFromFile(file);
 });
+
+el.savedVoiceSelect?.addEventListener('change', async () => {
+  const vid = (el.savedVoiceSelect.value || '').trim();
+  if (!vid) {
+    selectedVoiceId = '';
+    SessionStore.save('selectedVoiceId', '');
+    if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = true;
+    return;
+  }
+  await selectSavedVoice(vid);
+});
+
+el.saveVoiceBtn?.addEventListener('click', saveCurrentVoiceToLibrary);
+el.deleteVoiceBtn?.addEventListener('click', deleteSelectedVoice);
 
 el.watermarkEnabled?.addEventListener('change', () => {
   SessionStore.save('watermarkEnabled', !!el.watermarkEnabled.checked);
@@ -1169,6 +1330,8 @@ window.addEventListener('load', async () => {
     await fetchMeta();
     await fetchWatermarkRuns();
     renderWatermarkRuns();
+    const voices = await fetchVoices();
+    renderVoiceSelect(voices);
     await restoreSession();
     renderHistory();
     updateVisibility();

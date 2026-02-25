@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,6 +37,14 @@ class HubManager:
         self._specs: dict[str, ModelSpec] = {s.id: s for s in get_model_specs()}
         self._workers: dict[str, SubprocessWorker] = {}
         self._stats: dict[str, GenerationStats] = {}
+        self._lock = threading.RLock()
+        # Enforce a single loaded model worker at a time (default on).
+        self._single_model = os.getenv("TTS_HUB_SINGLE_MODEL", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
 
     def list_models(self) -> list[ModelSpec]:
         return list(self._specs.values())
@@ -50,74 +60,88 @@ class HubManager:
         }
 
     def _get_worker(self, model_id: str) -> SubprocessWorker:
-        if model_id in self._workers:
-            return self._workers[model_id]
+        with self._lock:
+            if self._single_model and any(mid != model_id for mid in self._workers):
+                self.unload_all(keep=model_id)
 
-        spec = self._specs[model_id]
-        runtime = resolve_model_runtime_paths(self.hub_root, model_id)
-        worker_script = self.hub_root / "workers" / spec.worker_entry
+            if model_id in self._workers:
+                return self._workers[model_id]
 
-        pythonpath = os_pathsep_join([str(p) for p in runtime.pythonpath if p.exists()])
-        env = {}
-        if pythonpath:
-            env["PYTHONPATH"] = pythonpath
+            spec = self._specs[model_id]
+            runtime = resolve_model_runtime_paths(self.hub_root, model_id)
+            worker_script = self.hub_root / "workers" / spec.worker_entry
 
-        cfg = WorkerConfig(
-            python=runtime.python,
-            worker_script=worker_script,
-            env=env,
-            cwd=runtime.repo_root,
-        )
-        worker = SubprocessWorker(cfg)
-        self._workers[model_id] = worker
+            pythonpath = os_pathsep_join([str(p) for p in runtime.pythonpath if p.exists()])
+            env = {}
+            if pythonpath:
+                env["PYTHONPATH"] = pythonpath
+
+            cfg = WorkerConfig(
+                python=runtime.python,
+                worker_script=worker_script,
+                env=env,
+                cwd=runtime.repo_root,
+            )
+            worker = SubprocessWorker(cfg)
+            self._workers[model_id] = worker
         
-        # Determine device based on model
-        device = "cpu"
-        if "mlx" in model_id:
-            device = "mlx"
-        elif "ane" in model_id:
-            device = "ane"
-        else:
-            device = "mps"  # Default to MPS for PyTorch models on Apple Silicon
+            # Determine device based on model
+            device = "cpu"
+            if "mlx" in model_id:
+                device = "mlx"
+            elif "ane" in model_id:
+                device = "ane"
+            else:
+                device = "mps"  # Default to MPS for PyTorch models on Apple Silicon
         
-        if model_id not in self._stats:
-            self._stats[model_id] = GenerationStats(device=device)
-        else:
-            self._stats[model_id].device = device
+            if model_id not in self._stats:
+                self._stats[model_id] = GenerationStats(device=device)
+            else:
+                self._stats[model_id].device = device
             
-        return worker
+            return worker
 
     def unload(self, model_id: str) -> None:
-        worker = self._workers.get(model_id)
-        if not worker:
-            return
-        try:
-            worker.request({"cmd": "unload"})
-        finally:
-            worker.shutdown()
-            self._workers.pop(model_id, None)
+        with self._lock:
+            worker = self._workers.get(model_id)
+            if not worker:
+                return
+            try:
+                worker.request({"cmd": "unload"})
+            finally:
+                worker.shutdown()
+                self._workers.pop(model_id, None)
+
+    def unload_all(self, *, keep: str | None = None) -> None:
+        """Unload every worker process except `keep` (if provided)."""
+        with self._lock:
+            for mid in list(self._workers.keys()):
+                if keep and mid == keep:
+                    continue
+                self.unload(mid)
 
     def generate(self, *, model_id: str, request: dict[str, Any]) -> GenerateResult:
-        worker = self._get_worker(model_id)
-        req_id = uuid.uuid4().hex
-        request = dict(request)
-        request["request_id"] = req_id
-        
-        start_time = time.time()
-        resp = worker.request({"cmd": "gen", "model_id": model_id, "request": request})
-        duration_ms = (time.time() - start_time) * 1000
-        
-        # Update stats
-        if model_id not in self._stats:
-            self._stats[model_id] = GenerationStats()
-        stats = self._stats[model_id]
-        stats.total += 1
-        stats.last_time = start_time
-        stats.last_duration_ms = duration_ms
-        
-        out_path = Path(resp["result"]["output_path"])
-        meta = dict(resp["result"].get("meta", {}))
-        return GenerateResult(output_path=out_path, meta=meta)
+        with self._lock:
+            worker = self._get_worker(model_id)
+            req_id = uuid.uuid4().hex
+            request = dict(request)
+            request["request_id"] = req_id
+            
+            start_time = time.time()
+            resp = worker.request({"cmd": "gen", "model_id": model_id, "request": request})
+            duration_ms = (time.time() - start_time) * 1000
+            
+            # Update stats
+            if model_id not in self._stats:
+                self._stats[model_id] = GenerationStats()
+            stats = self._stats[model_id]
+            stats.total += 1
+            stats.last_time = start_time
+            stats.last_duration_ms = duration_ms
+            
+            out_path = Path(resp["result"]["output_path"])
+            meta = dict(resp["result"].get("meta", {}))
+            return GenerateResult(output_path=out_path, meta=meta)
 
 
 def os_pathsep_join(items: list[str]) -> str:
@@ -125,4 +149,3 @@ def os_pathsep_join(items: list[str]) -> str:
 
     sep = os.pathsep
     return sep.join([x for x in items if x])
-
