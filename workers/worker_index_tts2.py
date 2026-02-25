@@ -12,12 +12,14 @@ from typing import Any
 
 # MPS memory guardrails (must be set before torch import)
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-if "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
-    # Default to no MPS high-watermark cap for IndexTTS2.
-    # Override with INDEXTTS2_MPS_HIGH_WATERMARK_RATIO (or PYTORCH_* directly) if desired.
-    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = os.getenv(
-        "INDEXTTS2_MPS_HIGH_WATERMARK_RATIO", "0.0"
-    )
+os.environ.setdefault(
+    "PYTORCH_MPS_HIGH_WATERMARK_RATIO",
+    os.getenv("INDEXTTS2_MPS_HIGH_WATERMARK_RATIO", "1.1"),
+)
+os.environ.setdefault(
+    "PYTORCH_MPS_LOW_WATERMARK_RATIO",
+    os.getenv("INDEXTTS2_MPS_LOW_WATERMARK_RATIO", "1.0"),
+)
 
 warnings.filterwarnings(
     "ignore",
@@ -29,6 +31,8 @@ from _worker_protocol import recv, send
 
 _tts = None
 _tts_model_dir: Path | None = None
+_torch_configured = False
+_last_mps_driver_bytes: int | None = None
 
 
 def _log(msg: str) -> None:
@@ -71,6 +75,61 @@ def _parse_emo_vector(s: str | None) -> list[float] | None:
         return None
 
 
+def _bytes_to_gb(n: int | None) -> float | None:
+    if n is None:
+        return None
+    return float(n) / (1024.0**3)
+
+
+def _configure_torch_once() -> Any:
+    """
+    Configure Torch/MPS settings *before* model weights are loaded.
+    Must only run after MPS-related env vars are set (done at module import time).
+    """
+    global _torch_configured
+
+    import torch
+
+    if _torch_configured:
+        return torch
+
+    torch.set_grad_enabled(False)
+    try:
+        if hasattr(torch, "backends") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            _log(
+                "Torch configured for MPS: "
+                f"torch={getattr(torch, '__version__', 'unknown')} "
+                f"PYTORCH_MPS_HIGH_WATERMARK_RATIO={os.getenv('PYTORCH_MPS_HIGH_WATERMARK_RATIO','')} "
+                f"PYTORCH_MPS_LOW_WATERMARK_RATIO={os.getenv('PYTORCH_MPS_LOW_WATERMARK_RATIO','')}"
+            )
+    except Exception:
+        pass
+
+    try:
+        mps_mem_fraction = os.getenv("INDEXTTS2_MPS_MEMORY_FRACTION", "").strip()
+        if (
+            mps_mem_fraction
+            and hasattr(torch, "mps")
+            and torch.backends.mps.is_available()
+        ):
+            mem_fraction = float(mps_mem_fraction)
+        else:
+            mem_fraction = 0.60
+
+        if (
+            hasattr(torch, "mps")
+            and torch.backends.mps.is_available()
+            and 0.0 < float(mem_fraction) <= 1.0
+        ):
+            torch.mps.set_per_process_memory_fraction(float(mem_fraction))
+            _log(f"Applied per-process MPS memory fraction={float(mem_fraction):.3f}")
+    except Exception as e:
+        _log(f"WARNING: failed to apply MPS memory fraction: {e}")
+
+    _torch_configured = True
+    return torch
+
+
 def _clear_memory() -> None:
     try:
         from indextts.memory_utils import clear_memory
@@ -87,6 +146,98 @@ def _clear_memory() -> None:
         except Exception:
             pass
         gc.collect()
+
+
+def _get_mem_telemetry() -> dict[str, Any]:
+    telemetry: dict[str, Any] = {}
+
+    rss_bytes: int | None = None
+    try:
+        import psutil
+
+        rss_bytes = int(psutil.Process(os.getpid()).memory_info().rss)
+    except Exception:
+        rss_bytes = None
+
+    mps_current_bytes: int | None = None
+    mps_driver_bytes: int | None = None
+    try:
+        torch = _configure_torch_once()
+        if hasattr(torch, "mps") and torch.backends.mps.is_available():
+            mps_current_bytes = int(torch.mps.current_allocated_memory())
+            if hasattr(torch.mps, "driver_allocated_memory"):
+                mps_driver_bytes = int(torch.mps.driver_allocated_memory())
+    except Exception:
+        mps_current_bytes = None
+        mps_driver_bytes = None
+
+    telemetry["rss_gb"] = round(_bytes_to_gb(rss_bytes) or 0.0, 3)
+    if mps_current_bytes is not None:
+        telemetry["mps_current_gb"] = round(_bytes_to_gb(mps_current_bytes) or 0.0, 3)
+    if mps_driver_bytes is not None:
+        telemetry["mps_driver_gb"] = round(_bytes_to_gb(mps_driver_bytes) or 0.0, 3)
+
+    return telemetry
+
+
+def _recycle_recommended(telemetry: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """
+    Decide whether to recycle the worker process to reclaim MPS/Metal driver memory.
+    Returns (recommended, meta_updates).
+    """
+    global _last_mps_driver_bytes
+
+    meta: dict[str, Any] = {}
+    driver_gb = telemetry.get("mps_driver_gb")
+    if not isinstance(driver_gb, (int, float)) or driver_gb <= 0:
+        _last_mps_driver_bytes = None
+        return False, meta
+
+    try:
+        import psutil
+
+        total_gb = float(psutil.virtual_memory().total) / (1024.0**3)
+    except Exception:
+        total_gb = 0.0
+
+    env_thresh = os.getenv("INDEXTTS2_RECYCLE_DRIVER_GB", "").strip()
+    if env_thresh:
+        try:
+            thresh_gb = float(env_thresh)
+        except ValueError:
+            thresh_gb = 0.75 * total_gb if total_gb > 0 else 0.0
+    else:
+        thresh_gb = 0.75 * total_gb if total_gb > 0 else 0.0
+
+    growth_env = os.getenv("INDEXTTS2_RECYCLE_DRIVER_GROWTH_GB", "").strip()
+    if growth_env:
+        try:
+            growth_gb = float(growth_env)
+        except ValueError:
+            growth_gb = 2.0
+    else:
+        growth_gb = 2.0
+
+    grew_gb: float | None = None
+    try:
+        if _last_mps_driver_bytes is not None:
+            grew_gb = (driver_gb - (_bytes_to_gb(_last_mps_driver_bytes) or 0.0))
+    except Exception:
+        grew_gb = None
+
+    meta["recycle_driver_threshold_gb"] = round(float(thresh_gb), 3) if thresh_gb else None
+    if grew_gb is not None:
+        meta["mps_driver_growth_gb"] = round(float(grew_gb), 3)
+
+    recommended = False
+    if thresh_gb and driver_gb >= thresh_gb:
+        recommended = True
+    if grew_gb is not None and grew_gb >= growth_gb:
+        recommended = True
+
+    # Update last-seen driver bytes for next request
+    _last_mps_driver_bytes = int(driver_gb * (1024.0**3))
+    return recommended, meta
 
 
 def _sha256_file(path: Path) -> str:
@@ -145,6 +296,9 @@ def _load_model(model_dir: Path) -> Any:
     # Ensure relative HF cache paths inside IndexTTS resolve correctly.
     os.environ.setdefault("HF_HUB_CACHE", str(model_dir / "hf_cache"))
 
+    # Configure torch/MPS settings before importing IndexTTS2 / loading weights.
+    torch = _configure_torch_once()
+
     _log(f"Loading IndexTTS2 from {model_dir} ...")
     from indextts.infer_v2 import IndexTTS2
 
@@ -158,30 +312,14 @@ def _load_model(model_dir: Path) -> Any:
     )
     _tts_model_dir = model_dir
 
-    # Optional per-process MPS memory fraction (unset by default: no hard cap)
-    try:
-        import torch
-
-        mps_mem_fraction = os.getenv("INDEXTTS2_MPS_MEMORY_FRACTION")
-        if (
-            mps_mem_fraction
-            and hasattr(torch, "mps")
-            and torch.backends.mps.is_available()
-        ):
-            mem_fraction = float(mps_mem_fraction)
-            if 0.0 < mem_fraction <= 1.0:
-                torch.mps.set_per_process_memory_fraction(mem_fraction)
-                _log(f"Applied per-process MPS memory fraction={mem_fraction:.3f}")
-            else:
-                _log(
-                    "Ignored INDEXTTS2_MPS_MEMORY_FRACTION "
-                    f"(must be in (0, 1], got {mps_mem_fraction!r})"
-                )
-    except Exception:
-        pass
-
     _clear_memory()
-    _log(f"Loaded in {time.time() - t0:.2f}s on device={getattr(_tts, 'device', 'unknown')}")
+    load_dt = time.time() - t0
+    tele = _get_mem_telemetry()
+    _log(
+        "Loaded in "
+        f"{load_dt:.2f}s on device={getattr(_tts, 'device', 'unknown')} "
+        f"(rss_gb={tele.get('rss_gb')}, mps_driver_gb={tele.get('mps_driver_gb')})"
+    )
     return _tts
 
 
@@ -198,85 +336,37 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
     model_dir = Path(fields.get("model_dir") or Path.cwd() / "checkpoints").resolve()
     tts = _load_model(model_dir)
 
+    torch = _configure_torch_once()
+
     text = str(req.get("text") or "").strip()
     prompt_audio_path = req.get("prompt_audio_path")
     if not prompt_audio_path:
         raise ValueError("IndexTTS2 requires prompt_audio (reference voice).")
 
-    voice_id = (fields.get("voice_id") or "").strip().lower() or None
-    if voice_id and (len(voice_id) != 32 or any(c not in "0123456789abcdef" for c in voice_id)):
-        voice_id = None
-    if voice_id:
-        voice_dir = (hub_root / "outputs" / "voices" / voice_id).resolve()
-        cache_dir = voice_dir / "caches" / "index-tts2"
-        cache_st = cache_dir / "speaker_cache_v1.safetensors"
-        cache_meta = cache_dir / "speaker_cache_v1.json"
+    with torch.inference_mode():
+        voice_id = (fields.get("voice_id") or "").strip().lower() or None
+        if voice_id and (len(voice_id) != 32 or any(c not in "0123456789abcdef" for c in voice_id)):
+            voice_id = None
+        if voice_id:
+            voice_dir = (hub_root / "outputs" / "voices" / voice_id).resolve()
+            cache_dir = voice_dir / "caches" / "index-tts2"
+            cache_st = cache_dir / "speaker_cache_v1.safetensors"
+            cache_meta = cache_dir / "speaker_cache_v1.json"
 
-        audio_sha = None
-        try:
-            audio_sha = _sha256_file(Path(str(prompt_audio_path)).resolve())
-        except Exception:
             audio_sha = None
-        fp = _model_fingerprint(model_dir)
-
-        loaded = False
-        load_ms: float | None = None
-        compute_ms: float | None = None
-        save_ms: float | None = None
-        if audio_sha:
-            t_load0 = time.perf_counter()
-            loaded = bool(
-                tts.try_load_speaker_cache(
-                    str(cache_st),
-                    str(cache_meta),
-                    expected_audio_sha256=audio_sha,
-                    expected_model_fingerprint=fp,
-                    prompt_path_key=str(prompt_audio_path),
-                    emo_path_key=str(prompt_audio_path),
-                )
-            )
-            load_ms = (time.perf_counter() - t_load0) * 1000.0
-        if loaded:
-            _log(f"Loaded speaker cache for voice_id={voice_id}")
-            meta.update(
-                {
-                    "speaker_cache_status": "hit",
-                    "speaker_cache_voice_id": voice_id,
-                    "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
-                }
-            )
-        else:
             try:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                if audio_sha:
-                    t_comp0 = time.perf_counter()
-                    tensors = tts.compute_speaker_cache_tensors(
-                        spk_audio_prompt=str(prompt_audio_path),
-                        emo_audio_prompt=str(prompt_audio_path),
-                        verbose=_bool(fields.get("verbose"), False),
-                    )
-                    compute_ms = (time.perf_counter() - t_comp0) * 1000.0
-                    t_save0 = time.perf_counter()
-                    tts.save_speaker_cache(
-                        str(cache_st),
-                        str(cache_meta),
-                        audio_sha256=audio_sha,
-                        model_fingerprint=fp,
-                        tensors=tensors,
-                    )
-                    save_ms = (time.perf_counter() - t_save0) * 1000.0
-                    _update_voice_meta_cache(
-                        voice_dir=voice_dir,
-                        cache_key="index-tts2",
-                        entry={
-                            "path": "caches/index-tts2/speaker_cache_v1.safetensors",
-                            "meta_path": "caches/index-tts2/speaker_cache_v1.json",
-                            "source_sha256": audio_sha,
-                            "model_fingerprint": fp,
-                            "prepared_at": int(time.time()),
-                        },
-                    )
-                    # Ensure in-memory caches are also set for this run
+                audio_sha = _sha256_file(Path(str(prompt_audio_path)).resolve())
+            except Exception:
+                audio_sha = None
+            fp = _model_fingerprint(model_dir)
+
+            loaded = False
+            load_ms: float | None = None
+            compute_ms: float | None = None
+            save_ms: float | None = None
+            if audio_sha:
+                t_load0 = time.perf_counter()
+                loaded = bool(
                     tts.try_load_speaker_cache(
                         str(cache_st),
                         str(cache_meta),
@@ -285,105 +375,162 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
                         prompt_path_key=str(prompt_audio_path),
                         emo_path_key=str(prompt_audio_path),
                     )
-                    _log(f"Saved speaker cache for voice_id={voice_id}")
-                    meta.update(
-                        {
-                            "speaker_cache_status": "miss_saved",
-                            "speaker_cache_voice_id": voice_id,
-                            "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
-                            "speaker_cache_compute_ms": round(float(compute_ms or 0.0), 2),
-                            "speaker_cache_save_ms": round(float(save_ms or 0.0), 2),
-                        }
-                    )
-            except Exception as e:
-                _log(f"WARNING: failed to build speaker cache: {e}")
+                )
+                load_ms = (time.perf_counter() - t_load0) * 1000.0
+            if loaded:
+                _log(f"Loaded speaker cache for voice_id={voice_id}")
                 meta.update(
                     {
-                        "speaker_cache_status": "miss_failed",
+                        "speaker_cache_status": "hit",
                         "speaker_cache_voice_id": voice_id,
-                        "speaker_cache_error": str(e),
+                        "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
                     }
                 )
-    else:
-        meta["speaker_cache_status"] = "none"
+            else:
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    if audio_sha:
+                        t_comp0 = time.perf_counter()
+                        tensors = tts.compute_speaker_cache_tensors(
+                            spk_audio_prompt=str(prompt_audio_path),
+                            emo_audio_prompt=str(prompt_audio_path),
+                            verbose=_bool(fields.get("verbose"), False),
+                        )
+                        compute_ms = (time.perf_counter() - t_comp0) * 1000.0
+                        t_save0 = time.perf_counter()
+                        tts.save_speaker_cache(
+                            str(cache_st),
+                            str(cache_meta),
+                            audio_sha256=audio_sha,
+                            model_fingerprint=fp,
+                            tensors=tensors,
+                        )
+                        save_ms = (time.perf_counter() - t_save0) * 1000.0
+                        _update_voice_meta_cache(
+                            voice_dir=voice_dir,
+                            cache_key="index-tts2",
+                            entry={
+                                "path": "caches/index-tts2/speaker_cache_v1.safetensors",
+                                "meta_path": "caches/index-tts2/speaker_cache_v1.json",
+                                "source_sha256": audio_sha,
+                                "model_fingerprint": fp,
+                                "prepared_at": int(time.time()),
+                            },
+                        )
+                        # Ensure in-memory caches are also set for this run
+                        tts.try_load_speaker_cache(
+                            str(cache_st),
+                            str(cache_meta),
+                            expected_audio_sha256=audio_sha,
+                            expected_model_fingerprint=fp,
+                            prompt_path_key=str(prompt_audio_path),
+                            emo_path_key=str(prompt_audio_path),
+                        )
+                        _log(f"Saved speaker cache for voice_id={voice_id}")
+                        meta.update(
+                            {
+                                "speaker_cache_status": "miss_saved",
+                                "speaker_cache_voice_id": voice_id,
+                                "speaker_cache_load_ms": round(float(load_ms or 0.0), 2),
+                                "speaker_cache_compute_ms": round(float(compute_ms or 0.0), 2),
+                                "speaker_cache_save_ms": round(float(save_ms or 0.0), 2),
+                            }
+                        )
+                except Exception as e:
+                    _log(f"WARNING: failed to build speaker cache: {e}")
+                    meta.update(
+                        {
+                            "speaker_cache_status": "miss_failed",
+                            "speaker_cache_voice_id": voice_id,
+                            "speaker_cache_error": str(e),
+                        }
+                    )
+        else:
+            meta["speaker_cache_status"] = "none"
 
-    # Emotion controls
-    emo_mode = (fields.get("emo_mode") or "speaker").strip()
-    emo_audio_path = req.get("emo_audio_path")
-    emo_alpha = _float(fields.get("emo_alpha"), 0.65)
-    emo_vector = _parse_emo_vector(fields.get("emo_vector"))
-    emo_text = (fields.get("emo_text") or "").strip() or None
-    use_random = _bool(fields.get("use_random"), False)
+        # Emotion controls
+        emo_mode = (fields.get("emo_mode") or "speaker").strip()
+        emo_audio_path = req.get("emo_audio_path")
+        emo_alpha = _float(fields.get("emo_alpha"), 0.65)
+        emo_vector = _parse_emo_vector(fields.get("emo_vector"))
+        emo_text = (fields.get("emo_text") or "").strip() or None
+        use_random = _bool(fields.get("use_random"), False)
 
-    if emo_mode not in {"speaker", "emo_ref", "emo_vector", "emo_text"}:
-        emo_mode = "speaker"
+        if emo_mode not in {"speaker", "emo_ref", "emo_vector", "emo_text"}:
+            emo_mode = "speaker"
 
-    use_emo_text = emo_mode == "emo_text"
-    if use_emo_text and not emo_text:
-        emo_text = None
+        use_emo_text = emo_mode == "emo_text"
+        if use_emo_text and not emo_text:
+            emo_text = None
 
-    if emo_mode == "emo_ref":
-        if not emo_audio_path:
-            raise ValueError("emo_mode=emo_ref requires emo_audio upload.")
-        emo_audio_prompt = str(emo_audio_path)
-    else:
-        emo_audio_prompt = None
+        if emo_mode == "emo_ref":
+            if not emo_audio_path:
+                raise ValueError("emo_mode=emo_ref requires emo_audio upload.")
+            emo_audio_prompt = str(emo_audio_path)
+        else:
+            emo_audio_prompt = None
 
-    if emo_mode == "emo_vector":
-        if emo_vector is None:
-            raise ValueError("emo_mode=emo_vector requires emo_vector (8 floats).")
-    elif emo_mode != "emo_vector":
-        # only pass vector in vector mode or text mode (text mode generates vectors internally)
-        emo_vector = None
+        if emo_mode == "emo_vector":
+            if emo_vector is None:
+                raise ValueError("emo_mode=emo_vector requires emo_vector (8 floats).")
+        elif emo_mode != "emo_vector":
+            # only pass vector in vector mode or text mode (text mode generates vectors internally)
+            emo_vector = None
 
-    # Segment controls
-    max_text_tokens_per_segment = _int(fields.get("max_text_tokens_per_segment"), 120)
-    max_mel_tokens = _int(fields.get("max_mel_tokens"), 1500)
+        # Segment controls
+        max_text_tokens_per_segment = _int(fields.get("max_text_tokens_per_segment"), 120)
+        max_mel_tokens = _int(fields.get("max_mel_tokens"), 1500)
 
-    # Sampling controls (defaults aligned with index-tts webui)
-    fast_mode = _bool(fields.get("fast_mode"), False)
-    do_sample = _bool(fields.get("do_sample"), True)
-    temperature = _float(fields.get("temperature"), 0.8)
-    top_p = _float(fields.get("top_p"), 0.8)
-    top_k = _int(fields.get("top_k"), 30)
-    num_beams = _int(fields.get("num_beams"), 3)
-    repetition_penalty = _float(fields.get("repetition_penalty"), 10.0)
-    length_penalty = _float(fields.get("length_penalty"), 0.0)
+        # Sampling controls (defaults aligned with index-tts webui)
+        fast_mode = _bool(fields.get("fast_mode"), False)
+        do_sample = _bool(fields.get("do_sample"), True)
+        temperature = _float(fields.get("temperature"), 0.8)
+        top_p = _float(fields.get("top_p"), 0.8)
+        top_k = _int(fields.get("top_k"), 30)
+        num_beams = _int(fields.get("num_beams"), 3)
+        repetition_penalty = _float(fields.get("repetition_penalty"), 10.0)
+        length_penalty = _float(fields.get("length_penalty"), 0.0)
 
-    if fast_mode:
-        num_beams = 1
-        do_sample = False
-        max_mel_tokens = min(max_mel_tokens, 1000)
+        if fast_mode:
+            num_beams = 1
+            do_sample = False
+            max_mel_tokens = min(max_mel_tokens, 1000)
 
-    generation_kwargs = {
-        "do_sample": bool(do_sample),
-        "temperature": float(temperature),
-        "top_p": float(top_p),
-        "top_k": int(top_k) if int(top_k) > 0 else None,
-        "num_beams": int(num_beams),
-        "repetition_penalty": float(repetition_penalty),
-        "length_penalty": float(length_penalty),
-        "max_mel_tokens": int(max_mel_tokens),
-    }
+        generation_kwargs = {
+            "do_sample": bool(do_sample),
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "top_k": int(top_k) if int(top_k) > 0 else None,
+            "num_beams": int(num_beams),
+            "repetition_penalty": float(repetition_penalty),
+            "length_penalty": float(length_penalty),
+            "max_mel_tokens": int(max_mel_tokens),
+        }
 
-    t0 = time.time()
-    tts.infer(
-        spk_audio_prompt=str(prompt_audio_path),
-        text=text,
-        output_path=str(out_path),
-        emo_audio_prompt=emo_audio_prompt,
-        emo_alpha=float(emo_alpha),
-        emo_vector=emo_vector,
-        use_emo_text=bool(use_emo_text),
-        emo_text=emo_text,
-        use_random=bool(use_random),
-        verbose=_bool(fields.get("verbose"), False),
-        max_text_tokens_per_segment=int(max_text_tokens_per_segment),
-        **generation_kwargs,
-    )
-    dt = time.time() - t0
+        t0 = time.time()
+        tts.infer(
+            spk_audio_prompt=str(prompt_audio_path),
+            text=text,
+            output_path=str(out_path),
+            emo_audio_prompt=emo_audio_prompt,
+            emo_alpha=float(emo_alpha),
+            emo_vector=emo_vector,
+            use_emo_text=bool(use_emo_text),
+            emo_text=emo_text,
+            use_random=bool(use_random),
+            verbose=_bool(fields.get("verbose"), False),
+            max_text_tokens_per_segment=int(max_text_tokens_per_segment),
+            **generation_kwargs,
+        )
+        dt = time.time() - t0
 
     _clear_memory()
+    tele = _get_mem_telemetry()
+    meta.update(tele)
+
+    recommended, rec_meta = _recycle_recommended(tele)
+    meta.update({k: v for k, v in rec_meta.items() if v is not None})
+    meta["recycle_recommended"] = bool(recommended)
     return {
         "output_path": str(out_path),
         "meta": {
@@ -416,6 +563,13 @@ def main() -> None:
             if cmd == "gen":
                 result = _handle_gen(msg.get("request") or {})
                 send({"ok": True, "result": result})
+                try:
+                    should_recycle = bool((result.get("meta") or {}).get("recycle_recommended"))
+                except Exception:
+                    should_recycle = False
+                if should_recycle:
+                    _log("Recycling worker process after gen (recycle_recommended=true)")
+                    return
                 continue
             send({"ok": False, "error": f"unknown cmd: {cmd}"})
         except Exception as e:
