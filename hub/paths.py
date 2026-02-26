@@ -32,6 +32,10 @@ def resolve_model_runtime_paths(hub_root: Path, model_id: str) -> ModelRuntimePa
         repo_root = workspace_root / "index-tts"
         python = _pick_python(repo_root / ".venv")
         pythonpath = [repo_root]
+    elif model_id == "qwen3-tts-mlx":
+        repo_root = workspace_root / "Qwen3-TTS"
+        python = _pick_python(repo_root / ".venv")
+        pythonpath = [repo_root]
     elif model_id == "chatterbox-multilingual":
         repo_root = workspace_root / "chatterbox-multilingual"
         python = _pick_python(repo_root / ".venv")
@@ -56,4 +60,3 @@ def resolve_model_runtime_paths(hub_root: Path, model_id: str) -> ModelRuntimePa
         raise KeyError(f"Unknown model_id: {model_id}")
 
     return ModelRuntimePaths(model_id=model_id, repo_root=repo_root, python=python, pythonpath=pythonpath)
-

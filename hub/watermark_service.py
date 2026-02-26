@@ -24,13 +24,13 @@ class WatermarkService:
     - Watermarking models operate at 16kHz (watermark.config.SAMPLE_RATE).
     - For now, we only map 2 TTS models to attribution IDs:
         - index-tts2 -> pred_model_id 0 (class_id 1)
-        - chatterbox-multilingual -> pred_model_id 1 (class_id 2)
+        - qwen3-tts-mlx -> pred_model_id 1 (class_id 2)
     """
 
     # Mapping: TTS model id -> pred_model_id (0..K-1). Encoder class_id is pred_model_id + 1.
     _TTS_TO_ATTR_ID: dict[str, int] = {
         "index-tts2": 0,
-        "chatterbox-multilingual": 1,
+        "qwen3-tts-mlx": 1,
     }
 
     def __init__(self, *, hub_root: Path):

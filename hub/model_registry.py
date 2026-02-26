@@ -20,6 +20,12 @@ def get_model_specs() -> list[ModelSpec]:
             description="PyTorch AR zero-shot TTS with emotion control; MPS-optimized worker mode.",
         ),
         ModelSpec(
+            id="qwen3-tts-mlx",
+            name="Qwen3-TTS MLX (qwen3-tts-mlx)",
+            worker_entry="worker_qwen3_tts_mlx.py",
+            description="MLX Qwen3-TTS Base voice cloning; 1.7B/0.6B 8-bit; optional auto-transcribe.",
+        ),
+        ModelSpec(
             id="chatterbox-multilingual",
             name="Chatterbox Multilingual (chatterbox-multilingual)",
             worker_entry="worker_chatterbox_mtl.py",
@@ -50,4 +56,3 @@ def get_model_specs() -> list[ModelSpec]:
             description="CoreML/ANE VoxCPM with prompt-cache voice cloning (requires transcript).",
         ),
     ]
-

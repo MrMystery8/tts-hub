@@ -1,0 +1,12 @@
+{
+  "name": "tts-hub",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  },
+  "scripts": {
+    "e2e:install": "playwright install chromium",
+    "e2e:qwen": "playwright test tests/e2e/qwen_voice_clone.spec.ts"
+  }
+}
+

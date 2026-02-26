@@ -45,7 +45,7 @@ The final `test_probe` now reports:
 TTS Hub currently maps only two TTS models to attribution IDs:
 
 - `index-tts2` → `pred_model_id=0` (encoder `class_id=1`)
-- `chatterbox-multilingual` → `pred_model_id=1` (encoder `class_id=2`)
+- `qwen3-tts-mlx` → `pred_model_id=1` (encoder `class_id=2`)
 
 For clean-audio iteration you can train a smaller head with `K=2` via `--n_models 2` (so `num_classes=3` including clean).
 The hub reads `config.json` from the selected run to instantiate the correct class count.

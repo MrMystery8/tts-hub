@@ -540,6 +540,49 @@
               </div>
             </div>
 
+            <!-- Qwen3-TTS (MLX) Settings -->
+            <div class="model-settings hidden" id="settingsQwen" data-model="qwen3-tts-mlx">
+              <div class="form-group">
+                <label class="form-label" for="qwenModel">Model</label>
+                <select id="qwenModel">
+                  <option value="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit" selected>1.7B Base (8-bit, default)</option>
+                  <option value="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit">0.6B Base (8-bit, faster)</option>
+                </select>
+              </div>
+
+              <div class="checkbox-group mb-md">
+                <input type="checkbox" id="qwenAutoTranscribe" checked />
+                <label class="checkbox-label" for="qwenAutoTranscribe">Auto-transcribe reference audio if transcript is missing</label>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="qwenLanguage">Language</label>
+                <input type="text" id="qwenLanguage" value="auto" />
+                <div class="form-hint">Use 'auto' for automatic detection</div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Speed</span>
+                <div class="slider-container">
+                  <input type="number" id="qwenSpeed" min="0.5" max="2" step="0.05" value="1.0" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group mb-md">
+                <span class="slider-label">Temperature</span>
+                <div class="slider-container">
+                  <input type="number" id="qwenTemperature" min="0.1" max="2" step="0.05" value="0.7" style="width: 80px;" />
+                </div>
+              </div>
+
+              <div class="slider-group">
+                <span class="slider-label">Max Tokens</span>
+                <div class="slider-container">
+                  <input type="number" id="qwenMaxTokens" min="64" max="8192" step="1" value="1200" style="width: 100px;" />
+                </div>
+              </div>
+            </div>
+
             <!-- Pocket TTS Settings -->
             <div class="model-settings hidden" id="settingsPocket" data-model="pocket-tts">
               <div class="form-group">
@@ -633,7 +676,7 @@
                 <input type="checkbox" id="watermarkEnabled" />
                 <label class="checkbox-label" for="watermarkEnabled">Embed watermark in output</label>
               </div>
-              <div class="form-hint" id="watermarkHint">Supported models: IndexTTS2, Chatterbox Multilingual</div>
+              <div class="form-hint" id="watermarkHint">Supported models: IndexTTS2, Qwen3-TTS MLX</div>
             </div>
 
             <div class="form-group">

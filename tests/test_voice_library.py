@@ -31,8 +31,14 @@ class TestVoiceLibrary(unittest.TestCase):
             lib = VoiceLibrary(hub_root=hub_root)
 
             wav_bytes = _make_wav_bytes()
-            meta = lib.create_voice(name="Test Voice", input_bytes=wav_bytes, filename="sample.wav")
+            meta = lib.create_voice(
+                name="Test Voice",
+                input_bytes=wav_bytes,
+                filename="sample.wav",
+                prompt_text="hello world",
+            )
             voice_id = meta["id"]
+            self.assertEqual(meta.get("prompt_text"), "hello world")
 
             # Files exist
             voice_dir = hub_root / "outputs" / "voices" / voice_id
@@ -52,4 +58,3 @@ class TestVoiceLibrary(unittest.TestCase):
             # Delete
             lib.delete_voice(voice_id)
             self.assertFalse(voice_dir.exists())
-

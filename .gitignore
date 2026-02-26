@@ -36,6 +36,12 @@ wheels/
 .idea/
 .vscode/
 
+# Playwright
+playwright-report/
+test-results/
+.playwright-cli/
+output/
+
 # Project specific
 outputs/
 checkpoints/

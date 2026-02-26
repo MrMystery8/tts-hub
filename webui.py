@@ -75,6 +75,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
     async def create_voice(request: Request):
         form = await request.form()
         name = str(form.get("name") or "").strip()
+        prompt_text = str(form.get("prompt_text") or "").strip() or None
         up = form.get("prompt_audio")
         if not name:
             return JSONResponse({"error": "name is required"}, status_code=400)
@@ -82,7 +83,12 @@ def create_app(*, hub_root: Path) -> FastAPI:
             return JSONResponse({"error": "prompt_audio is required"}, status_code=400)
         filename = getattr(up, "filename", None) or "prompt.bin"
         try:
-            meta = voices.create_voice(name=name, input_bytes=up.file.read(), filename=filename)
+            meta = voices.create_voice(
+                name=name,
+                input_bytes=up.file.read(),
+                filename=filename,
+                prompt_text=prompt_text,
+            )
         except FfmpegNotFoundError as e:
             return JSONResponse({"error": str(e)}, status_code=500)
         except ValueError as e:
@@ -305,7 +311,7 @@ def create_app(*, hub_root: Path) -> FastAPI:
             "hub_root": str(manager.hub_root),
         }
 
-        if model_id in {"index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx"} and not prompt_audio_wav:
+        if model_id in {"index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx", "qwen3-tts-mlx"} and not prompt_audio_wav:
             return JSONResponse({"error": "prompt_audio or voice_id is required for this model"}, status_code=400)
 
         t0 = time.perf_counter()
@@ -372,6 +378,11 @@ def create_app(*, hub_root: Path) -> FastAPI:
             "conds_cache_prepare_ms",
             "conds_cache_save_ms",
             "conds_cache_voice_id",
+            "ref_transcript_status",
+            "ref_audio_cache_status",
+            "model_id",
+            "seconds",
+            "sr",
         ):
             if k in meta and meta[k] is not None:
                 headers[f"X-{k.replace('_', '-')}"] = str(meta[k])

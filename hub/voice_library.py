@@ -33,6 +33,47 @@ def _wav_info(path: Path) -> tuple[int, float]:
     return sr, float(duration_s)
 
 
+def _wav_profile(path: Path) -> dict[str, Any]:
+    """
+    Lightweight audio stats for debugging and quality gating.
+    Only attempts to profile 16-bit mono WAV (the hub's canonical prompt.wav).
+    """
+    try:
+        with wave.open(str(path), "rb") as wf:
+            if wf.getnchannels() != 1:
+                return {}
+            if wf.getsampwidth() != 2:
+                return {}
+            frames = wf.readframes(wf.getnframes())
+            if not frames:
+                return {}
+        import struct
+
+        n = len(frames) // 2
+        if n <= 0:
+            return {}
+        samples = struct.unpack("<" + ("h" * n), frames)
+        peak = 0
+        sum_sq = 0.0
+        clipped = 0
+        for s in samples:
+            a = abs(int(s))
+            if a > peak:
+                peak = a
+            sum_sq += float(s) * float(s)
+            if a >= 32767:
+                clipped += 1
+        rms = (sum_sq / float(n)) ** 0.5 if n else 0.0
+        return {
+            "peak_abs": round(float(peak) / 32767.0, 6),
+            "rms": round(float(rms) / 32767.0, 6),
+            "clipped_samples": int(clipped),
+            "clipped_ratio": round(float(clipped) / float(n), 8),
+        }
+    except Exception:
+        return {}
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -90,6 +131,7 @@ class VoiceLibrary:
                 has_caches = {
                     "chatterbox-multilingual": bool((caches.get("chatterbox-multilingual") or {}).get("path")),
                     "index-tts2": bool((caches.get("index-tts2") or {}).get("path")),
+                    "qwen3-tts-mlx": bool((caches.get("qwen3-tts-mlx") or {}).get("prompt_trim_path")),
                 }
                 voices.append(
                     VoiceSummary(
@@ -116,10 +158,18 @@ class VoiceLibrary:
             raise FileNotFoundError("voice audio not found")
         return wav_path
 
-    def create_voice(self, *, name: str, input_bytes: bytes, filename: str | None) -> dict[str, Any]:
+    def create_voice(
+        self,
+        *,
+        name: str,
+        input_bytes: bytes,
+        filename: str | None,
+        prompt_text: str | None = None,
+    ) -> dict[str, Any]:
         name = (name or "").strip()
         if not name:
             raise ValueError("name is required")
+        prompt_text = (prompt_text or "").strip() or None
 
         voice_id = uuid.uuid4().hex
         voice_dir = self._voice_dir(voice_id)
@@ -146,16 +196,20 @@ class VoiceLibrary:
 
         audio_sha = _sha256_file(prompt_wav)
         sr, duration_s = _wav_info(prompt_wav)
+        profile = _wav_profile(prompt_wav)
 
         meta = {
             "id": voice_id,
             "name": name,
             "created_at": int(time.time()),
+            "prompt_text": prompt_text,
+            "prompt_text_source": "user" if prompt_text else None,
             "audio": {
                 "path": "prompt.wav",
                 "sha256": audio_sha,
                 "sr": sr,
                 "duration_s": round(duration_s, 3),
+                "profile": profile,
             },
             "caches": {},
         }

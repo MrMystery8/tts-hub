@@ -212,6 +212,15 @@ const el = {
   cosyInstructRow: $('cosyInstructRow'),
   cosyInstructText: $('cosyInstructText'),
 
+  // Qwen3-TTS (MLX)
+  settingsQwen: $('settingsQwen'),
+  qwenModel: $('qwenModel'),
+  qwenAutoTranscribe: $('qwenAutoTranscribe'),
+  qwenLanguage: $('qwenLanguage'),
+  qwenSpeed: $('qwenSpeed'),
+  qwenTemperature: $('qwenTemperature'),
+  qwenMaxTokens: $('qwenMaxTokens'),
+
   // Pocket
   settingsPocket: $('settingsPocket'),
   pocketVoice: $('pocketVoice'),
@@ -255,6 +264,7 @@ const history = [];
 // Model icons
 const MODEL_ICONS = {
   'index-tts2': '🎭',
+  'qwen3-tts-mlx': '🗣️',
   'chatterbox-multilingual': '🌍',
   'f5-hindi-urdu': '🇮🇳',
   'cosyvoice3-mlx': '🍎',
@@ -266,7 +276,7 @@ const MODEL_ICONS = {
 // pred_model_id is 0..K-1 (decoder output), encoder class_id is 1..K.
 const WATERMARK_MODEL_MAP = {
   'index-tts2': 0,
-  'chatterbox-multilingual': 1,
+  'qwen3-tts-mlx': 1,
 };
 
 let watermarkRuns = [];
@@ -387,7 +397,7 @@ function updateVisibility() {
   const modelId = currentModelId;
   
   // Transcript section
-  const needsTranscript = ['f5-hindi-urdu', 'cosyvoice3-mlx', 'voxcpm-ane'].includes(modelId);
+  const needsTranscript = ['f5-hindi-urdu', 'cosyvoice3-mlx', 'voxcpm-ane', 'qwen3-tts-mlx'].includes(modelId);
   el.transcriptSection?.classList.toggle('hidden', !needsTranscript);
   
   // Emotion section (IndexTTS2)
@@ -491,7 +501,7 @@ async function updateWatermarkRunDetails() {
   if (details.config && typeof details.config.n_models === 'number') {
     lines.push(`K (n_models): ${details.config.n_models}`);
     if (details.config.n_models !== 2) {
-      lines.push('Note: TTS Hub embeds/labels only 2 models (index-tts2 + chatterbox-multilingual).');
+      lines.push('Note: TTS Hub embeds/labels only 2 models (index-tts2 + qwen3-tts-mlx).');
     }
   }
   if (details.report_excerpt) {
@@ -518,7 +528,7 @@ function updateWatermarkUI() {
   if (!supported) {
     el.watermarkEnabled.checked = false;
     SessionStore.save('watermarkEnabled', false);
-    el.watermarkHint.textContent = 'Watermarking currently supported for: IndexTTS2, Chatterbox Multilingual';
+    el.watermarkHint.textContent = 'Watermarking currently supported for: IndexTTS2, Qwen3-TTS MLX';
     return;
   }
 
@@ -868,6 +878,15 @@ async function selectSavedVoice(voiceId) {
   el.clearVoice.disabled = false;
 
   try {
+    const metaRes = await fetch(`/api/voices/${encodeURIComponent(voiceId)}`);
+    if (metaRes.ok) {
+      const meta = await metaRes.json().catch(() => ({}));
+      const promptText = (meta.prompt_text || '').trim();
+      if (promptText && el.promptText) el.promptText.value = promptText;
+    }
+  } catch { }
+
+  try {
     const res = await fetch(url);
     if (res.ok) {
       const blob = await res.blob();
@@ -889,6 +908,8 @@ async function saveCurrentVoiceToLibrary() {
   form.append('name', name);
   if (promptBlob) form.append('prompt_audio', promptBlob, 'prompt.wav');
   else form.append('prompt_audio', promptUploadedFile);
+  const promptText = el.promptText?.value?.trim();
+  if (promptText) form.append('prompt_text', promptText);
 
   setStatus('Saving voice...', 'loading');
   try {
@@ -1068,6 +1089,14 @@ function appendModelParams(form, modelId) {
     form.append('language', el.cosyLang.value.trim() || 'auto');
     form.append('speed', el.cosySpeed.value);
     if (el.cosyMode.value === 'instruct') form.append('instruct_text', el.cosyInstructText.value.trim());
+  }
+  if (modelId === 'qwen3-tts-mlx') {
+    form.append('qwen_model', el.qwenModel.value);
+    form.append('auto_transcribe', el.qwenAutoTranscribe.checked ? '1' : '0');
+    form.append('qwen_language', el.qwenLanguage.value.trim() || 'auto');
+    form.append('qwen_speed', el.qwenSpeed.value);
+    form.append('qwen_temperature', el.qwenTemperature.value);
+    form.append('qwen_max_tokens', el.qwenMaxTokens.value);
   }
   if (modelId === 'pocket-tts') {
     form.append('voice', el.pocketVoice.value.trim());
