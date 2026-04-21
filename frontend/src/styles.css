@@ -135,7 +135,7 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-xl);
   background:
-    linear-gradient(180deg, rgba(11, 17, 29, 0.98), rgba(7, 11, 19, 0.95)),
+    linear-gradient(180deg, rgba(13, 20, 34, 0.99), rgba(7, 11, 19, 0.95)),
     radial-gradient(circle at top, rgba(141, 105, 255, 0.16), transparent 42%),
     radial-gradient(circle at 100% 0%, rgba(104, 236, 255, 0.06), transparent 30%);
   backdrop-filter: blur(18px);
@@ -160,8 +160,8 @@ a {
 }
 
 .sidebar-header {
-  padding: 4px 8px 18px;
-  margin-bottom: 10px;
+  padding: 4px 8px 16px;
+  margin-bottom: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
@@ -193,7 +193,7 @@ a {
 }
 
 .sidebar-label {
-  margin: 18px 8px 10px;
+  margin: 16px 8px 8px;
   color: var(--text-3);
   font-size: 11px;
   letter-spacing: 0.16em;
@@ -216,7 +216,7 @@ a {
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
   color: var(--text);
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(255, 255, 255, 0.03);
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, color 160ms ease;
 }
 
@@ -224,14 +224,14 @@ a {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 13px 15px;
-  color: var(--text-2);
+  padding: 12px 14px;
+  color: #b4c1d5;
 }
 
 .surface-nav-item:hover,
 .model-card:hover {
   transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
   border-color: var(--line-strong);
 }
 
@@ -267,13 +267,13 @@ textarea:focus-visible,
 .model-card {
   display: flex;
   gap: 12px;
-  padding: 14px;
+  padding: 13px;
   text-align: left;
 }
 
 .model-nav-surface .model-card {
   min-height: 122px;
-  padding: 16px;
+  padding: 15px;
 }
 
 .model-card.active {
@@ -351,19 +351,19 @@ textarea:focus-visible,
 
 .sidebar-footer {
   display: grid;
-  gap: 10px;
-  padding: 14px 8px 4px;
-  margin-top: 14px;
+  gap: 8px;
+  padding: 12px 8px 2px;
+  margin-top: 12px;
   border-top: 1px solid var(--line);
 }
 
 .sidebar-footer-card {
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
+  padding: 11px 13px;
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .sidebar-footer-label {
@@ -500,17 +500,17 @@ textarea:focus-visible,
 }
 
 .hero-stat {
-  padding: 16px 18px;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 15px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025)),
-    rgba(11, 16, 27, 0.84);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.03)),
+    rgba(11, 16, 27, 0.88);
   box-shadow: var(--shadow-sm);
 }
 
 .hero-stat-label {
-  color: var(--text-3);
+  color: #95a3b7;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -523,6 +523,7 @@ textarea:focus-visible,
   font-size: 16px;
   font-weight: 700;
   line-height: 1.35;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -622,8 +623,8 @@ textarea:focus-visible,
 
 .summary-card,
 .status-card {
-  padding: 16px;
-  border-radius: 22px;
+  padding: 15px 16px;
+  border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
 }
@@ -1223,8 +1224,8 @@ pre.output-placeholder {
 
 .system-model-row {
   align-items: start;
-  padding: 16px;
-  border-radius: 22px;
+  padding: 15px 16px;
+  border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
@@ -1240,8 +1241,8 @@ pre.output-placeholder {
 
 .settings-details {
   margin-top: 14px;
-  padding: 14px 16px;
-  border-radius: 22px;
+  padding: 14px 15px;
+  border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
@@ -1298,8 +1299,8 @@ pre.output-placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 14px 16px;
-  border-radius: 22px;
+  padding: 13px 15px;
+  border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background:
     linear-gradient(180deg, rgba(104, 236, 255, 0.05), rgba(141, 105, 255, 0.03)),

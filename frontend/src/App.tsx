@@ -1130,6 +1130,53 @@ function labelWatermarkSummaryKey(key: string): string {
   }
 }
 
+function WatermarkRunReview({
+  details,
+  detailsId,
+  emptyId,
+  emptyMessage,
+  selectedFallback = 'No run selected',
+}: {
+  details: WatermarkRunDetails | null;
+  detailsId: string;
+  emptyId: string;
+  emptyMessage: string;
+  selectedFallback?: string;
+}) {
+  const selectedLabel = details?.label || details?.id || selectedFallback;
+  const reportText = details?.report_excerpt || details?.error || '';
+
+  return (
+    <>
+      {details ? (
+        <div className="watermark-summary-grid">
+          {buildWatermarkSummaryCards(details).map((card) => (
+            <div key={`${card.label}-${card.value}`} className="watermark-summary-card">
+              <div className="watermark-summary-label">{card.label}</div>
+              <div className="watermark-summary-value">{card.value}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="surface-subpanel surface-subpanel-stack">
+        <div className="surface-subpanel-copy">
+          <div className="surface-signal-label">Run details</div>
+          <div className="surface-signal-value">{selectedLabel}</div>
+        </div>
+        {reportText ? (
+          <SettingsGroup title="Report excerpt">
+            <pre className="watermark-report" id={detailsId}>
+              {reportText}
+            </pre>
+          </SettingsGroup>
+        ) : (
+          <div className="history-empty" id={emptyId}>{emptyMessage}</div>
+        )}
+      </div>
+    </>
+  );
+}
+
 function HistoryRow({ item, modelName, onReplay }: { item: AppHistoryItem; modelName: string; onReplay?: (item: AppHistoryItem) => void }) {
   return (
     <div className="history-item">
@@ -1548,7 +1595,12 @@ function GenerateSurface({ controller }: { controller: AppController }) {
               </select>
               <div className="form-hint">Pick a completed run with `encoder.pt` + `decoder.pt`.</div>
             </div>
-            <pre className="output-placeholder" id="watermarkRunDetails">{controller.watermarkRunDetails?.report_excerpt || controller.watermarkRunDetails?.error || 'Select a run to see details.'}</pre>
+            <WatermarkRunReview
+              details={controller.watermarkRunDetails}
+              detailsId="generateWatermarkRunDetails"
+              emptyId="generateWatermarkRunDetailsEmpty"
+              emptyMessage="Select a run to see details."
+            />
             <div className="form-hint">
               {typeof watermarkRecommendedThreshold === 'number'
                 ? `Recommended threshold: ${watermarkRecommendedThreshold.toFixed(3)}`
@@ -1859,7 +1911,7 @@ function HistorySurface({ controller }: { controller: AppController }) {
                 </div>
               </div>
             ) : (
-              <div className="history-empty" id="historyEmpty">No generations yet</div>
+              <div className="history-empty" id="historyLatestEmpty">No generations yet</div>
             )}
           </Panel>
         </div>
@@ -1873,7 +1925,7 @@ function HistorySurface({ controller }: { controller: AppController }) {
                   modelName={normalizeModelName(models.find((model) => model.id === item.modelId)?.name || item.modelId)}
                   onReplay={replayHistoryItem}
                 />
-              )) : <div className="history-empty" id="historyEmpty">No generations yet</div>}
+              )) : <div className="history-empty" id="historyLogEmpty">No generations yet</div>}
             </div>
           </Panel>
           <Panel title="Return to Generate" subtitle="Switch back to the workspace when you want to synthesize again">
@@ -1941,16 +1993,6 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
               <div className="surface-signal-label">Supported models</div>
               <div className="surface-signal-value">{supportsWatermark ? 'IndexTTS2 and Qwen3-TTS MLX' : 'Selected model does not support embedding'}</div>
             </div>
-            {watermarkRunDetails ? (
-              <div className="watermark-summary-grid">
-                {buildWatermarkSummaryCards(watermarkRunDetails).map((card) => (
-                  <div key={`${card.label}-${card.value}`} className="watermark-summary-card">
-                    <div className="watermark-summary-label">{card.label}</div>
-                    <div className="watermark-summary-value">{card.value}</div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
             <div className="form-group">
               <div className="checkbox-group">
                 <input id="watermarkEnabled" type="checkbox" checked={watermarkEnabled} onChange={(event) => setWatermarkEnabled(event.currentTarget.checked)} disabled={!supportsWatermark || !watermarkRuns.length} />
@@ -1968,21 +2010,13 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
               </select>
               <div className="form-hint">Pick a run with `encoder.pt` and `decoder.pt`.</div>
             </div>
-            <div className="surface-subpanel surface-subpanel-stack">
-              <div className="surface-subpanel-copy">
-                <div className="surface-signal-label">Run details</div>
-                <div className="surface-signal-value">{watermarkRunDetails?.label || watermarkRunDetails?.id || 'Select a run to inspect details'}</div>
-              </div>
-              {watermarkRunDetails?.report_excerpt || watermarkRunDetails?.error ? (
-                <SettingsGroup title="Report excerpt">
-                  <pre className="watermark-report" id="watermarkRunDetails">
-                    {watermarkRunDetails?.report_excerpt || watermarkRunDetails?.error}
-                  </pre>
-                </SettingsGroup>
-              ) : (
-                <div className="history-empty" id="watermarkRunDetails">Select a run to see details.</div>
-              )}
-            </div>
+            <WatermarkRunReview
+              details={watermarkRunDetails}
+              detailsId="watermarkRunDetails"
+              emptyId="watermarkRunDetailsEmpty"
+              emptyMessage="Select a run to see details."
+              selectedFallback="Select a run to inspect details"
+            />
             <div className="form-hint">
               {typeof watermarkRecommendedThreshold === 'number' ? `Recommended threshold: ${watermarkRecommendedThreshold.toFixed(3)}` : 'Threshold recommendations will appear once a run is selected.'}
             </div>
