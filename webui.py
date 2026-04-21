@@ -17,9 +17,10 @@ from hub.voice_library import VoiceLibrary
 from hub.watermark_service import WatermarkService
 
 
-def create_app(*, hub_root: Path) -> FastAPI:
-    ui_dir = hub_root / "custom_ui"
-    static_dir = ui_dir / "static"
+def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path | None = None) -> FastAPI:
+    ui_dir = ui_dir or (hub_root / "custom_ui")
+    if static_dir is None:
+        static_dir = ui_dir / "static" if (ui_dir / "static").exists() else ui_dir
 
     manager = HubManager(hub_root)
     voices = VoiceLibrary(hub_root=hub_root)

@@ -1,12 +1,24 @@
 {
   "name": "tts-hub",
   "private": true,
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
   "devDependencies": {
-    "@playwright/test": "^1.52.0"
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.5"
   },
   "scripts": {
+    "ui:dev": "vite --config frontend/vite.config.ts",
+    "ui:build": "vite build --config frontend/vite.config.ts",
+    "ui:preview": "vite preview --config frontend/vite.config.ts",
     "e2e:install": "playwright install chromium",
     "e2e:qwen": "playwright test tests/e2e/qwen_voice_clone.spec.ts"
   }
 }
-

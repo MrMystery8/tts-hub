@@ -84,6 +84,10 @@ const el = {
   modelNav: $('modelNav'),
   ffmpegDot: $('ffmpegDot'),
   ffmpegStatus: $('ffmpegStatus'),
+  ffmpegRuntimeStatus: $('ffmpegRuntimeStatus'),
+  surfaceStatus: $('surfaceStatus'),
+  systemClock: $('systemClock'),
+  systemModelTable: $('systemModelTable'),
   
   // Top bar
   selectedModelName: $('selectedModelName'),
@@ -95,6 +99,7 @@ const el = {
   promptFile: $('promptFile'),
   promptPreview: $('promptPreview'),
   promptInfo: $('promptInfo'),
+  voiceRequirement: $('voiceRequirement'),
   voicePreviewContainer: $('voicePreviewContainer'),
   clearVoice: $('clearVoice'),
   savedVoiceSelect: $('savedVoiceSelect'),
@@ -242,6 +247,7 @@ const el = {
 // State
 // ============================================
 let models = [];
+let modelStatuses = {};
 let currentModelId = null;
 let promptBlob = null;
 let promptUploadedFile = null;
@@ -249,6 +255,8 @@ let selectedVoiceId = '';
 let isRecording = false;
 let recordingStartTime = null;
 let recordingTimer = null;
+let voicesCache = [];
+let activeSurfaceId = 'generate';
 
 const recorder = {
   stream: null,
@@ -312,6 +320,62 @@ function isWatermarkSupported(modelId) {
   return Object.prototype.hasOwnProperty.call(WATERMARK_MODEL_MAP, modelId);
 }
 
+function setActiveSurface(surfaceId, { scroll = false } = {}) {
+  activeSurfaceId = surfaceId || 'generate';
+  document.querySelectorAll('.surface-nav-item').forEach((item) => {
+    item.classList.toggle('active', item.dataset.surfaceLink === activeSurfaceId);
+  });
+  if (el.surfaceStatus) {
+    const label = activeSurfaceId.replaceAll('-', ' ');
+    el.surfaceStatus.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+  }
+  if (scroll) {
+    const section = document.querySelector(`[data-surface-section="${activeSurfaceId}"]`);
+    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function bindSurfaceNavigation() {
+  document.querySelectorAll('.surface-nav-item').forEach((item) => {
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
+      const target = item.dataset.surfaceLink || 'generate';
+      setActiveSurface(target, { scroll: true });
+      const hashTarget = target === 'models' ? 'modelNav' : target;
+      window.history.replaceState(null, '', `#${hashTarget}`);
+    });
+  });
+
+  const sections = Array.from(document.querySelectorAll('[data-surface-section]'))
+    .filter((section) => section.dataset.surfaceSection !== 'models');
+  if (!('IntersectionObserver' in window) || sections.length === 0) {
+    return;
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    const visible = entries
+      .filter((entry) => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (visible?.target?.dataset?.surfaceSection) {
+      activeSurfaceId = visible.target.dataset.surfaceSection;
+      document.querySelectorAll('.surface-nav-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.surfaceLink === activeSurfaceId);
+      });
+      if (el.surfaceStatus) {
+        const label = activeSurfaceId.replaceAll('-', ' ');
+        el.surfaceStatus.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+      }
+    }
+  }, { rootMargin: '-20% 0px -55% 0px', threshold: [0.2, 0.35, 0.5] });
+
+  sections.forEach((section) => observer.observe(section));
+}
+
+function updateSystemClock() {
+  if (!el.systemClock) return;
+  el.systemClock.textContent = new Date().toLocaleString();
+}
+
 // ============================================
 // Collapsible Sections
 // ============================================
@@ -343,9 +407,27 @@ async function fetchModels() {
   renderModelNav();
 }
 
+async function fetchStatuses() {
+  try {
+    const res = await fetch('/api/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    modelStatuses = data.models || {};
+    renderModelNav();
+    renderSystemStatus();
+    renderSelectedModelBadges();
+  } catch (e) {
+    console.warn('Failed to fetch model status:', e);
+  }
+}
+
 function renderModelNav() {
   el.modelNav.innerHTML = '';
   models.forEach(m => {
+    const status = modelStatuses[m.id] || {};
+    const loaded = !!status.loaded;
+    const total = typeof status.total_generations === 'number' ? status.total_generations : 0;
+    const device = status.device || 'unknown';
     const card = document.createElement('div');
     card.className = `model-card${m.id === currentModelId ? ' active' : ''}`;
     card.dataset.modelId = m.id;
@@ -355,13 +437,59 @@ function renderModelNav() {
         <div class="model-name">${m.name.split(' (')[0]}</div>
         <div class="model-desc">${m.description || ''}</div>
         <div class="model-badges">
-          <span class="badge badge-neutral" id="badge-${m.id}">Ready</span>
+          <span class="badge ${loaded ? 'badge-success' : 'badge-neutral'}" id="badge-${m.id}">${loaded ? 'Loaded' : 'Ready'}</span>
+          <span class="badge badge-neutral">${device}</span>
+          <span class="badge badge-neutral">${total} runs</span>
         </div>
       </div>
     `;
     card.addEventListener('click', () => selectModel(m.id));
     el.modelNav.appendChild(card);
   });
+}
+
+function renderSystemStatus() {
+  if (!el.systemModelTable) return;
+  const rows = models.map((m) => {
+    const status = modelStatuses[m.id] || {};
+    const loaded = status.loaded ? 'Loaded' : 'Idle';
+    const device = status.device || 'unknown';
+    const total = typeof status.total_generations === 'number' ? status.total_generations : 0;
+    const lastDuration = typeof status.last_generation_duration_ms === 'number'
+      ? `${Math.round(status.last_generation_duration_ms)} ms`
+      : 'n/a';
+    return `
+      <div class="system-model-row">
+        <div>
+          <div class="system-model-name">${escapeHtml(m.name.split(' (')[0])}</div>
+          <div class="system-model-meta">${escapeHtml(m.description || '')}</div>
+        </div>
+        <div class="system-model-stat">${escapeHtml(loaded)} / ${escapeHtml(device)}</div>
+        <div class="system-model-stat">${total} runs · ${escapeHtml(lastDuration)}</div>
+      </div>
+    `;
+  }).join('');
+  el.systemModelTable.innerHTML = rows || '<div class="system-model-row"><div class="system-model-meta">No model status available.</div></div>';
+  updateSystemClock();
+}
+
+function renderSelectedModelBadges() {
+  if (!el.modelStatusBadges) return;
+  if (!currentModelId) {
+    el.modelStatusBadges.innerHTML = '';
+    return;
+  }
+  const model = models.find((m) => m.id === currentModelId);
+  const status = modelStatuses[currentModelId] || {};
+  const badges = [];
+  badges.push(`<span class="badge ${status.loaded ? 'badge-success' : 'badge-neutral'}">${status.loaded ? 'Loaded' : 'Ready'}</span>`);
+  if (status.device) badges.push(`<span class="badge badge-neutral">${escapeHtml(status.device)}</span>`);
+  if (typeof status.total_generations === 'number') badges.push(`<span class="badge badge-neutral">${status.total_generations} runs</span>`);
+  if (isWatermarkSupported(currentModelId)) badges.push('<span class="badge badge-info">Watermark</span>');
+  if (model && model.id === currentModelId) {
+    badges.push(`<span class="badge badge-neutral">${escapeHtml(model.name.split(' (')[0])}</span>`);
+  }
+  el.modelStatusBadges.innerHTML = badges.join('');
 }
 
 function selectModel(modelId) {
@@ -388,6 +516,7 @@ function selectModel(modelId) {
   
   updateVisibility();
   updateWatermarkUI();
+  renderSelectedModelBadges();
 }
 
 // ============================================
@@ -753,6 +882,7 @@ function setVoicePreview(blob, label) {
   el.clearVoice.disabled = false;
   SessionStore.saveAudio('promptAudio', blob);
   drawWaveform(blob);
+  updateVoiceRequirement();
 }
 
 function setVoicePreviewFromFile(file) {
@@ -764,6 +894,7 @@ function setVoicePreviewFromFile(file) {
   el.promptInfo.textContent = `${file.name} • ${file.type || 'audio'} • ${formatBytes(file.size)}`;
   el.voicePreviewContainer.classList.remove('hidden');
   el.clearVoice.disabled = false;
+  updateVoiceRequirement();
   
   file.arrayBuffer().then(buf => {
     const blob = new Blob([buf], { type: file.type });
@@ -783,6 +914,7 @@ function clearVoice() {
   el.voicePreviewContainer.classList.add('hidden');
   el.clearVoice.disabled = true;
   SessionStore.saveAudio('promptAudio', null);
+  updateVoiceRequirement();
 }
 
 async function drawWaveform(blob) {
@@ -829,8 +961,10 @@ async function fetchVoices() {
     const res = await fetch('/api/voices');
     if (!res.ok) return [];
     const data = await res.json();
-    return Array.isArray(data.voices) ? data.voices : [];
+    voicesCache = Array.isArray(data.voices) ? data.voices : [];
+    return voicesCache;
   } catch {
+    voicesCache = [];
     return [];
   }
 }
@@ -847,6 +981,24 @@ function renderVoiceSelect(voices) {
   selectedVoiceId = el.savedVoiceSelect.value || '';
   SessionStore.save('selectedVoiceId', selectedVoiceId || '');
   if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = !selectedVoiceId;
+  updateVoiceRequirement();
+}
+
+function updateVoiceRequirement() {
+  if (!el.voiceRequirement) return;
+  const total = voicesCache.length;
+  if (selectedVoiceId) {
+    const selected = voicesCache.find((v) => v.id === selectedVoiceId);
+    el.voiceRequirement.textContent = selected
+      ? `Using saved voice: ${selected.name}. ${total} saved voices available.`
+      : `Using a saved voice. ${total} saved voices available.`;
+    return;
+  }
+  if (promptBlob || promptUploadedFile) {
+    el.voiceRequirement.textContent = `Reference audio ready. ${total} saved voices available.`;
+    return;
+  }
+  el.voiceRequirement.textContent = `${total} saved voices available. Upload or record a reference voice.`;
 }
 
 function clearSavedVoiceSelection() {
@@ -854,6 +1006,7 @@ function clearSavedVoiceSelection() {
   if (el.savedVoiceSelect) el.savedVoiceSelect.value = '';
   SessionStore.save('selectedVoiceId', '');
   if (el.deleteVoiceBtn) el.deleteVoiceBtn.disabled = true;
+  updateVoiceRequirement();
 }
 
 async function selectSavedVoice(voiceId) {
@@ -876,6 +1029,7 @@ async function selectSavedVoice(voiceId) {
   el.promptInfo.textContent = `Saved voice • ${voiceId}`;
   el.voicePreviewContainer.classList.remove('hidden');
   el.clearVoice.disabled = false;
+  updateVoiceRequirement();
 
   try {
     const metaRes = await fetch(`/api/voices/${encodeURIComponent(voiceId)}`);
@@ -1031,6 +1185,7 @@ async function generate() {
     
     addToHistory({ modelId, timestamp: Date.now(), url, format: el.outputFormat.value });
     setStatus('Generation complete!', 'ok');
+    fetchStatuses().catch(() => {});
   } catch (e) {
     setStatus(e.message || String(e), 'error');
   } finally {
@@ -1140,8 +1295,8 @@ function renderHistory() {
     <div class="history-item">
       <div class="history-icon">${MODEL_ICONS[h.modelId] || '🔊'}</div>
       <div class="history-info">
-        <div class="history-title">${h.modelId}</div>
-        <div class="history-meta">${new Date(h.timestamp).toLocaleTimeString()} • ${h.format.toUpperCase()}</div>
+        <div class="history-title">${escapeHtml(h.modelId)}</div>
+        <div class="history-meta">${new Date(h.timestamp).toLocaleString()} • ${escapeHtml(String(h.format || '').toUpperCase())}</div>
       </div>
       <div class="history-actions">
         ${h.url ? `<a class="btn btn-secondary" href="${h.url}" download="${h.modelId}.${h.format}">⬇️</a>` : ''}
@@ -1164,6 +1319,7 @@ async function unloadModel() {
     setStatus(`Unloaded ${currentModelId}`, 'ok');
     const badge = document.getElementById(`badge-${currentModelId}`);
     if (badge) { badge.textContent = 'Ready'; badge.className = 'badge badge-neutral'; }
+    fetchStatuses().catch(() => {});
   } catch (e) {
     setStatus(e.message || String(e), 'error');
   }
@@ -1192,6 +1348,10 @@ async function fetchMeta() {
     const ok = data.ffmpeg?.available;
     el.ffmpegDot.className = `status-dot ${ok ? '' : 'error'}`;
     el.ffmpegStatus.textContent = ok ? 'ffmpeg: OK' : 'ffmpeg: Missing';
+    if (el.ffmpegRuntimeStatus) {
+      el.ffmpegRuntimeStatus.textContent = ok ? 'Available' : 'Unavailable';
+    }
+    updateSystemClock();
   } catch { }
 }
 
@@ -1361,12 +1521,20 @@ window.addEventListener('load', async () => {
     renderWatermarkRuns();
     const voices = await fetchVoices();
     renderVoiceSelect(voices);
+    await fetchStatuses();
     await restoreSession();
     renderHistory();
     updateVisibility();
     updateWatermarkUI();
     updateWatermarkRunDetails();
     attachWatermarkDropZone();
+    bindSurfaceNavigation();
+    const initialHash = (window.location.hash || '').replace(/^#/, '');
+    setActiveSurface(initialHash === 'modelNav' ? 'models' : (initialHash || 'generate'));
+    renderSelectedModelBadges();
+    renderSystemStatus();
+    updateSystemClock();
+    setInterval(updateSystemClock, 30000);
     setStatus('Ready.');
   } catch (e) {
     setStatus(e.message || String(e), 'error');

@@ -25,5 +25,5 @@ echo -e "${GREEN}Starting TTS Hub on http://localhost:7891 ...${NC}"
 echo "Press Ctrl+C to stop."
 echo ""
 
-# Run webui.py using the venv python
-.venv/bin/python3 webui.py --port 7891
+# Run the React launcher using the venv python
+.venv/bin/python3 new_webui.py --port 7891

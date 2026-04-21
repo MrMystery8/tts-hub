@@ -4,11 +4,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TTS Hub - Unified Voice Synthesis</title>
-  <meta name="description" content="One local UI for IndexTTS2, Chatterbox Multilingual, F5 Hindi/Urdu, CosyVoice3-MLX, PocketTTS, and VoxCPM-ANE." />
+  <title>TTS Hub</title>
+  <meta name="description" content="Local TTS workspace for generation, voices, watermarking, history, and model controls." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=watermark1" />
 </head>
 
@@ -18,13 +18,25 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          <span class="logo-icon">🎙</span>
+          <span class="logo-icon">T</span>
           <span>TTS Hub</span>
         </div>
+        <div class="sidebar-subtitle">Atmospheric TTS workspace</div>
       </div>
 
-      <div class="sidebar-label">Models</div>
-      <nav class="model-nav" id="modelNav">
+      <div class="sidebar-label">Surfaces</div>
+      <nav class="surface-nav" aria-label="Workspace sections">
+        <a class="surface-nav-item" href="#generate" data-surface-link="generate">Generate</a>
+        <a class="surface-nav-item" href="#modelNav" data-surface-link="models">Models</a>
+        <a class="surface-nav-item" href="#voices" data-surface-link="voices">Voices</a>
+        <a class="surface-nav-item" href="#history" data-surface-link="history">History</a>
+        <a class="surface-nav-item" href="#watermark-lab" data-surface-link="watermark-lab">Watermark Lab</a>
+        <a class="surface-nav-item" href="#system-status" data-surface-link="system-status">System Status</a>
+        <a class="surface-nav-item" href="#advanced-settings" data-surface-link="advanced-settings">Advanced Settings</a>
+      </nav>
+
+      <div class="sidebar-label" id="models">Models</div>
+      <nav class="model-nav" id="modelNav" data-surface-section="models">
         <!-- Model cards will be populated by JS -->
       </nav>
 
@@ -37,7 +49,7 @@
     </aside>
 
     <!-- Main Content -->
-    <main class="main-content">
+    <main class="main-content" id="generate" data-surface-section="generate">
       <!-- Top Bar -->
       <header class="top-bar">
         <div class="page-title">
@@ -59,9 +71,9 @@
       <!-- Content Grid -->
       <div class="content-grid">
         <!-- Left Column: Voice + Text -->
-        <div class="input-column">
+        <div class="input-column" id="generate-workspace">
           <!-- Voice Reference Panel -->
-          <div class="panel" id="voicePanel">
+          <div class="panel" id="voices" data-surface-section="voices">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Voice Reference</div>
@@ -159,7 +171,7 @@
           </div>
 
           <!-- Text Input Panel -->
-          <div class="panel">
+          <div class="panel" id="textPanel">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Text to Speak</div>
@@ -196,7 +208,7 @@
           </div>
 
           <!-- Output Panel -->
-          <div class="panel">
+          <div class="panel" id="outputPanel">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Output</div>
@@ -217,9 +229,9 @@
         </div>
 
         <!-- Right Column: Settings -->
-        <div class="settings-column">
+        <div class="settings-column" id="advanced-settings" data-surface-section="advanced-settings">
           <!-- Model Settings Panel -->
-          <div class="panel">
+          <div class="panel" id="advancedSettingsPanel">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Model Settings</div>
@@ -663,7 +675,7 @@
 
           <!-- Recent Generations Panel -->
           <!-- Watermarking Panel -->
-          <div class="panel">
+          <div class="panel" id="watermark-lab" data-surface-section="watermark-lab">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Watermarking</div>
@@ -689,7 +701,7 @@
           </div>
 
           <!-- Watermark Test Panel -->
-	          <div class="panel">
+	          <div class="panel" id="watermark-detect">
 	            <div class="panel-header">
 	              <div>
 	                <div class="panel-title">Watermark Test</div>
@@ -728,7 +740,7 @@
             <pre class="output-placeholder" id="watermarkTestResult">No file analyzed yet</pre>
           </div>
 
-          <div class="panel">
+          <div class="panel" id="history" data-surface-section="history">
             <div class="panel-header">
               <div>
                 <div class="panel-title">Recent Generations</div>
@@ -744,6 +756,33 @@
                 No generations yet
               </div>
             </div>
+          </div>
+
+          <div class="panel" id="system-status" data-surface-section="system-status">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">System Status</div>
+                <div class="panel-subtitle">Runtime and model load state</div>
+              </div>
+            </div>
+            <div class="status-grid">
+              <div class="status-card">
+                <div class="status-card-label">ffmpeg</div>
+                <div class="status-card-value" id="ffmpegRuntimeStatus">Checking ffmpeg...</div>
+                <div class="status-card-meta">Utility availability on this host</div>
+              </div>
+              <div class="status-card">
+                <div class="status-card-label">Active Surface</div>
+                <div class="status-card-value" id="surfaceStatus">Generate</div>
+                <div class="status-card-meta">Current workspace section</div>
+              </div>
+              <div class="status-card">
+                <div class="status-card-label">Clock</div>
+                <div class="status-card-value" id="systemClock">--</div>
+                <div class="status-card-meta">Local system time snapshot</div>
+              </div>
+            </div>
+            <div class="system-model-table" id="systemModelTable"></div>
           </div>
         </div>
       </div>

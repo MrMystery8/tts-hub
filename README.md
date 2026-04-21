@@ -8,11 +8,12 @@ A centralized hub for running and managing multiple Apple Silicon-optimized TTS 
 
 ## 🏗️ Architecture
 
-TTS Hub unifies 6 distinct inference stacks under a single API and Web UI:
+TTS Hub unifies 7 distinct inference stacks under a single API and Web UI:
 
 | Model | Type | Architecture | Optimization |
 |-------|------|--------------|--------------|
 | **IndexTTS2** | Voice Cloning | Retrieval-based VC | MPS (High) |
+| **Qwen3-TTS** | Voice Cloning / TTS | MLX TTS | MLX / 8-bit |
 | **Chatterbox** | Multilingual TTS | Transformer | MTL / Ane |
 | **F5 Hindi/Urdu** | TTS | F5-TTS | CoreML |
 | **CosyVoice3** | Voice Cloning | Flow Matching | MLX |
@@ -25,7 +26,7 @@ We are implementing an end-to-end watermarking system to detect AI-generated aud
 
 **Key Components:**
 - **Watermark Module (`watermark/`):** Custom WavMark-inspired encoder/decoder implementation.
-- **Dataset Pipeline (`dataset/`):** Scripts to generate standard & attacked samples from all 6 models.
+- **Dataset Pipeline (`dataset/`):** Scripts to generate standard & attacked samples from all 7 models.
 - **Classifier (`checkpoints/`):** PyTorch model trained from scratch to detect provenance.
 
 👉 **See [docs/WATERMARK_PROJECT_PLAN.md](docs/WATERMARK_PROJECT_PLAN.md) for the full FYP specification.**
@@ -67,7 +68,7 @@ pip install -r requirements.txt
 ```bash
 # Start the Web UI
 ./run.sh
-# OR manually: python webui.py
+# OR manually: python new_webui.py
 ```
 Access the UI at: `http://localhost:7860`
 
