@@ -985,6 +985,23 @@ function Panel({
   );
 }
 
+function SettingsGroup({
+  title,
+  children,
+  open = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  open?: boolean;
+}) {
+  return (
+    <details className="settings-details" open={open}>
+      <summary>{title}</summary>
+      <div className="details-body">{children}</div>
+    </details>
+  );
+}
+
 function SurfaceButton({
   active,
   label,
@@ -1010,15 +1027,121 @@ function SurfaceButton({
   );
 }
 
+function getWatermarkMetricValue(metrics: Record<string, unknown> | null | undefined, key: string): number | null {
+  const value = metrics?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function formatWatermarkMetric(value: number | null, digits = 3): string {
+  return typeof value === 'number' ? value.toFixed(digits) : 'n/a';
+}
+
+function buildWatermarkSummaryCards(details: WatermarkRunDetails | null) {
+  if (!details) return [];
+
+  const metrics = details.metrics && typeof details.metrics === 'object' ? details.metrics : null;
+  const config = details.config && typeof details.config === 'object' ? details.config : null;
+  const stage = typeof metrics?.stage === 'string' ? metrics.stage : null;
+  const epoch = typeof metrics?.epoch === 'number' ? `Epoch ${metrics.epoch}` : null;
+  const updated = typeof details.updated_at === 'number' ? formatDateTime(details.updated_at) : null;
+  const threshold = getWatermarkMetricValue(metrics, 'thr_at_fpr_1pct');
+  const wmAcc = getWatermarkMetricValue(metrics, 'wm_acc');
+  const tpr = getWatermarkMetricValue(metrics, 'tpr_at_fpr_1pct');
+  const nModels = typeof config?.n_models === 'number' ? config.n_models : null;
+
+  return [
+    {
+      label: 'Status',
+      value: details.status || (details.error ? 'Error' : 'Unknown'),
+    },
+    {
+      label: 'Updated',
+      value: updated || 'n/a',
+    },
+    {
+      label: 'Probe',
+      value: stage || epoch ? [stage, epoch].filter(Boolean).join(' · ') : 'n/a',
+    },
+    {
+      label: 'Detection',
+      value: wmAcc !== null || tpr !== null ? `${formatWatermarkMetric(wmAcc)} / ${formatWatermarkMetric(tpr)}` : 'n/a',
+    },
+    {
+      label: 'Threshold',
+      value: threshold !== null ? threshold.toFixed(3) : 'n/a',
+    },
+    {
+      label: 'Classes',
+      value: nModels !== null ? String(nModels) : 'n/a',
+    },
+  ].filter((card) => card.value !== 'n/a' || card.label === 'Status' || card.label === 'Updated');
+}
+
+function parseWatermarkDetectResult(result: string) {
+  const summary = {
+    detected: 'n/a',
+    probability: 'n/a',
+    model: 'n/a',
+    run: 'n/a',
+    error: '',
+  };
+
+  for (const line of result.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('Detected:')) {
+      summary.detected = trimmed.slice('Detected:'.length).trim();
+      continue;
+    }
+    if (trimmed.startsWith('WM prob:')) {
+      summary.probability = trimmed.slice('WM prob:'.length).trim();
+      continue;
+    }
+    if (trimmed.startsWith('Model:')) {
+      summary.model = trimmed.slice('Model:'.length).trim();
+      continue;
+    }
+    if (trimmed.startsWith('Run:')) {
+      summary.run = trimmed.slice('Run:'.length).trim();
+      continue;
+    }
+    if (trimmed.startsWith('Error:')) {
+      summary.error = trimmed.slice('Error:'.length).trim();
+    }
+  }
+
+  return summary;
+}
+
+function labelWatermarkSummaryKey(key: string): string {
+  switch (key) {
+    case 'detected':
+      return 'Detected';
+    case 'probability':
+      return 'Probability';
+    case 'model':
+      return 'Model';
+    case 'run':
+      return 'Run';
+    case 'error':
+      return 'Error';
+    default:
+      return key;
+  }
+}
+
 function HistoryRow({ item, modelName, onReplay }: { item: AppHistoryItem; modelName: string; onReplay?: (item: AppHistoryItem) => void }) {
   return (
     <div className="history-item">
       <div className="history-icon">{MODEL_ICONS[item.modelId] || '🔊'}</div>
       <div className="history-info">
-        <div className="history-title">{modelName}</div>
+        <div className="history-topline">
+          <div className="history-title">{modelName}</div>
+          {item.watermarkEnabled ? <Badge tone="warning">Watermark</Badge> : null}
+        </div>
         <div className="history-meta">
           {formatDateTime(item.timestamp)} · {String(item.format || '').toUpperCase()}
-          {item.watermarkEnabled ? ' · Watermark' : ''}
+          {item.voiceId ? ' · Voice attached' : ''}
         </div>
         {item.settingsSummary ? <div className="history-summary">{item.settingsSummary}</div> : null}
       </div>
@@ -1370,7 +1493,7 @@ function GenerateSurface({ controller }: { controller: AppController }) {
               {typeof currentModelStatus.total_generations === 'number' ? <Badge tone="neutral">{currentModelStatus.total_generations} runs</Badge> : null}
               {supportsWatermark ? <Badge tone="info">Watermark supported</Badge> : null}
             </div>
-            <div className="summary-grid summary-grid-tight">
+            <div className="summary-grid summary-grid-four">
               <div className="summary-card summary-card-emph">
                 <div className="summary-label">Required input</div>
                 <div className="summary-value">{needsReferenceAudio ? 'Reference audio or saved voice' : 'Text and optional voice reference'}</div>
@@ -1483,6 +1606,7 @@ function ModelsSurface({ controller }: { controller: AppController }) {
                   status={modelStatuses[model.id] || {}}
                   active={selectedModelId === model.id}
                   settings={settings}
+                  compact
                   onClick={setSelectedModelId}
                 />
               ))}
@@ -1651,14 +1775,19 @@ function VoicesSurface({ controller }: { controller: AppController }) {
             <div className="voice-library">
               {voices.length ? voices.map((voice) => (
                 <div key={voice.id} className={`voice-card${selectedVoiceId === voice.id ? ' active' : ''}`}>
-                  <div className="voice-card-title">{voice.name}</div>
-                  <div className="voice-card-meta">{formatDuration(voice.duration_s)} · {formatDateTime(voice.created_at)}</div>
-                  <div className="model-badges">
+                  <div className="voice-card-head">
+                    <div className="voice-card-main">
+                      <div className="voice-card-title">{voice.name}</div>
+                      <div className="voice-card-meta">{formatDuration(voice.duration_s)} · {formatDateTime(voice.created_at)}</div>
+                    </div>
+                    {selectedVoiceId === voice.id ? <Badge tone="info">Selected</Badge> : null}
+                  </div>
+                  <div className="voice-card-tags">
                     {voice.has_caches?.['qwen3-tts-mlx'] ? <Badge tone="info">Qwen cache</Badge> : null}
                     {voice.has_caches?.['index-tts2'] ? <Badge tone="info">Index cache</Badge> : null}
                     {voice.has_caches?.['chatterbox-multilingual'] ? <Badge tone="info">Chatterbox cache</Badge> : null}
                   </div>
-                  <div className="action-row">
+                  <div className="voice-card-footer">
                     <button className="btn btn-secondary" type="button" onClick={() => void selectSavedVoice(voice.id)}>Use</button>
                   </div>
                 </div>
@@ -1713,7 +1842,7 @@ function HistorySurface({ controller }: { controller: AppController }) {
 
       <div className="surface-grid surface-grid-two">
         <div className="surface-stack">
-          <Panel title="Latest Output" subtitle="Replay or download the most recent render" className="panel-output">
+          <Panel title="Latest Output" subtitle="Replay or download the most recent render" className="panel-output panel-output-history">
             {latestItem ? (
               <div className="latest-output">
                 <div className="surface-signal">
@@ -1812,6 +1941,16 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
               <div className="surface-signal-label">Supported models</div>
               <div className="surface-signal-value">{supportsWatermark ? 'IndexTTS2 and Qwen3-TTS MLX' : 'Selected model does not support embedding'}</div>
             </div>
+            {watermarkRunDetails ? (
+              <div className="watermark-summary-grid">
+                {buildWatermarkSummaryCards(watermarkRunDetails).map((card) => (
+                  <div key={`${card.label}-${card.value}`} className="watermark-summary-card">
+                    <div className="watermark-summary-label">{card.label}</div>
+                    <div className="watermark-summary-value">{card.value}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="form-group">
               <div className="checkbox-group">
                 <input id="watermarkEnabled" type="checkbox" checked={watermarkEnabled} onChange={(event) => setWatermarkEnabled(event.currentTarget.checked)} disabled={!supportsWatermark || !watermarkRuns.length} />
@@ -1834,9 +1973,15 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal-label">Run details</div>
                 <div className="surface-signal-value">{watermarkRunDetails?.label || watermarkRunDetails?.id || 'Select a run to inspect details'}</div>
               </div>
-              <pre className="output-placeholder" id="watermarkRunDetails">
-                {watermarkRunDetails?.report_excerpt || watermarkRunDetails?.error || 'Select a run to see details.'}
-              </pre>
+              {watermarkRunDetails?.report_excerpt || watermarkRunDetails?.error ? (
+                <SettingsGroup title="Report excerpt">
+                  <pre className="watermark-report" id="watermarkRunDetails">
+                    {watermarkRunDetails?.report_excerpt || watermarkRunDetails?.error}
+                  </pre>
+                </SettingsGroup>
+              ) : (
+                <div className="history-empty" id="watermarkRunDetails">Select a run to see details.</div>
+              )}
             </div>
             <div className="form-hint">
               {typeof watermarkRecommendedThreshold === 'number' ? `Recommended threshold: ${watermarkRecommendedThreshold.toFixed(3)}` : 'Threshold recommendations will appear once a run is selected.'}
@@ -1891,7 +2036,19 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal-label">Analysis result</div>
                 <div className="surface-signal-value">Interpretation updates after each detection run.</div>
               </div>
-              <pre className="output-placeholder" id="watermarkTestResult">{watermarkDetectResult}</pre>
+              <div className="watermark-detect-summary">
+                {Object.entries(parseWatermarkDetectResult(watermarkDetectResult))
+                  .filter(([, value]) => value && value !== 'n/a')
+                  .map(([label, value]) => (
+                    <div key={label} className="watermark-summary-card">
+                      <div className="watermark-summary-label">{labelWatermarkSummaryKey(label)}</div>
+                      <div className="watermark-summary-value">{value}</div>
+                    </div>
+                  ))}
+              </div>
+              <SettingsGroup title="Raw detection text">
+                <pre className="watermark-report" id="watermarkTestResult">{watermarkDetectResult}</pre>
+              </SettingsGroup>
             </div>
           </Panel>
         </div>
@@ -1940,10 +2097,6 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
             <div className="hero-stat-label">Loaded workers</div>
             <div className="hero-stat-value">{loadedCount}</div>
           </div>
-          <div className="hero-stat">
-            <div className="hero-stat-label">Active surface</div>
-            <div className="hero-stat-value">{selectedSurfaceTitle}</div>
-          </div>
         </div>
       </div>
 
@@ -1965,15 +2118,18 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
           <div className="status-card-value">{systemClock}</div>
           <div className="status-card-meta">Local system time snapshot</div>
         </div>
-        <div className="status-card">
-          <div className="status-card-label">Loaded Models</div>
-          <div className="status-card-value">{loadedCount}</div>
-          <div className="status-card-meta">Workers currently alive</div>
-        </div>
       </div>
+      <div className="status-meta-line">Active surface: {selectedSurfaceTitle}</div>
 
       <Panel title="Per-Model Status" subtitle="Load state, device, and run counts for each backend worker">
         <div className="system-model-table">
+          <div className="system-model-head">
+            <span>Model</span>
+            <span>Status</span>
+            <span>Last Run</span>
+            <span>Runs</span>
+            <span></span>
+          </div>
           {models.map((model) => {
             const status = modelStatuses[model.id] || {};
             return (
@@ -2053,38 +2209,40 @@ function AdvancedSettingsSurface({ controller }: { controller: AppController }) 
         <div className="surface-stack">
           {currentModel === 'index-tts2' ? (
             <Panel title="IndexTTS2 Settings" subtitle="Emotion control and sampling" actions={<button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Generate</button>}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="indexEmoMode">Emotion Mode</label>
-                <select id="indexEmoMode" value={settings.index.emoMode} onChange={(event) => updateSettings('index', { ...settings.index, emoMode: event.currentTarget.value as AppSettings['index']['emoMode'] })}>
-                  <option value="speaker">Same as speaker (default)</option>
-                  <option value="emo_ref">Use emotion reference audio</option>
-                  <option value="emo_vector">Custom emotion vector</option>
-                  <option value="emo_text">Emotion from text description</option>
-                </select>
-              </div>
-              <div className="slider-group">
-                <span className="slider-label">Emotion Weight</span>
-                <div className="slider-container">
-                  <input id="indexEmoAlpha" type="range" min="0" max="1" step="0.01" value={settings.index.emoAlpha} onChange={(event) => updateSettings('index', { ...settings.index, emoAlpha: Number(event.currentTarget.value) })} />
-                  <span className="slider-value" id="indexEmoAlphaVal">{settings.index.emoAlpha.toFixed(2)}</span>
-                </div>
-              </div>
-              <div className="checkbox-group">
-                <input id="indexUseRandom" type="checkbox" checked={settings.index.useRandom} onChange={(event) => updateSettings('index', { ...settings.index, useRandom: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="indexUseRandom">Random sampling</label>
-              </div>
-              {settings.index.emoMode === 'emo_vector' ? (
+              <SettingsGroup title="Core emotion controls" open>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="indexEmoVector">Emotion Vector</label>
-                  <input id="indexEmoVector" type="text" value={settings.index.emoVector} onChange={(event) => updateSettings('index', { ...settings.index, emoVector: event.currentTarget.value })} />
+                  <label className="form-label" htmlFor="indexEmoMode">Emotion Mode</label>
+                  <select id="indexEmoMode" value={settings.index.emoMode} onChange={(event) => updateSettings('index', { ...settings.index, emoMode: event.currentTarget.value as AppSettings['index']['emoMode'] })}>
+                    <option value="speaker">Same as speaker (default)</option>
+                    <option value="emo_ref">Use emotion reference audio</option>
+                    <option value="emo_vector">Custom emotion vector</option>
+                    <option value="emo_text">Emotion from text description</option>
+                  </select>
                 </div>
-              ) : null}
-              {settings.index.emoMode === 'emo_text' ? (
-                <div className="form-group">
-                  <label className="form-label" htmlFor="indexEmoText">Emotion Description</label>
-                  <textarea id="indexEmoText" rows={2} value={settings.index.emoText} onChange={(event) => updateSettings('index', { ...settings.index, emoText: event.currentTarget.value })} />
+                <div className="slider-group">
+                  <span className="slider-label">Emotion Weight</span>
+                  <div className="slider-container">
+                    <input id="indexEmoAlpha" type="range" min="0" max="1" step="0.01" value={settings.index.emoAlpha} onChange={(event) => updateSettings('index', { ...settings.index, emoAlpha: Number(event.currentTarget.value) })} />
+                    <span className="slider-value" id="indexEmoAlphaVal">{settings.index.emoAlpha.toFixed(2)}</span>
+                  </div>
                 </div>
-              ) : null}
+                <div className="checkbox-group">
+                  <input id="indexUseRandom" type="checkbox" checked={settings.index.useRandom} onChange={(event) => updateSettings('index', { ...settings.index, useRandom: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="indexUseRandom">Random sampling</label>
+                </div>
+                {settings.index.emoMode === 'emo_vector' ? (
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="indexEmoVector">Emotion Vector</label>
+                    <input id="indexEmoVector" type="text" value={settings.index.emoVector} onChange={(event) => updateSettings('index', { ...settings.index, emoVector: event.currentTarget.value })} />
+                  </div>
+                ) : null}
+                {settings.index.emoMode === 'emo_text' ? (
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="indexEmoText">Emotion Description</label>
+                    <textarea id="indexEmoText" rows={2} value={settings.index.emoText} onChange={(event) => updateSettings('index', { ...settings.index, emoText: event.currentTarget.value })} />
+                  </div>
+                ) : null}
+              </SettingsGroup>
               <details className="settings-details">
                 <summary>Segmentation</summary>
                 <div className="details-body">
@@ -2146,28 +2304,30 @@ function AdvancedSettingsSurface({ controller }: { controller: AppController }) 
 
           {currentModel === 'chatterbox-multilingual' ? (
             <Panel title="Chatterbox Multilingual Settings" subtitle="Language, chunking, and enhancement controls">
-              <div className="form-group">
-                <label className="form-label" htmlFor="cbLanguage">Language</label>
-                <select id="cbLanguage" value={settings.chatterbox.language} onChange={(event) => updateSettings('chatterbox', { ...settings.chatterbox, language: event.currentTarget.value })}>
-                  <option value="hi">Hindi (hi)</option>
-                  <option value="en">English (en)</option>
-                  <option value="zh">Chinese (zh)</option>
-                  <option value="ar">Arabic (ar)</option>
-                  <option value="fr">French (fr)</option>
-                  <option value="es">Spanish (es)</option>
-                  <option value="de">German (de)</option>
-                  <option value="ja">Japanese (ja)</option>
-                  <option value="ko">Korean (ko)</option>
-                  <option value="it">Italian (it)</option>
-                  <option value="pt">Portuguese (pt)</option>
-                  <option value="ru">Russian (ru)</option>
-                  <option value="tr">Turkish (tr)</option>
-                </select>
-              </div>
-              <div className="checkbox-group">
-                <input id="cbUsePrompt" type="checkbox" checked={settings.chatterbox.usePrompt} onChange={(event) => updateSettings('chatterbox', { ...settings.chatterbox, usePrompt: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="cbUsePrompt">Use reference audio for cloning</label>
-              </div>
+              <SettingsGroup title="Core language controls" open>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="cbLanguage">Language</label>
+                  <select id="cbLanguage" value={settings.chatterbox.language} onChange={(event) => updateSettings('chatterbox', { ...settings.chatterbox, language: event.currentTarget.value })}>
+                    <option value="hi">Hindi (hi)</option>
+                    <option value="en">English (en)</option>
+                    <option value="zh">Chinese (zh)</option>
+                    <option value="ar">Arabic (ar)</option>
+                    <option value="fr">French (fr)</option>
+                    <option value="es">Spanish (es)</option>
+                    <option value="de">German (de)</option>
+                    <option value="ja">Japanese (ja)</option>
+                    <option value="ko">Korean (ko)</option>
+                    <option value="it">Italian (it)</option>
+                    <option value="pt">Portuguese (pt)</option>
+                    <option value="ru">Russian (ru)</option>
+                    <option value="tr">Turkish (tr)</option>
+                  </select>
+                </div>
+                <div className="checkbox-group">
+                  <input id="cbUsePrompt" type="checkbox" checked={settings.chatterbox.usePrompt} onChange={(event) => updateSettings('chatterbox', { ...settings.chatterbox, usePrompt: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="cbUsePrompt">Use reference audio for cloning</label>
+                </div>
+              </SettingsGroup>
               <details className="settings-details">
                 <summary>Long-form (Chunking)</summary>
                 <div className="details-body">
@@ -2223,156 +2383,191 @@ function AdvancedSettingsSurface({ controller }: { controller: AppController }) 
 
           {currentModel === 'f5-hindi-urdu' ? (
             <Panel title="F5 Hindi/Urdu Settings" subtitle="Roman mode, overrides, and synthesis controls">
-              <div className="checkbox-group">
-                <input id="f5RomanMode" type="checkbox" checked={settings.f5.romanMode} onChange={(event) => updateSettings('f5', { ...settings.f5, romanMode: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="f5RomanMode">Roman input (converts to Devanagari)</label>
-              </div>
-              <div className="checkbox-group">
-                <input id="f5OverridesEnabled" type="checkbox" checked={settings.f5.overridesEnabled} onChange={(event) => updateSettings('f5', { ...settings.f5, overridesEnabled: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="f5OverridesEnabled">Enable pronunciation overrides</label>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="f5OverridesText">Override Rules</label>
-                <textarea id="f5OverridesText" rows={4} value={settings.f5.overridesText} onChange={(event) => updateSettings('f5', { ...settings.f5, overridesText: event.currentTarget.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="f5CrossFade">Cross-fade Duration</label>
-                <input id="f5CrossFade" type="number" value={settings.f5.crossFade} onChange={(event) => updateSettings('f5', { ...settings.f5, crossFade: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="f5NfeStep">NFE Steps</label>
-                <input id="f5NfeStep" type="number" value={settings.f5.nfeStep} onChange={(event) => updateSettings('f5', { ...settings.f5, nfeStep: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="f5Speed">Speed</label>
-                <input id="f5Speed" type="number" value={settings.f5.speed} onChange={(event) => updateSettings('f5', { ...settings.f5, speed: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="checkbox-group">
-                <input id="f5RemoveSilence" type="checkbox" checked={settings.f5.removeSilence} onChange={(event) => updateSettings('f5', { ...settings.f5, removeSilence: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="f5RemoveSilence">Remove silence</label>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="f5Seed">Seed</label>
-                <input id="f5Seed" type="number" value={settings.f5.seed} onChange={(event) => updateSettings('f5', { ...settings.f5, seed: Number(event.currentTarget.value) })} />
-              </div>
+              <SettingsGroup title="Voice & pronunciation" open>
+                <div className="checkbox-group">
+                  <input id="f5RomanMode" type="checkbox" checked={settings.f5.romanMode} onChange={(event) => updateSettings('f5', { ...settings.f5, romanMode: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="f5RomanMode">Roman input (converts to Devanagari)</label>
+                </div>
+                <div className="checkbox-group">
+                  <input id="f5OverridesEnabled" type="checkbox" checked={settings.f5.overridesEnabled} onChange={(event) => updateSettings('f5', { ...settings.f5, overridesEnabled: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="f5OverridesEnabled">Enable pronunciation overrides</label>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="f5OverridesText">Override Rules</label>
+                  <textarea id="f5OverridesText" rows={4} value={settings.f5.overridesText} onChange={(event) => updateSettings('f5', { ...settings.f5, overridesText: event.currentTarget.value })} />
+                </div>
+              </SettingsGroup>
+              <details className="settings-details">
+                <summary>Synthesis</summary>
+                <div className="details-body">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="f5CrossFade">Cross-fade Duration</label>
+                    <input id="f5CrossFade" type="number" value={settings.f5.crossFade} onChange={(event) => updateSettings('f5', { ...settings.f5, crossFade: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="f5NfeStep">NFE Steps</label>
+                    <input id="f5NfeStep" type="number" value={settings.f5.nfeStep} onChange={(event) => updateSettings('f5', { ...settings.f5, nfeStep: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="f5Speed">Speed</label>
+                    <input id="f5Speed" type="number" value={settings.f5.speed} onChange={(event) => updateSettings('f5', { ...settings.f5, speed: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="checkbox-group">
+                    <input id="f5RemoveSilence" type="checkbox" checked={settings.f5.removeSilence} onChange={(event) => updateSettings('f5', { ...settings.f5, removeSilence: event.currentTarget.checked })} />
+                    <label className="checkbox-label" htmlFor="f5RemoveSilence">Remove silence</label>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="f5Seed">Seed</label>
+                    <input id="f5Seed" type="number" value={settings.f5.seed} onChange={(event) => updateSettings('f5', { ...settings.f5, seed: Number(event.currentTarget.value) })} />
+                  </div>
+                </div>
+              </details>
             </Panel>
           ) : null}
 
           {currentModel === 'cosyvoice3-mlx' ? (
             <Panel title="CosyVoice3-MLX Settings" subtitle="Mode switching and transcript requirements">
-              <div className="form-group">
-                <label className="form-label" htmlFor="cosyModel">Model Variant</label>
-                <select id="cosyModel" value={settings.cosy.model} onChange={(event) => updateSettings('cosy', { ...settings.cosy, model: event.currentTarget.value })}>
-                  <option value="8bit">8-bit (recommended)</option>
-                  <option value="4bit">4-bit (faster)</option>
-                  <option value="fp16">FP16 (highest quality)</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="cosyMode">Mode</label>
-                <select id="cosyMode" value={settings.cosy.mode} onChange={(event) => updateSettings('cosy', { ...settings.cosy, mode: event.currentTarget.value as AppSettings['cosy']['mode'] })}>
-                  <option value="zero_shot">Zero-shot (best quality)</option>
-                  <option value="cross_lingual">Cross-lingual</option>
-                  <option value="instruct">Instruct</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="cosyLang">Language</label>
-                <input id="cosyLang" type="text" value={settings.cosy.language} onChange={(event) => updateSettings('cosy', { ...settings.cosy, language: event.currentTarget.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="cosySpeed">Speed</label>
-                <input id="cosySpeed" type="number" value={settings.cosy.speed} onChange={(event) => updateSettings('cosy', { ...settings.cosy, speed: Number(event.currentTarget.value) })} />
-              </div>
-              {settings.cosy.mode === 'instruct' ? (
-                <div className="form-group" id="cosyInstructRow">
-                  <label className="form-label" htmlFor="cosyInstructText">Instruction</label>
-                  <textarea id="cosyInstructText" rows={2} value={settings.cosy.instructText} onChange={(event) => updateSettings('cosy', { ...settings.cosy, instructText: event.currentTarget.value })} />
+              <SettingsGroup title="Core model controls" open>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="cosyModel">Model Variant</label>
+                  <select id="cosyModel" value={settings.cosy.model} onChange={(event) => updateSettings('cosy', { ...settings.cosy, model: event.currentTarget.value })}>
+                    <option value="8bit">8-bit (recommended)</option>
+                    <option value="4bit">4-bit (faster)</option>
+                    <option value="fp16">FP16 (highest quality)</option>
+                  </select>
                 </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="cosyMode">Mode</label>
+                  <select id="cosyMode" value={settings.cosy.mode} onChange={(event) => updateSettings('cosy', { ...settings.cosy, mode: event.currentTarget.value as AppSettings['cosy']['mode'] })}>
+                    <option value="zero_shot">Zero-shot (best quality)</option>
+                    <option value="cross_lingual">Cross-lingual</option>
+                    <option value="instruct">Instruct</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="cosyLang">Language</label>
+                  <input id="cosyLang" type="text" value={settings.cosy.language} onChange={(event) => updateSettings('cosy', { ...settings.cosy, language: event.currentTarget.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="cosySpeed">Speed</label>
+                  <input id="cosySpeed" type="number" value={settings.cosy.speed} onChange={(event) => updateSettings('cosy', { ...settings.cosy, speed: Number(event.currentTarget.value) })} />
+                </div>
+              </SettingsGroup>
+              {settings.cosy.mode === 'instruct' ? (
+                <details className="settings-details">
+                  <summary>Instruction</summary>
+                  <div className="details-body">
+                    <div className="form-group" id="cosyInstructRow">
+                      <label className="form-label" htmlFor="cosyInstructText">Instruction</label>
+                      <textarea id="cosyInstructText" rows={2} value={settings.cosy.instructText} onChange={(event) => updateSettings('cosy', { ...settings.cosy, instructText: event.currentTarget.value })} />
+                    </div>
+                  </div>
+                </details>
               ) : null}
             </Panel>
           ) : null}
 
           {currentModel === 'qwen3-tts-mlx' ? (
             <Panel title="Qwen3-TTS MLX Settings" subtitle="Voice cloning and auto-transcribe behavior">
-              <div className="form-group">
-                <label className="form-label" htmlFor="qwenModel">Model</label>
-                <select id="qwenModel" value={settings.qwen.model} onChange={(event) => updateSettings('qwen', { ...settings.qwen, model: event.currentTarget.value })}>
-                  <option value="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit">1.7B Base (8-bit, default)</option>
-                  <option value="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit">0.6B Base (8-bit, faster)</option>
-                </select>
-              </div>
-              <div className="checkbox-group">
-                <input id="qwenAutoTranscribe" type="checkbox" checked={settings.qwen.autoTranscribe} onChange={(event) => updateSettings('qwen', { ...settings.qwen, autoTranscribe: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="qwenAutoTranscribe">Auto-transcribe reference audio if transcript is missing</label>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="qwenLanguage">Language</label>
-                <input id="qwenLanguage" type="text" value={settings.qwen.language} onChange={(event) => updateSettings('qwen', { ...settings.qwen, language: event.currentTarget.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="qwenSpeed">Speed</label>
-                <input id="qwenSpeed" type="number" value={settings.qwen.speed} onChange={(event) => updateSettings('qwen', { ...settings.qwen, speed: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="qwenTemperature">Temperature</label>
-                <input id="qwenTemperature" type="number" value={settings.qwen.temperature} onChange={(event) => updateSettings('qwen', { ...settings.qwen, temperature: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="qwenMaxTokens">Max Tokens</label>
-                <input id="qwenMaxTokens" type="number" value={settings.qwen.maxTokens} onChange={(event) => updateSettings('qwen', { ...settings.qwen, maxTokens: Number(event.currentTarget.value) })} />
-              </div>
+              <SettingsGroup title="Voice cloning" open>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="qwenModel">Model</label>
+                  <select id="qwenModel" value={settings.qwen.model} onChange={(event) => updateSettings('qwen', { ...settings.qwen, model: event.currentTarget.value })}>
+                    <option value="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit">1.7B Base (8-bit, default)</option>
+                    <option value="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit">0.6B Base (8-bit, faster)</option>
+                  </select>
+                </div>
+                <div className="checkbox-group">
+                  <input id="qwenAutoTranscribe" type="checkbox" checked={settings.qwen.autoTranscribe} onChange={(event) => updateSettings('qwen', { ...settings.qwen, autoTranscribe: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="qwenAutoTranscribe">Auto-transcribe reference audio if transcript is missing</label>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="qwenLanguage">Language</label>
+                  <input id="qwenLanguage" type="text" value={settings.qwen.language} onChange={(event) => updateSettings('qwen', { ...settings.qwen, language: event.currentTarget.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="qwenSpeed">Speed</label>
+                  <input id="qwenSpeed" type="number" value={settings.qwen.speed} onChange={(event) => updateSettings('qwen', { ...settings.qwen, speed: Number(event.currentTarget.value) })} />
+                </div>
+              </SettingsGroup>
+              <details className="settings-details">
+                <summary>Decoding</summary>
+                <div className="details-body">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="qwenTemperature">Temperature</label>
+                    <input id="qwenTemperature" type="number" value={settings.qwen.temperature} onChange={(event) => updateSettings('qwen', { ...settings.qwen, temperature: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="qwenMaxTokens">Max Tokens</label>
+                    <input id="qwenMaxTokens" type="number" value={settings.qwen.maxTokens} onChange={(event) => updateSettings('qwen', { ...settings.qwen, maxTokens: Number(event.currentTarget.value) })} />
+                  </div>
+                </div>
+              </details>
             </Panel>
           ) : null}
 
           {currentModel === 'pocket-tts' ? (
             <Panel title="Pocket TTS Settings" subtitle="Lightweight TTS and decoding controls">
-              <div className="form-group">
-                <label className="form-label" htmlFor="pocketVoice">Voice URL</label>
-                <input id="pocketVoice" type="text" value={settings.pocket.voice} onChange={(event) => updateSettings('pocket', { ...settings.pocket, voice: event.currentTarget.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="pocketTemp">Temperature</label>
-                <input id="pocketTemp" type="number" value={settings.pocket.temperature} onChange={(event) => updateSettings('pocket', { ...settings.pocket, temperature: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="pocketLsd">LSD Decode Steps</label>
-                <input id="pocketLsd" type="number" value={settings.pocket.lsdDecodeSteps} onChange={(event) => updateSettings('pocket', { ...settings.pocket, lsdDecodeSteps: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="pocketEos">EOS Threshold</label>
-                <input id="pocketEos" type="number" value={settings.pocket.eosThreshold} onChange={(event) => updateSettings('pocket', { ...settings.pocket, eosThreshold: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="pocketNoiseClamp">Noise Clamp</label>
-                <input id="pocketNoiseClamp" type="number" value={settings.pocket.noiseClamp} onChange={(event) => updateSettings('pocket', { ...settings.pocket, noiseClamp: event.currentTarget.value })} />
-              </div>
-              <div className="checkbox-group">
-                <input id="pocketTruncate" type="checkbox" checked={settings.pocket.truncatePrompt} onChange={(event) => updateSettings('pocket', { ...settings.pocket, truncatePrompt: event.currentTarget.checked })} />
-                <label className="checkbox-label" htmlFor="pocketTruncate">Truncate prompt</label>
-              </div>
+              <SettingsGroup title="Voice source" open>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="pocketVoice">Voice URL</label>
+                  <input id="pocketVoice" type="text" value={settings.pocket.voice} onChange={(event) => updateSettings('pocket', { ...settings.pocket, voice: event.currentTarget.value })} />
+                </div>
+                <div className="checkbox-group">
+                  <input id="pocketTruncate" type="checkbox" checked={settings.pocket.truncatePrompt} onChange={(event) => updateSettings('pocket', { ...settings.pocket, truncatePrompt: event.currentTarget.checked })} />
+                  <label className="checkbox-label" htmlFor="pocketTruncate">Truncate prompt</label>
+                </div>
+              </SettingsGroup>
+              <details className="settings-details">
+                <summary>Decoding</summary>
+                <div className="details-body">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="pocketTemp">Temperature</label>
+                    <input id="pocketTemp" type="number" value={settings.pocket.temperature} onChange={(event) => updateSettings('pocket', { ...settings.pocket, temperature: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="pocketLsd">LSD Decode Steps</label>
+                    <input id="pocketLsd" type="number" value={settings.pocket.lsdDecodeSteps} onChange={(event) => updateSettings('pocket', { ...settings.pocket, lsdDecodeSteps: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="pocketEos">EOS Threshold</label>
+                    <input id="pocketEos" type="number" value={settings.pocket.eosThreshold} onChange={(event) => updateSettings('pocket', { ...settings.pocket, eosThreshold: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="pocketNoiseClamp">Noise Clamp</label>
+                    <input id="pocketNoiseClamp" type="number" value={settings.pocket.noiseClamp} onChange={(event) => updateSettings('pocket', { ...settings.pocket, noiseClamp: event.currentTarget.value })} />
+                  </div>
+                </div>
+              </details>
             </Panel>
           ) : null}
 
           {currentModel === 'voxcpm-ane' ? (
             <Panel title="VoxCPM-ANE Settings" subtitle="Cached voice or prompt audio plus inference parameters">
-              <div className="form-group">
-                <label className="form-label" htmlFor="voxcpmVoice">Cached Voice Name</label>
-                <input id="voxcpmVoice" type="text" value={settings.voxcpm.voice} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, voice: event.currentTarget.value })} />
-                <div className="form-hint">Enter a cached voice name, or use reference audio with transcript.</div>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="voxcpmCfg">CFG Value</label>
-                <input id="voxcpmCfg" type="number" value={settings.voxcpm.cfgValue} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, cfgValue: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="voxcpmSteps">Inference Steps</label>
-                <input id="voxcpmSteps" type="number" value={settings.voxcpm.inferenceTimesteps} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, inferenceTimesteps: Number(event.currentTarget.value) })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="voxcpmMaxLen">Max Length</label>
-                <input id="voxcpmMaxLen" type="number" value={settings.voxcpm.maxLength} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, maxLength: Number(event.currentTarget.value) })} />
-              </div>
+              <SettingsGroup title="Voice cache" open>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="voxcpmVoice">Cached Voice Name</label>
+                  <input id="voxcpmVoice" type="text" value={settings.voxcpm.voice} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, voice: event.currentTarget.value })} />
+                  <div className="form-hint">Enter a cached voice name, or use reference audio with transcript.</div>
+                </div>
+              </SettingsGroup>
+              <details className="settings-details">
+                <summary>Inference</summary>
+                <div className="details-body">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="voxcpmCfg">CFG Value</label>
+                    <input id="voxcpmCfg" type="number" value={settings.voxcpm.cfgValue} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, cfgValue: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="voxcpmSteps">Inference Steps</label>
+                    <input id="voxcpmSteps" type="number" value={settings.voxcpm.inferenceTimesteps} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, inferenceTimesteps: Number(event.currentTarget.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="voxcpmMaxLen">Max Length</label>
+                    <input id="voxcpmMaxLen" type="number" value={settings.voxcpm.maxLength} onChange={(event) => updateSettings('voxcpm', { ...settings.voxcpm, maxLength: Number(event.currentTarget.value) })} />
+                  </div>
+                </div>
+              </details>
             </Panel>
           ) : null}
         </div>
@@ -2460,6 +2655,14 @@ export default function App() {
         </nav>
 
         <div className="sidebar-footer">
+          <div className="sidebar-footer-card">
+            <div className="sidebar-footer-label">Current surface</div>
+            <div className="sidebar-footer-value">{controller.surfaceTitle}</div>
+          </div>
+          <div className="sidebar-footer-card">
+            <div className="sidebar-footer-label">Selected model</div>
+            <div className="sidebar-footer-value">{controller.selectedModel ? normalizeModelName(controller.selectedModel.name) : 'None selected'}</div>
+          </div>
           <div className="system-info">
             <span className={`status-dot${controller.infoAvailable === false ? ' error' : controller.infoAvailable === true ? '' : ' warning'}`} id="ffmpegDot" />
             <span id="ffmpegStatus">{controller.infoAvailable === null ? 'Checking ffmpeg...' : controller.infoAvailable ? 'ffmpeg: OK' : 'ffmpeg: Missing'}</span>
