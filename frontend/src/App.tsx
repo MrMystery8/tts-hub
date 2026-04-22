@@ -102,6 +102,12 @@ function formatBytes(bytes: number | undefined | null): string {
   return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function normalizeTimestamp(ts: number): number {
+  // The backend mixes epoch seconds and epoch milliseconds across endpoints.
+  // Treat anything below ~2001 in milliseconds as seconds so UI dates stay sane.
+  return Math.abs(ts) < 1e12 ? ts * 1000 : ts;
+}
+
 function formatDuration(seconds: number | undefined | null): string {
   if (seconds === undefined || seconds === null || !Number.isFinite(seconds)) return '--:--';
   const mins = Math.floor(seconds / 60);
@@ -111,7 +117,7 @@ function formatDuration(seconds: number | undefined | null): string {
 
 function formatDateTime(ts: number | undefined | null): string {
   if (ts === undefined || ts === null || !Number.isFinite(ts)) return 'Unknown';
-  return new Date(ts).toLocaleString();
+  return new Date(normalizeTimestamp(ts)).toLocaleString();
 }
 
 function mergeSettings(saved: Partial<AppSettings> | null | undefined): AppSettings {
@@ -1304,7 +1310,6 @@ function GenerateSurface({ controller }: { controller: AppController }) {
     setPromptRecording,
     clearVoicePreview,
     selectSavedVoice,
-    setActiveSurface,
     setSelectedModelId,
     setEmotionFile,
     emotionFile,
@@ -1527,12 +1532,6 @@ function GenerateSurface({ controller }: { controller: AppController }) {
           <Panel
             title={currentModelName}
             subtitle={selectedModel?.description || 'Select a model to begin.'}
-            actions={
-              <>
-                <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('models')}>Models</button>
-                <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('advanced-settings')}>Advanced Settings</button>
-              </>
-            }
           >
             <div className="status-badges">
               <Badge tone={currentModelStatus.loaded ? 'success' : 'neutral'}>{currentModelStatus.loaded ? 'Loaded' : 'Ready'}</Badge>
@@ -1560,7 +1559,6 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                   <div className="surface-signal-label">Qwen3-TTS MLX</div>
                   <div className="surface-signal-value">Model-specific settings live in Advanced Settings to keep the Generate workspace clean.</div>
                 </div>
-                <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('advanced-settings')}>Open settings</button>
               </div>
             ) : null}
             <div className="surface-subpanel">
@@ -1622,7 +1620,7 @@ function GenerateSurface({ controller }: { controller: AppController }) {
 }
 
 function ModelsSurface({ controller }: { controller: AppController }) {
-  const { models, modelStatuses, selectedModelId, setSelectedModelId, setActiveSurface, handleUnloadModel, settings } = controller;
+  const { models, modelStatuses, selectedModelId, setSelectedModelId, handleUnloadModel, settings } = controller;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
   const status = selectedModel ? modelStatuses[selectedModel.id] || {} : {};
   const meta = getModelSurfaceMeta(selectedModel?.id, settings);
@@ -1669,12 +1667,7 @@ function ModelsSurface({ controller }: { controller: AppController }) {
           <Panel
             title={selectedModel ? normalizeModelName(selectedModel.name) : 'No model selected'}
             subtitle={selectedModel ? meta.note : 'Pick a model to see detail.'}
-            actions={
-              <>
-                <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Generate</button>
-                <button className="btn btn-danger" type="button" onClick={() => void handleUnloadModel()} disabled={!selectedModelId}>Unload</button>
-              </>
-            }
+            actions={<button className="btn btn-danger" type="button" onClick={() => void handleUnloadModel()} disabled={!selectedModelId}>Unload</button>}
           >
             <div className="status-badges">
               <Badge tone={status.loaded ? 'success' : 'neutral'}>{status.loaded ? 'Loaded' : 'Ready'}</Badge>
@@ -1707,13 +1700,6 @@ function ModelsSurface({ controller }: { controller: AppController }) {
                 <div className="summary-label">Generations</div>
                 <div className="summary-value">{typeof status.total_generations === 'number' ? status.total_generations : 0}</div>
               </div>
-            </div>
-            <div className="surface-subpanel">
-              <div className="surface-subpanel-copy">
-                <div className="surface-signal-label">Selection path</div>
-                <div className="surface-signal-value">Choose a model here, or return to Generate when you’re ready to synthesize.</div>
-              </div>
-              <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Back to Generate</button>
             </div>
           </Panel>
         </div>
@@ -1869,7 +1855,7 @@ function VoicesSurface({ controller }: { controller: AppController }) {
 }
 
 function HistorySurface({ controller }: { controller: AppController }) {
-  const { history, models, setActiveSurface, outputUrl, outputFileName, replayHistoryItem } = controller;
+  const { history, models, outputUrl, outputFileName, replayHistoryItem } = controller;
   const latestItem = history[0] || null;
 
   return (
@@ -1914,8 +1900,6 @@ function HistorySurface({ controller }: { controller: AppController }) {
               <div className="history-empty" id="historyLatestEmpty">No generations yet</div>
             )}
           </Panel>
-        </div>
-        <div className="surface-stack">
           <Panel title="Session Log" subtitle="Recent outputs from this session">
             <div className="history-list">
               {history.length ? history.map((item) => (
@@ -1926,15 +1910,6 @@ function HistorySurface({ controller }: { controller: AppController }) {
                   onReplay={replayHistoryItem}
                 />
               )) : <div className="history-empty" id="historyLogEmpty">No generations yet</div>}
-            </div>
-          </Panel>
-          <Panel title="Return to Generate" subtitle="Switch back to the workspace when you want to synthesize again">
-            <div className="surface-subpanel">
-              <div className="surface-subpanel-copy">
-                <div className="surface-signal-label">Continue</div>
-                <div className="surface-signal-value">History stays session-oriented. Current outputs remain available until the session is cleared.</div>
-              </div>
-              <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Back to Generate</button>
             </div>
           </Panel>
         </div>
@@ -2194,9 +2169,10 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
 }
 
 function AdvancedSettingsSurface({ controller }: { controller: AppController }) {
-  const { selectedModel, selectedModelId, settings, updateSettings, setActiveSurface } = controller;
+  const { selectedModel, selectedModelId, settings, updateSettings } = controller;
 
-  const currentModel = selectedModelId || selectedModel?.id || 'index-tts2';
+  const currentModel = selectedModel?.id || selectedModelId || 'index-tts2';
+  const currentModelName = normalizeModelName(controller.models.find((model) => model.id === currentModel)?.name || currentModel);
 
   return (
     <div className="surface surface-advanced">
@@ -2221,28 +2197,19 @@ function AdvancedSettingsSurface({ controller }: { controller: AppController }) 
       <div className="surface-grid surface-grid-two">
         <div className="surface-stack">
           <Panel title="Advanced Settings" subtitle="Model-specific controls are grouped and collapsed by default">
-            <div className="form-group">
-              <label className="form-label" htmlFor="advancedModelSelect">Current Model</label>
-              <select id="advancedModelSelect" value={currentModel} onChange={(event) => controller.setSelectedModelId(event.currentTarget.value)}>
-                {controller.models.map((model) => (
-                  <option key={model.id} value={model.id}>{normalizeModelName(model.name)}</option>
-                ))}
-              </select>
-            </div>
-            <div className="form-hint">Keep the selected model in sync with Generate; this surface only changes the presentation of the same values.</div>
             <div className="surface-subpanel">
               <div className="surface-subpanel-copy">
                 <div className="surface-signal-label">Current model</div>
-                <div className="surface-signal-value">{selectedModel ? selectedModel.description : 'Select a model to reveal its specialist controls.'}</div>
+                <div className="surface-signal-value">{selectedModel ? selectedModel.description : 'Select a model from the sidebar to reveal its specialist controls.'}</div>
               </div>
-              <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Generate</button>
             </div>
+            <div className="form-hint">Model selection lives in the sidebar; this surface only exposes the matching specialist controls for {currentModelName}.</div>
           </Panel>
         </div>
 
         <div className="surface-stack">
           {currentModel === 'index-tts2' ? (
-            <Panel title="IndexTTS2 Settings" subtitle="Emotion control and sampling" actions={<button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('generate')}>Generate</button>}>
+            <Panel title="IndexTTS2 Settings" subtitle="Emotion control and sampling">
               <SettingsGroup title="Core emotion controls" open>
                 <div className="form-group">
                   <label className="form-label" htmlFor="indexEmoMode">Emotion Mode</label>

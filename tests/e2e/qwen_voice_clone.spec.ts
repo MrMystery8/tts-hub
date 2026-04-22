@@ -15,6 +15,8 @@ function repoRoot(): string {
 }
 
 test.describe('qwen3-tts-mlx voice cloning', () => {
+  const generateTimeoutMs = 240 * 1000;
+
   test('Save voice + transcript persists + generate', async ({ page }) => {
     const qwenPythonCandidates = [
       '/Users/ayaanminhas/Desktop/Personal_Work/Qwen3-TTS/.venv/bin/python3',
@@ -43,11 +45,13 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
 
     await page.goto('/');
 
-    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' });
-    if ((await qwenCard.count()) === 0) {
+    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' }).first();
+    try {
+      await expect(qwenCard).toBeVisible({ timeout: 30_000 });
+    } catch {
       test.skip(true, 'Qwen3-TTS MLX model not present in UI (backend not integrated)');
     }
-    await qwenCard.first().click();
+    await qwenCard.click();
 
     await page.setInputFiles('#promptFile', audioPath);
     await page.fill('#promptText', refText);
@@ -61,18 +65,25 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
 
     await page.fill('#text', genText);
 
+    await page.locator('[data-surface-link="advanced-settings"]').click();
+    await expect(page.locator('#qwenModel')).toBeVisible();
+
     // Model-specific Qwen settings
     await page.selectOption('#qwenModel', qwenModelId);
     await page.check('#qwenAutoTranscribe');
 
+    await page.locator('[data-surface-link="generate"]').click();
+    await expect(page.locator('#generate')).toBeVisible();
+
     const [resp] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/generate') && r.status() === 200),
+      page.waitForResponse((r) => r.url().includes('/api/generate') && r.status() === 200, { timeout: generateTimeoutMs }),
       page.click('#generate'),
     ]);
 
     const headers = resp.headers();
     expect(headers['x-ref-transcript-status']).toBe('provided');
     expect(headers['x-model-id']).toBeTruthy();
+    await expect(page.locator('#statusBar')).toContainText('Generation complete.', { timeout: generateTimeoutMs });
 
     const output = page.locator('#output');
     await expect(output).toBeVisible();
@@ -114,11 +125,13 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     const qwenModelId = (process.env.E2E_QWEN_MODEL_ID || 'mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit').trim();
 
     await page.goto('/');
-    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' });
-    if ((await qwenCard.count()) === 0) {
+    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' }).first();
+    try {
+      await expect(qwenCard).toBeVisible({ timeout: 30_000 });
+    } catch {
       test.skip(true, 'Qwen3-TTS MLX model not present in UI (backend not integrated)');
     }
-    await qwenCard.first().click();
+    await qwenCard.click();
 
     await page.setInputFiles('#promptFile', audioPath);
     await page.fill('#promptText', '');
@@ -134,14 +147,18 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     await page.selectOption('#qwenModel', qwenModelId);
     await page.check('#qwenAutoTranscribe');
 
+    await page.locator('[data-surface-link="generate"]').click();
+    await expect(page.locator('#generate')).toBeVisible();
+
     const [resp] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/generate') && r.status() === 200),
+      page.waitForResponse((r) => r.url().includes('/api/generate') && r.status() === 200, { timeout: generateTimeoutMs }),
       page.click('#generate'),
     ]);
 
     const headers = resp.headers();
     expect(headers['x-ref-transcript-status']).toBe('auto_transcribed');
     expect(headers['x-model-id']).toBeTruthy();
+    await expect(page.locator('#statusBar')).toContainText('Generation complete.', { timeout: generateTimeoutMs });
 
     // Cleanup
     page.once('dialog', (dialog) => dialog.accept());
@@ -149,4 +166,3 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     await expect(voiceSelect).toHaveValue('');
   });
 });
-
