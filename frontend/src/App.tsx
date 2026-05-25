@@ -35,6 +35,8 @@ type ModelSurfaceMeta = {
   note: string;
 };
 
+const VALID_SURFACES: SurfaceId[] = ['generate', 'models', 'voices', 'history', 'watermark-lab', 'system-status', 'advanced-settings'];
+
 function getModelSurfaceMeta(modelId: string | null | undefined, settings: AppSettings): ModelSurfaceMeta {
   const id = String(modelId || '');
   const base: Record<string, ModelSurfaceMeta> = {
@@ -135,16 +137,23 @@ function mergeSettings(saved: Partial<AppSettings> | null | undefined): AppSetti
 }
 
 function loadSnapshot(): AppSnapshot {
+  const hashSurface = typeof window !== 'undefined'
+    ? window.location.hash.replace(/^#/, '')
+    : '';
+  const initialSurface = VALID_SURFACES.includes(hashSurface as SurfaceId)
+    ? (hashSurface as SurfaceId)
+    : sessionStore.load<SurfaceId>('activeSurface', 'generate');
+
   return {
     selectedModelId: sessionStore.load<string | null>('selectedModel', null),
-    activeSurface: sessionStore.load<SurfaceId>('activeSurface', 'generate'),
+    activeSurface: initialSurface,
     text: sessionStore.load('text', ''),
     promptText: sessionStore.load('promptText', ''),
     selectedVoiceId: sessionStore.load('selectedVoiceId', ''),
     outputFormat: sessionStore.load<'wav' | 'mp3' | 'flac'>('outputFormat', 'wav'),
     watermarkEnabled: sessionStore.load('watermarkEnabled', false),
     watermarkRun: sessionStore.load('watermarkRun', ''),
-    watermarkThresholdAuto: sessionStore.load('watermarkThresholdAuto', '1') !== '0',
+    watermarkThresholdAuto: sessionStore.load<string>('watermarkThresholdAuto', '1') !== '0',
     watermarkThresholdManual: sessionStore.load('watermarkThresholdManual', ''),
     settings: mergeSettings(sessionStore.load<Partial<AppSettings> | null>('settings', null)),
     history: sessionStore.load<AppHistoryItem[]>('history', []),
@@ -737,10 +746,11 @@ function useAppController() {
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash.replace(/^#/, '') as SurfaceId;
-      if (hash && ['generate', 'models', 'voices', 'history', 'watermark-lab', 'system-status', 'advanced-settings'].includes(hash)) {
+      if (hash && VALID_SURFACES.includes(hash)) {
         setActiveSurfaceState(hash);
       }
     };
+    onHashChange();
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -1231,11 +1241,11 @@ function ModelCard({
 }) {
   const loaded = !!status.loaded;
   const total = typeof status.total_generations === 'number' ? status.total_generations : 0;
-  const device = status.device || 'unknown';
+  const device = status.device && status.device !== 'unknown' ? status.device : '';
   const meta = getModelSurfaceMeta(model.id, settings);
   const modelBadges = [
     <Badge key="loaded" tone={loaded ? 'success' : 'neutral'}>{loaded ? 'Loaded' : 'Ready'}</Badge>,
-    <Badge key="device" tone="neutral">{device}</Badge>,
+    ...(device ? [<Badge key="device" tone="neutral">{device}</Badge>] : []),
     <Badge key="runs" tone="neutral">{total} runs</Badge>,
     ...(!compact ? meta.requirementTags.map((label) => <Badge key={label} tone="warning">{label}</Badge>) : []),
     ...(!meta.capabilityTags.includes('Watermark') && isWatermarkSupported(model.id) ? [<Badge key="wm" tone="info">Watermark</Badge>] : []),
@@ -1282,35 +1292,25 @@ function GenerateSurface({ controller }: { controller: AppController }) {
     selectedModelStatus,
     selectedVoice,
     selectedVoiceId,
-    selectedModelId,
+    models,
     voices,
     supportsWatermark,
     transcriptRequired,
     needsReferenceAudio,
-    promptSource,
     promptText,
     setPromptText,
     text,
     setText,
     outputFormat,
     setOutputFormat,
-    watermarkEnabled,
-    setWatermarkEnabled,
-    watermarkRun,
-    setWatermarkRun,
-    watermarkRuns,
-    watermarkRecommendedThreshold,
     handleGenerate,
-    handleSaveVoice,
-    handleDeleteVoice,
-    handleUnloadModel,
     handleResetAll,
-    replayHistoryItem,
     setPromptFile,
     setPromptRecording,
     clearVoicePreview,
     selectSavedVoice,
     setSelectedModelId,
+    setActiveSurface,
     setEmotionFile,
     emotionFile,
     emotionFileRef,
@@ -1327,18 +1327,18 @@ function GenerateSurface({ controller }: { controller: AppController }) {
 
   const currentModelName = selectedModel ? normalizeModelName(selectedModel.name) : 'Select a model';
   const currentModelStatus = selectedModelStatus || {};
-  const voiceCount = voices.length;
-  const latestHistory = controller.history.slice(0, 3);
   const currentModelMeta = getModelSurfaceMeta(selectedModel?.id, settings);
-  const requiredChips = [
-    needsReferenceAudio ? 'Reference audio required' : 'Reference audio optional',
-    transcriptRequired ? 'Transcript required' : 'Transcript optional',
-    supportsWatermark ? 'Watermark supported' : 'Watermark unavailable',
-  ];
+  const requiredSummary = `${needsReferenceAudio ? 'Reference audio required' : 'Reference audio optional'} • ${transcriptRequired ? 'Transcript required' : 'Transcript optional'}${supportsWatermark ? ' • Watermark available in Watermark Lab' : ''}`;
 
-  const canDeleteVoice = !!selectedVoiceId;
   const needsTranscriptCopy = transcriptRequired ? 'Transcript required for this model.' : 'Transcript optional for this model.';
   const referenceCopy = needsReferenceAudio ? 'Reference audio or saved voice required.' : 'Reference audio optional.';
+  const sourceLabel = source.kind === 'saved'
+    ? `Saved voice: ${selectedVoice?.name || source.voiceId}`
+    : source.kind === 'upload'
+      ? 'Uploaded reference audio'
+      : source.kind === 'record'
+        ? 'Recorded reference audio'
+        : 'No reference selected';
 
   return (
     <div className="surface surface-generate">
@@ -1349,46 +1349,103 @@ function GenerateSurface({ controller }: { controller: AppController }) {
           <p>
             {selectedModel
               ? `${currentModelName} is selected. ${currentModelMeta.purpose}.`
-              : 'Pick a model, add a voice reference if needed, and generate speech without leaving the workspace.'}
+              : 'Pick a model, add the required inputs, and generate speech.'}
           </p>
-          <div className="surface-chip-row">
-            {requiredChips.map((label) => (
-              <span key={label} className="surface-chip">
-                {label}
-              </span>
-            ))}
-          </div>
+          <div className="surface-hero-note">{requiredSummary}</div>
         </div>
         <div className="surface-hero-rail">
           <div className="hero-stat">
             <div className="hero-stat-label">Selected voice</div>
-            <div className="hero-stat-value">{selectedVoice ? selectedVoice.name : promptSource.kind !== 'none' ? 'Temporary reference' : 'No saved voice'}</div>
+            <div className="hero-stat-value">{selectedVoice ? selectedVoice.name : source.kind !== 'none' ? 'Temporary reference' : 'No saved voice'}</div>
           </div>
           <div className="hero-stat">
-            <div className="hero-stat-label">Model readiness</div>
-            <div className="hero-stat-value">{currentModelStatus.loaded ? 'Loaded' : 'Ready'}</div>
+            <div className="hero-stat-label">Selected model</div>
+            <div className="hero-stat-value">{currentModelName}</div>
           </div>
         </div>
       </div>
 
       <div className="surface-grid surface-grid-generate">
         <div className="surface-stack">
+          <Panel title="Create Speech" subtitle="Write the line, confirm the model, then generate">
+            <div className="generate-model-strip">
+              <div className="form-group">
+                <label className="form-label" htmlFor="generateModelSelect">Model</label>
+                <select
+                  id="generateModelSelect"
+                  value={selectedModel?.id || ''}
+                  onChange={(event) => setSelectedModelId(event.currentTarget.value)}
+                >
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {normalizeModelName(model.name)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="model-context-line">
+                <Badge tone={currentModelStatus.loaded ? 'success' : 'neutral'}>{currentModelStatus.loaded ? 'Loaded' : 'Ready'}</Badge>
+                <span>{currentModelMeta.purpose}</span>
+              </div>
+            </div>
+            <div className="surface-signal surface-signal-inline">
+              <div>
+                <div className="surface-signal-label">Required inputs</div>
+                <div className="surface-signal-value">{requiredSummary}</div>
+              </div>
+              <button className="btn btn-secondary btn-compact" type="button" onClick={() => setActiveSurface('voices')}>
+                Voice manager
+              </button>
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="text">Text to speak</label>
+              <textarea id="text" rows={5} value={text} onChange={(event) => setText(event.currentTarget.value)} placeholder="Type what you want the model to say..." />
+            </div>
+            <div className="form-row split generate-actions-row">
+              <div className="form-row compact output-format-row">
+                <label className="form-label" htmlFor="outputFormat">Output Format</label>
+                <select id="outputFormat" value={outputFormat} onChange={(event) => setOutputFormat(event.currentTarget.value as 'wav' | 'mp3' | 'flac')}>
+                  <option value="wav">WAV</option>
+                  <option value="mp3">MP3</option>
+                  <option value="flac">FLAC</option>
+                </select>
+              </div>
+              <div className="action-row">
+                <button className="btn btn-quiet" id="reset" type="button" onClick={() => void handleResetAll()}>
+                  Reset form
+                </button>
+                <button className="btn btn-primary btn-lg" id="generate" type="button" onClick={() => void handleGenerate()} disabled={isGenerating}>
+                  <span id="generateText">{isGenerating ? 'Generating...' : 'Generate'}</span>
+                </button>
+              </div>
+            </div>
+            <div className="status-bar-shell" id="statusBar">
+              {shellStatusMessage(statusKind, statusMessage)}
+            </div>
+          </Panel>
+
+          <Panel title="Output" subtitle="Generated audio will appear here" className="panel-output">
+            <div className="output-player">
+              {outputUrl ? <audio id="output" className="audio-player" controls src={outputUrl} /> : <div className="output-placeholder" id="outputPlaceholder">No audio generated yet</div>}
+              <div className={`output-actions${outputUrl ? '' : ' hidden'}`} id="outputActions">
+                <a className="btn btn-primary" id="download" href={outputUrl || '#'} download={outputFileName}>
+                  Download
+                </a>
+              </div>
+            </div>
+          </Panel>
+        </div>
+
+        <div className="surface-stack">
           <Panel
             title="Voice Reference"
             subtitle={referenceCopy}
-            actions={<button className="btn btn-secondary" type="button" onClick={clearVoicePreview} disabled={!source || source.kind === 'none'}>Clear</button>}
+            actions={<button className="btn btn-quiet" type="button" onClick={clearVoicePreview} disabled={!source || source.kind === 'none'}>Clear</button>}
+            className="voice-reference-panel"
           >
             <div className="surface-signal">
               <div className="surface-signal-label">Reference source</div>
-              <div className="surface-signal-value">
-                {source.kind === 'saved'
-                  ? `Saved voice: ${selectedVoice?.name || source.voiceId}`
-                  : source.kind === 'upload'
-                    ? 'Uploaded reference audio'
-                    : source.kind === 'record'
-                      ? 'Recorded reference audio'
-                      : 'No reference selected'}
-              </div>
+              <div className="surface-signal-value">{sourceLabel}</div>
             </div>
             <div className="form-row compact">
               <label className="form-label" htmlFor="savedVoiceSelect">Saved Voice</label>
@@ -1405,14 +1462,10 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                   </option>
                 ))}
               </select>
-              <button className="btn btn-secondary" id="saveVoiceBtn" type="button" onClick={() => void handleSaveVoice()}>
-                Save…
-              </button>
-              <button className="btn btn-danger" id="deleteVoiceBtn" type="button" onClick={() => void handleDeleteVoice()} disabled={!canDeleteVoice}>
-                Delete
+              <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('voices')}>
+                Manage
               </button>
             </div>
-            <div className="form-hint">Saved voices persist on disk and can be reused without re-uploading.</div>
 
             <div className="voice-section">
               <div className="voice-method">
@@ -1482,137 +1535,6 @@ function GenerateSurface({ controller }: { controller: AppController }) {
               </div>
             ) : null}
           </Panel>
-
-          <Panel title="Text to Speak" subtitle="Enter the text you want to synthesize">
-            <div className="surface-signal surface-signal-inline">
-              <div>
-                <div className="surface-signal-label">Required inputs</div>
-                <div className="surface-signal-value">{requiredChips.join(' • ')}</div>
-              </div>
-            </div>
-            <div className="form-group">
-              <textarea id="text" rows={5} value={text} onChange={(event) => setText(event.currentTarget.value)} placeholder="Type what you want the model to say..." />
-            </div>
-            <div className="form-row split">
-              <div className="form-row compact">
-                <label className="form-label" htmlFor="outputFormat">Output Format</label>
-                <select id="outputFormat" value={outputFormat} onChange={(event) => setOutputFormat(event.currentTarget.value as 'wav' | 'mp3' | 'flac')}>
-                  <option value="wav">WAV</option>
-                  <option value="mp3">MP3</option>
-                  <option value="flac">FLAC</option>
-                </select>
-              </div>
-              <div className="action-row">
-                <button className="btn btn-secondary" id="reset" type="button" onClick={() => void handleResetAll()}>
-                  Reset All
-                </button>
-                <button className="btn btn-primary btn-lg" id="generate" type="button" onClick={() => void handleGenerate()} disabled={isGenerating}>
-                  <span id="generateText">{isGenerating ? 'Generating…' : 'Generate'}</span>
-                </button>
-              </div>
-            </div>
-            <div className="status-bar-shell" id="statusBar">
-              {shellStatusMessage(statusKind, statusMessage)}
-            </div>
-          </Panel>
-
-          <Panel title="Output" subtitle="Generated audio will appear here" className="panel-output">
-            <div className="output-player">
-              {outputUrl ? <audio id="output" className="audio-player" controls src={outputUrl} /> : <div className="output-placeholder" id="outputPlaceholder">No audio generated yet</div>}
-              <div className={`output-actions${outputUrl ? '' : ' hidden'}`} id="outputActions">
-                <a className="btn btn-primary" id="download" href={outputUrl || '#'} download={outputFileName}>
-                  Download
-                </a>
-              </div>
-            </div>
-          </Panel>
-        </div>
-
-        <div className="surface-stack">
-          <Panel
-            title={currentModelName}
-            subtitle={selectedModel?.description || 'Select a model to begin.'}
-          >
-            <div className="status-badges">
-              <Badge tone={currentModelStatus.loaded ? 'success' : 'neutral'}>{currentModelStatus.loaded ? 'Loaded' : 'Ready'}</Badge>
-              {currentModelStatus.device ? <Badge tone="neutral">{currentModelStatus.device}</Badge> : null}
-              {typeof currentModelStatus.total_generations === 'number' ? <Badge tone="neutral">{currentModelStatus.total_generations} runs</Badge> : null}
-              {supportsWatermark ? <Badge tone="info">Watermark supported</Badge> : null}
-            </div>
-            <div className="summary-grid summary-grid-four">
-              <div className="summary-card summary-card-emph">
-                <div className="summary-label">Required input</div>
-                <div className="summary-value">{needsReferenceAudio ? 'Reference audio or saved voice' : 'Text and optional voice reference'}</div>
-              </div>
-              <div className="summary-card">
-                <div className="summary-label">Transcript</div>
-                <div className="summary-value">{transcriptRequired ? 'Required when this mode needs it' : 'Optional for this model'}</div>
-              </div>
-              <div className="summary-card">
-                <div className="summary-label">Voice library</div>
-                <div className="summary-value">{voiceCount} saved voices</div>
-              </div>
-            </div>
-            {selectedModel?.id === 'qwen3-tts-mlx' ? (
-              <div className="surface-subpanel">
-                <div className="surface-subpanel-copy">
-                  <div className="surface-signal-label">Qwen3-TTS MLX</div>
-                  <div className="surface-signal-value">Model-specific settings live in Advanced Settings to keep the Generate workspace clean.</div>
-                </div>
-              </div>
-            ) : null}
-            <div className="surface-subpanel">
-              <div className="surface-subpanel-copy">
-                <div className="surface-signal-label">Model management</div>
-                <div className="surface-signal-value">Unload the selected worker when you want to reclaim memory or switch surfaces cleanly.</div>
-              </div>
-              <button className="btn btn-danger" type="button" onClick={() => void handleUnloadModel()} disabled={!selectedModelId}>Unload</button>
-            </div>
-          </Panel>
-
-          <Panel title="Watermark Summary" subtitle="Embed provenance without leaving the Generate surface">
-            <div className="form-group">
-              <div className="checkbox-group">
-                <input id="watermarkEnabled" type="checkbox" checked={watermarkEnabled} onChange={(event) => controller.setWatermarkEnabled(event.currentTarget.checked)} disabled={!supportsWatermark || !watermarkRuns.length} />
-                <label className="checkbox-label" htmlFor="watermarkEnabled">Embed watermark in output</label>
-              </div>
-              <div className="form-hint" id="watermarkHint">
-                {supportsWatermark ? 'Supported models: IndexTTS2 and Qwen3-TTS MLX.' : 'Watermarking is not supported for the selected model.'}
-              </div>
-            </div>
-            <div className="form-group">
-              <label className="form-label" htmlFor="watermarkRun">Watermark run</label>
-              <select id="watermarkRun" value={watermarkRun} onChange={(event) => void setWatermarkRun(event.currentTarget.value)}>
-                <option value="">Auto (latest completed)</option>
-                {watermarkRuns.map((run) => (
-                  <option key={run.id} value={run.id}>
-                    {run.label || run.id}
-                    {run.status ? ` · ${run.status}` : ''}
-                  </option>
-                ))}
-              </select>
-              <div className="form-hint">Pick a completed run with `encoder.pt` + `decoder.pt`.</div>
-            </div>
-            <WatermarkRunReview
-              details={controller.watermarkRunDetails}
-              detailsId="generateWatermarkRunDetails"
-              emptyId="generateWatermarkRunDetailsEmpty"
-              emptyMessage="Select a run to see details."
-            />
-            <div className="form-hint">
-              {typeof watermarkRecommendedThreshold === 'number'
-                ? `Recommended threshold: ${watermarkRecommendedThreshold.toFixed(3)}`
-                : 'Threshold will default to the watermark run recommendation or 0.35.'}
-            </div>
-          </Panel>
-
-          <Panel title="Recent History" subtitle="Latest outputs from this session">
-            <div className="history-list">
-              {latestHistory.length ? latestHistory.map((item) => (
-                <HistoryRow key={`${item.modelId}-${item.timestamp}`} item={item} modelName={normalizeModelName(controller.models.find((model) => model.id === item.modelId)?.name || item.modelId)} onReplay={replayHistoryItem} />
-              )) : <div className="history-empty" id="historyEmpty">No generations yet</div>}
-            </div>
-          </Panel>
         </div>
       </div>
     </div>
@@ -1671,7 +1593,7 @@ function ModelsSurface({ controller }: { controller: AppController }) {
           >
             <div className="status-badges">
               <Badge tone={status.loaded ? 'success' : 'neutral'}>{status.loaded ? 'Loaded' : 'Ready'}</Badge>
-              {status.device ? <Badge tone="neutral">{status.device}</Badge> : null}
+              {status.device && status.device !== 'unknown' ? <Badge tone="neutral">{status.device}</Badge> : null}
               {typeof status.total_generations === 'number' ? <Badge tone="neutral">{status.total_generations} runs</Badge> : null}
               {meta.requirementTags.map((label) => <Badge key={label} tone="warning">{label}</Badge>)}
               {selectedModel?.id && isWatermarkSupported(selectedModel.id) ? <Badge tone="info">Watermark</Badge> : null}
@@ -2640,30 +2562,15 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="sidebar-label">Models</div>
-        <nav className="model-nav" id="modelNav">
-          {controller.models.map((model) => (
-            <ModelCard
-              key={model.id}
-              model={model}
-              status={controller.modelStatuses[model.id] || {}}
-              active={controller.selectedModelId === model.id}
-              settings={controller.settings}
-              compact
-              onClick={(modelId) => controller.setSelectedModelId(modelId)}
-            />
-          ))}
-        </nav>
-
         <div className="sidebar-footer">
-          <div className="sidebar-footer-card">
-            <div className="sidebar-footer-label">Current surface</div>
-            <div className="sidebar-footer-value">{controller.surfaceTitle}</div>
-          </div>
-          <div className="sidebar-footer-card">
-            <div className="sidebar-footer-label">Selected model</div>
-            <div className="sidebar-footer-value">{controller.selectedModel ? normalizeModelName(controller.selectedModel.name) : 'None selected'}</div>
-          </div>
+          {controller.activeSurface !== 'models' ? (
+            <button className="btn btn-secondary sidebar-action" type="button" onClick={() => startTransition(() => controller.setActiveSurface('models'))}>
+              Model library
+            </button>
+          ) : null}
+          <button className="btn btn-quiet sidebar-action" id="clearSession" type="button" onClick={() => void controller.handleClearSession()}>
+            Clear session
+          </button>
           <div className="system-info">
             <span className={`status-dot${controller.infoAvailable === false ? ' error' : controller.infoAvailable === true ? '' : ' warning'}`} id="ffmpegDot" />
             <span id="ffmpegStatus">{controller.infoAvailable === null ? 'Checking ffmpeg...' : controller.infoAvailable ? 'ffmpeg: OK' : 'ffmpeg: Missing'}</span>
@@ -2672,28 +2579,19 @@ export default function App() {
       </aside>
 
       <main className="workspace" id="workspaceMain">
-        <header className="top-bar">
-          <div className="page-title">
-            <div>
-              <h1 id="selectedModelName">{controller.selectedModel ? normalizeModelName(controller.selectedModel.name) : 'Select a Model'}</h1>
-              <div className="page-subtitle" id="modelDescription">{controller.selectedModel?.description || 'Pick a model from the sidebar'}</div>
-            </div>
-            <div className="status-badges" id="modelStatusBadges">
-              {controller.selectedModelId ? (
-                <>
-                  <Badge tone={controller.selectedModelStatus.loaded ? 'success' : 'neutral'}>{controller.selectedModelStatus.loaded ? 'Loaded' : 'Ready'}</Badge>
-                  {controller.selectedModelStatus.device ? <Badge tone="neutral">{controller.selectedModelStatus.device}</Badge> : null}
-                  {typeof controller.selectedModelStatus.total_generations === 'number' ? <Badge tone="neutral">{controller.selectedModelStatus.total_generations} runs</Badge> : null}
-                  {controller.supportsWatermark ? <Badge tone="info">Watermark</Badge> : null}
-                </>
-              ) : null}
-            </div>
-          </div>
-          <div className="quick-actions">
-            <button className="btn btn-secondary" id="clearSession" type="button" onClick={() => void controller.handleClearSession()}>Clear Session</button>
-            <button className="btn btn-danger" id="unloadModel" type="button" onClick={() => void controller.handleUnloadModel()} disabled={!controller.selectedModelId || controller.isGenerating}>Unload</button>
-          </div>
-        </header>
+        <nav className="surface-nav surface-nav-inline" aria-label="Workspace sections">
+          {sidebarSurfaceButtons.map((button) => (
+            <SurfaceButton
+              key={`inline-${button.id}`}
+              label={button.label}
+              surface={button.id}
+              active={controller.activeSurface === button.id}
+              onClick={(surface) => {
+                startTransition(() => controller.setActiveSurface(surface));
+              }}
+            />
+          ))}
+        </nav>
 
         <div className="workspace-body">
           {content}

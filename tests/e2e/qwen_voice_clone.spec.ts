@@ -43,19 +43,20 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     const genText = 'THIS IS AN AUTOMATED QWEN VOICE CLONING TEST.';
     const qwenModelId = (process.env.E2E_QWEN_MODEL_ID || 'mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit').trim();
 
-    await page.goto('/');
+    await page.goto('/#generate');
 
-    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' }).first();
+    const qwenOption = page.locator('#generateModelSelect option[value="qwen3-tts-mlx"]');
     try {
-      await expect(qwenCard).toBeVisible({ timeout: 30_000 });
+      await expect(qwenOption).toHaveCount(1, { timeout: 30_000 });
     } catch {
       test.skip(true, 'Qwen3-TTS MLX model not present in UI (backend not integrated)');
     }
-    await qwenCard.click();
+    await page.selectOption('#generateModelSelect', 'qwen3-tts-mlx');
 
     await page.setInputFiles('#promptFile', audioPath);
     await page.fill('#promptText', refText);
 
+    await page.locator('[data-surface-link="voices"]').click();
     const voiceName = `E2E Voice ${Date.now()}`;
     page.once('dialog', (dialog) => dialog.accept(voiceName));
     await page.click('#saveVoiceBtn');
@@ -63,6 +64,7 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     const voiceSelect = page.locator('#savedVoiceSelect');
     await expect(voiceSelect).toHaveValue(/^[0-9a-f]{32}$/);
 
+    await page.locator('[data-surface-link="generate"]').click();
     await page.fill('#text', genText);
 
     await page.locator('[data-surface-link="advanced-settings"]').click();
@@ -91,6 +93,7 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     expect(src.startsWith('blob:')).toBeTruthy();
 
     // Cleanup saved voice
+    await page.locator('[data-surface-link="voices"]').click();
     page.once('dialog', (dialog) => dialog.accept());
     await page.click('#deleteVoiceBtn');
     await expect(voiceSelect).toHaveValue('');
@@ -124,18 +127,19 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     const genText = 'THIS IS AN AUTOMATED QWEN AUTO-TRANSCRIBE TEST.';
     const qwenModelId = (process.env.E2E_QWEN_MODEL_ID || 'mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit').trim();
 
-    await page.goto('/');
-    const qwenCard = page.locator('.model-card').filter({ hasText: 'Qwen3-TTS MLX' }).first();
+    await page.goto('/#generate');
+    const qwenOption = page.locator('#generateModelSelect option[value="qwen3-tts-mlx"]');
     try {
-      await expect(qwenCard).toBeVisible({ timeout: 30_000 });
+      await expect(qwenOption).toHaveCount(1, { timeout: 30_000 });
     } catch {
       test.skip(true, 'Qwen3-TTS MLX model not present in UI (backend not integrated)');
     }
-    await qwenCard.click();
+    await page.selectOption('#generateModelSelect', 'qwen3-tts-mlx');
 
     await page.setInputFiles('#promptFile', audioPath);
     await page.fill('#promptText', '');
 
+    await page.locator('[data-surface-link="voices"]').click();
     const voiceName = `E2E Voice Auto ${Date.now()}`;
     page.once('dialog', (dialog) => dialog.accept(voiceName));
     await page.click('#saveVoiceBtn');
@@ -143,7 +147,9 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     const voiceSelect = page.locator('#savedVoiceSelect');
     await expect(voiceSelect).toHaveValue(/^[0-9a-f]{32}$/);
 
+    await page.locator('[data-surface-link="generate"]').click();
     await page.fill('#text', genText);
+    await page.locator('[data-surface-link="advanced-settings"]').click();
     await page.selectOption('#qwenModel', qwenModelId);
     await page.check('#qwenAutoTranscribe');
 
@@ -161,6 +167,7 @@ test.describe('qwen3-tts-mlx voice cloning', () => {
     await expect(page.locator('#statusBar')).toContainText('Generation complete.', { timeout: generateTimeoutMs });
 
     // Cleanup
+    await page.locator('[data-surface-link="voices"]').click();
     page.once('dialog', (dialog) => dialog.accept());
     await page.click('#deleteVoiceBtn');
     await expect(voiceSelect).toHaveValue('');
