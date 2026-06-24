@@ -97,6 +97,8 @@ class VoiceSummary:
     created_at: int
     duration_s: float
     has_caches: dict[str, bool]
+    has_transcript: bool
+    compatible_models: list[str]
 
 
 class VoiceLibrary:
@@ -133,6 +135,14 @@ class VoiceLibrary:
                     "index-tts2": bool((caches.get("index-tts2") or {}).get("path")),
                     "qwen3-tts-mlx": bool((caches.get("qwen3-tts-mlx") or {}).get("prompt_trim_path")),
                 }
+                compatible_models = [
+                    "chatterbox-multilingual",
+                    "cosyvoice3-mlx",
+                    "f5-hindi-urdu",
+                    "index-tts2",
+                    "qwen3-tts-mlx",
+                    "voxcpm-ane",
+                ]
                 voices.append(
                     VoiceSummary(
                         id=str(meta.get("id") or d.name),
@@ -140,6 +150,8 @@ class VoiceLibrary:
                         created_at=int(meta.get("created_at") or 0),
                         duration_s=float((meta.get("audio") or {}).get("duration_s") or 0.0),
                         has_caches=has_caches,
+                        has_transcript=bool(str(meta.get("prompt_text") or "").strip()),
+                        compatible_models=compatible_models,
                     )
                 )
             except Exception:
@@ -224,6 +236,19 @@ class VoiceLibrary:
         if self.voices_root.resolve() not in voice_dir.parents:
             raise RuntimeError("refusing to delete outside voices_root")
         shutil.rmtree(voice_dir)
+
+    def rename_voice(self, voice_id: str, name: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        if len(name) > 120:
+            raise ValueError("name must be 120 characters or fewer")
+
+        def _rename(meta: dict[str, Any]) -> dict[str, Any]:
+            meta["name"] = name
+            return meta
+
+        return self.update_voice_meta(voice_id, _rename)
 
     def ensure_audio_meta(self, voice_id: str) -> dict[str, Any]:
         """

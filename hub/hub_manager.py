@@ -120,6 +120,12 @@ class HubManager:
                     continue
                 self.unload(mid)
 
+    def cancel_active_generation(self, model_id: str) -> None:
+        """Interrupt a blocking generation by terminating its worker process."""
+        worker = self._workers.get(model_id)
+        if worker:
+            worker.terminate_now()
+
     def generate(self, *, model_id: str, request: dict[str, Any]) -> GenerateResult:
         with self._lock:
             worker = self._get_worker(model_id)

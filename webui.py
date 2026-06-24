@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -12,9 +15,20 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from hub.audio_utils import FfmpegNotFoundError, ffmpeg_convert_output, ffmpeg_convert_to_wav, has_ffmpeg
+from hub.generation_jobs import GenerationJobService, JobCancelled
 from hub.hub_manager import HubManager
 from hub.voice_library import VoiceLibrary
 from hub.watermark_service import WatermarkService
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path | None = None) -> FastAPI:
@@ -25,6 +39,93 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
     manager = HubManager(hub_root)
     voices = VoiceLibrary(hub_root=hub_root)
     watermark = WatermarkService(hub_root=hub_root)
+
+    def execute_generation_job(
+        job_id: str,
+        job_dir: Path,
+        job_request: dict,
+        set_phase,
+        cancel_event: threading.Event,
+    ) -> dict:
+        model_id = str(job_request.get("model_id") or "")
+        voice_id = str(job_request.get("voice_id") or "").strip() or None
+        output_format = str(job_request.get("output_format") or "wav")
+        fields = dict(job_request.get("fields") or {})
+        staged_files = dict(job_request.get("staged_files") or {})
+
+        prompt_audio_wav = None
+        emo_audio_wav = None
+        if voice_id:
+            voices.ensure_audio_meta(voice_id)
+            prompt_audio_wav = voices.get_voice_audio_path(voice_id)
+        elif staged_files.get("prompt_audio"):
+            prompt_audio_wav = job_dir / "prompt.wav"
+            ffmpeg_convert_to_wav(input_path=Path(staged_files["prompt_audio"]), output_path=prompt_audio_wav)
+        if staged_files.get("emo_audio"):
+            emo_audio_wav = job_dir / "emo.wav"
+            ffmpeg_convert_to_wav(input_path=Path(staged_files["emo_audio"]), output_path=emo_audio_wav)
+
+        if model_id in {"index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx", "qwen3-tts-mlx"} and not prompt_audio_wav:
+            raise ValueError("prompt_audio or voice_id is required for this model")
+        if cancel_event.is_set():
+            raise JobCancelled("Generation cancelled.")
+
+        model_request = {
+            "text": str(job_request.get("text") or ""),
+            "prompt_audio_path": str(prompt_audio_wav) if prompt_audio_wav else None,
+            "emo_audio_path": str(emo_audio_wav) if emo_audio_wav else None,
+            "fields": fields,
+            "hub_root": str(manager.hub_root),
+        }
+        set_phase("generating")
+        t0 = time.perf_counter()
+        result = manager.generate(model_id=model_id, request=model_request)
+        hub_worker_ms = (time.perf_counter() - t0) * 1000.0
+        if cancel_event.is_set():
+            raise JobCancelled("Generation cancelled.")
+
+        final_path = result.output_path
+        if not final_path.exists():
+            raise RuntimeError(f"Worker returned missing output: {final_path}")
+
+        if job_request.get("watermark_enabled"):
+            set_phase("watermarking")
+            wm_path = job_dir / "watermarked.wav"
+            watermark.embed_into_wav(
+                input_wav_path=final_path,
+                output_wav_path=wm_path,
+                tts_model_id=model_id,
+                run_id=job_request.get("watermark_run"),
+            )
+            final_path = wm_path
+        if cancel_event.is_set():
+            raise JobCancelled("Generation cancelled.")
+
+        output_path = job_dir / f"output.{output_format}"
+        if output_format == "wav":
+            shutil.copyfile(final_path, output_path)
+        else:
+            set_phase("converting")
+            ffmpeg_convert_output(input_wav_path=final_path, output_path=output_path)
+
+        meta = dict(result.meta or {})
+        return {
+            "worker_duration_ms": round(hub_worker_ms, 2),
+            "output": {
+                "path": output_path.name,
+                "filename": f"{model_id}_{job_id}.{output_format}",
+                "format": output_format,
+                "duration_s": meta.get("seconds"),
+                "sample_rate": meta.get("sr"),
+            },
+            "worker_meta": _json_safe(meta),
+        }
+
+    generation_jobs = GenerationJobService(
+        root=hub_root / "outputs" / "generations",
+        executor=execute_generation_job,
+        cancel_active=manager.cancel_active_generation,
+    )
 
     app = FastAPI(title="TTS Hub", version="0.1")
     app.add_middleware(
@@ -67,6 +168,8 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
                     "created_at": v.created_at,
                     "duration_s": v.duration_s,
                     "has_caches": v.has_caches,
+                    "has_transcript": v.has_transcript,
+                    "compatible_models": v.compatible_models,
                 }
                 for v in voices.list_voices()
             ]
@@ -107,6 +210,18 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         return meta
+
+    @app.patch("/api/voices/{voice_id}")
+    async def rename_voice(voice_id: str, request: Request):
+        try:
+            data = await request.json()
+            return voices.rename_voice(voice_id, str(data.get("name") or ""))
+        except FileNotFoundError:
+            return JSONResponse({"error": "voice not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     @app.get("/api/voices/{voice_id}/audio")
     def get_voice_audio(voice_id: str):
@@ -237,6 +352,96 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
         return {"ok": True}
+
+    @app.get("/api/generation-jobs")
+    def list_generation_jobs():
+        return {"jobs": generation_jobs.list()}
+
+    @app.post("/api/generation-jobs", status_code=202)
+    async def create_generation_job(request: Request):
+        form = await request.form()
+        model_id = str(form.get("model_id") or "").strip()
+        text = str(form.get("text") or "").strip()
+        voice_id = str(form.get("voice_id") or "").strip() or None
+        output_format = str(form.get("output_format") or "wav").strip().lower()
+        if not model_id:
+            return JSONResponse({"error": "model_id is required"}, status_code=400)
+        if not text:
+            return JSONResponse({"error": "text is required"}, status_code=400)
+        if output_format not in {"wav", "mp3", "flac"}:
+            return JSONResponse({"error": "output_format must be wav|mp3|flac"}, status_code=400)
+
+        files: dict[str, tuple[str, bytes]] = {}
+        for field in ("prompt_audio", "emo_audio"):
+            upload = form.get(field)
+            if upload is not None:
+                files[field] = (getattr(upload, "filename", None) or f"{field}.bin", upload.file.read())
+
+        raw_snapshot = str(form.get("request_snapshot") or "").strip()
+        try:
+            snapshot = json.loads(raw_snapshot) if raw_snapshot else {}
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "request_snapshot must be valid JSON"}, status_code=400)
+
+        job_request = {
+            "model_id": model_id,
+            "text": text,
+            "voice_id": voice_id,
+            "output_format": output_format,
+            "watermark_enabled": str(form.get("watermark") or "").strip().lower() in {"1", "true", "yes", "on"},
+            "watermark_run": str(form.get("watermark_run") or "").strip() or None,
+            "fields": {
+                key: str(value)
+                for key, value in form.items()
+                if key not in {"prompt_audio", "emo_audio", "request_snapshot"}
+            },
+            "snapshot": snapshot,
+        }
+        try:
+            return generation_jobs.submit(job_request, files)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/generation-jobs/{job_id}/audio")
+    def get_generation_job_audio(job_id: str):
+        try:
+            metadata = generation_jobs.get(job_id)
+            path = generation_jobs.audio_path(job_id)
+            output = metadata.get("output") or {}
+            media_type = {
+                "wav": "audio/wav",
+                "mp3": "audio/mpeg",
+                "flac": "audio/flac",
+            }.get(output.get("format"), "application/octet-stream")
+            return FileResponse(str(path), media_type=media_type, filename=output.get("filename") or path.name)
+        except FileNotFoundError:
+            return JSONResponse({"error": "generation job not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+
+    @app.get("/api/generation-jobs/{job_id}")
+    def get_generation_job(job_id: str):
+        try:
+            return generation_jobs.get(job_id)
+        except (FileNotFoundError, ValueError):
+            return JSONResponse({"error": "generation job not found"}, status_code=404)
+
+    @app.post("/api/generation-jobs/{job_id}/cancel")
+    def cancel_generation_job(job_id: str):
+        try:
+            return generation_jobs.cancel(job_id)
+        except (FileNotFoundError, ValueError):
+            return JSONResponse({"error": "generation job not found"}, status_code=404)
+
+    @app.delete("/api/generation-jobs/{job_id}")
+    def delete_generation_job(job_id: str):
+        try:
+            generation_jobs.delete(job_id)
+            return {"ok": True}
+        except FileNotFoundError:
+            return JSONResponse({"error": "generation job not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
 
     @app.post("/api/generate")
     async def generate(request: Request):

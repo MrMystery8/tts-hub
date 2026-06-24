@@ -1,5 +1,7 @@
 import type {
   AppHistoryItem,
+  GenerationJobDetails,
+  GenerationJobSummary,
   ModelSpec,
   ModelStatus,
   VoiceSummary,
@@ -82,6 +84,14 @@ export async function deleteVoice(voiceId: string): Promise<void> {
   await jsonRequest(`/api/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' });
 }
 
+export async function renameVoice(voiceId: string, name: string): Promise<Record<string, unknown>> {
+  return await jsonRequest<Record<string, unknown>>(`/api/voices/${encodeURIComponent(voiceId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
 export async function getVoiceMeta(voiceId: string): Promise<Record<string, unknown>> {
   return await jsonRequest<Record<string, unknown>>(`/api/voices/${encodeURIComponent(voiceId)}`);
 }
@@ -101,6 +111,31 @@ export async function generateAudio(form: FormData): Promise<GenerateResult> {
     blob: await response.blob(),
     headers: response.headers,
   };
+}
+
+export async function createGenerationJob(form: FormData): Promise<GenerationJobDetails> {
+  return await jsonRequest<GenerationJobDetails>('/api/generation-jobs', { method: 'POST', body: form });
+}
+
+export async function fetchGenerationJobs(): Promise<GenerationJobSummary[]> {
+  const data = await jsonRequest<{ jobs: GenerationJobSummary[] }>('/api/generation-jobs');
+  return data.jobs || [];
+}
+
+export async function fetchGenerationJob(jobId: string): Promise<GenerationJobDetails> {
+  return await jsonRequest<GenerationJobDetails>(`/api/generation-jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function cancelGenerationJob(jobId: string): Promise<GenerationJobDetails> {
+  return await jsonRequest<GenerationJobDetails>(`/api/generation-jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+}
+
+export async function deleteGenerationJob(jobId: string): Promise<void> {
+  await jsonRequest(`/api/generation-jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+}
+
+export function generationJobAudioUrl(jobId: string): string {
+  return `/api/generation-jobs/${encodeURIComponent(jobId)}/audio`;
 }
 
 export type { AppHistoryItem };

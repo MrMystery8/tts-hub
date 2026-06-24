@@ -30,6 +30,24 @@ test.describe('React UI render smoke', () => {
     expect(errors).toEqual([]);
   });
 
+  test('academic navigation labels and product-polish controls render', async ({ page }) => {
+    await page.goto('/#generate');
+    await expect(page.locator('[data-surface-link="generate"]').first()).toContainText('Generate Speech');
+    await expect(page.locator('[data-surface-link="models"]').first()).toContainText('Model Lab');
+    await expect(page.locator('[data-surface-link="voices"]').first()).toContainText('Voice Library');
+    await expect(page.locator('[data-surface-link="history"]').first()).toContainText('Runs');
+    await expect(page.locator('[data-surface-link="watermark-lab"]').first()).toContainText('Provenance Lab');
+    await expect(page.locator('.generation-state')).toBeVisible();
+    await expect(page.locator('#generate')).toBeVisible();
+    await expect(page.locator('#text')).toBeVisible();
+
+    await page.goto('/#models');
+    await expect(page.locator('.comparison-row')).toHaveCount(7);
+
+    await page.goto('/#voices');
+    await expect(page.getByLabel('Search saved voices')).toBeVisible();
+  });
+
   test('generate action is reachable early on desktop and mobile', async ({ page }) => {
     const assertGeneratePlacement = async (width: number, height: number, maxTop: number) => {
       await page.setViewportSize({ width, height });

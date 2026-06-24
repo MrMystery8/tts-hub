@@ -90,7 +90,16 @@ class SubprocessWorker:
             except Exception:
                 pass
 
+    def terminate_now(self) -> None:
+        """Terminate an active worker without waiting for its request lock."""
+        proc = self._proc
+        if not proc or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
     def is_alive(self) -> bool:
         """Check if the worker process is running."""
         return self._proc is not None and self._proc.poll() is None
-

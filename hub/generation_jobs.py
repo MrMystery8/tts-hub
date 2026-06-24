@@ -253,5 +253,6 @@ class GenerationJobService:
                 with self._lock:
                     self._active_job_id = None
                     self._requests.pop(job_id, None)
+                    self._cancel_events.pop(job_id, None)
                 self._cleanup_intermediates(job_id)
                 self._queue.task_done()

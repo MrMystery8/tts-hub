@@ -1,107 +1,142 @@
-# TTS Hub: Unified Audio Generation Platform
+# TTS Hub
 
-> **Status:** Active Development (FYP Phase: Watermark Classifier Training)
+TTS Hub is a local Apple Silicon-focused audio generation hub that runs multiple TTS and voice-cloning backends behind one FastAPI service and one web UI.
 
-A centralized hub for running and managing multiple Apple Silicon-optimized TTS and voice cloning models. Now integrating **Audio Provenance Watermarking** with trained supervised classification.
+## Current Runtime Layout
 
----
+- Active frontend source: `frontend/`
+- Active frontend launcher: `new_webui.py`
+- Active backend/API app: `webui.py`
+- Default launcher script: `run.sh`
+- Legacy static UI kept in repo: `custom_ui/`
 
-## 🏗️ Architecture
+What is actually used today:
+- `run.sh` starts `.venv/bin/python3 new_webui.py --port 7891`
+- `new_webui.py` builds or serves the React app from `frontend/dist`
+- `new_webui.py` then calls `webui.create_app(...)`
+- `webui.py` exposes the API routes and serves the built frontend
 
-TTS Hub unifies 7 distinct inference stacks under a single API and Web UI:
+So yes: the active UI is the React frontend in `frontend/`, served through `new_webui.py`. `custom_ui/` is legacy and is not the default path anymore.
 
-| Model | Type | Architecture | Optimization |
-|-------|------|--------------|--------------|
-| **IndexTTS2** | Voice Cloning | Retrieval-based VC | MPS (High) |
-| **Qwen3-TTS** | Voice Cloning / TTS | MLX TTS | MLX / 8-bit |
-| **Chatterbox** | Multilingual TTS | Transformer | MTL / Ane |
-| **F5 Hindi/Urdu** | TTS | F5-TTS | CoreML |
-| **CosyVoice3** | Voice Cloning | Flow Matching | MLX |
-| **PocketTTS** | Lightweight TTS | VITS | CPU/Mobile |
-| **VoxCPM-ANE** | Voice Cloning | GPT-VITS | ANE (Neural Engine) |
+## Project Structure
 
-## 🌊 Current Focus: Watermarking w/ Trained Classifier
-
-We are implementing an end-to-end watermarking system to detect AI-generated audio and attribute it to specific models.
-
-**Key Components:**
-- **Watermark Module (`watermark/`):** Custom WavMark-inspired encoder/decoder implementation.
-- **Dataset Pipeline (`dataset/`):** Scripts to generate standard & attacked samples from all 7 models.
-- **Classifier (`checkpoints/`):** PyTorch model trained from scratch to detect provenance.
-
-👉 **See [docs/WATERMARK_PROJECT_PLAN.md](docs/WATERMARK_PROJECT_PLAN.md) for the full FYP specification.**
-
----
-
-## 📂 Project Structure
-
-```
+```text
 tts-hub/
-├── custom_ui/          # Unified Web Interface (HTML/JS/CSS)
-├── hub/                # Core Logic (Model Registry, Process Management)
-├── workers/            # Independent Worker Scripts for each Model
-├── watermark/          # [NEW] Encoder/Decoder Model Implementation
-├── dataset/            # [NEW] Dataset Generation & Augmentation
-├── scripts/            # [NEW] Training & Utility Scripts
-├── docs/               # Project Documentation
-└── webui.py            # Main Entry Point
+├── frontend/          # Active React UI source
+├── custom_ui/         # Legacy static UI
+├── hub/               # Core services and model/runtime management
+├── workers/           # Model worker entrypoints
+├── watermark/         # Watermarking and provenance tooling
+├── docs/              # Project documentation
+├── new_webui.py       # React UI launcher
+├── webui.py           # FastAPI app and API routes
+└── run.sh             # Default local launcher
 ```
 
-## 🚀 Quick Start
+## Requirements
 
-### 1. Prerequisites
-- macOS (Apple Silicon recommended)
-- `ffmpeg` installed (`brew install ffmpeg`)
-- Python 3.10+
+- macOS on Apple Silicon is the intended environment
+- `ffmpeg` on `PATH`
+- `python3`
+- `npm`
 
-### 2. Installation
+Install `ffmpeg` with Homebrew if needed:
+
 ```bash
-# Clone and setup environment
-git clone https://github.com/yourusername/tts-hub.git
+brew install ffmpeg
+```
+
+## Setup
+
+```bash
+git clone <your-repo-url>
 cd tts-hub
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+npm install
 ```
 
-### 3. Run the Hub
+## Run The System
+
+Preferred:
+
 ```bash
-# Start the Web UI
 ./run.sh
-# OR manually: python new_webui.py
 ```
-Access the UI at: `http://localhost:7860`
 
-### 4. Run Watermark Training
+That starts the app on:
+
+```text
+http://localhost:7891
+```
+
+Manual equivalent:
+
 ```bash
-# Quick Smoke Train (Single Run)
-./.venv/bin/python -m watermark.scripts.quick_voice_smoke_train \
-    --source_dir mini_benchmark_data \
-    --epochs_s1 6
-
-# Overnight Tuner (Auto-Optimize Weights)
-./.venv/bin/python -m watermark.scripts.overnight_tune_s1 \
-    --source_dir mini_benchmark_data \
-    --out_root outputs/dashboard_runs/overnight_01
+.venv/bin/python3 new_webui.py --port 7891
 ```
 
-For full details, see **[docs/WATERMARK_RUNBOOK.md](docs/WATERMARK_RUNBOOK.md)**.
+Notes:
+- `new_webui.py` will build the React frontend if `frontend/dist/index.html` is missing.
+- The FastAPI app is mounted from `webui.py`.
+- The UI talks to the backend on the same origin in production.
 
----
+## Frontend Development
 
-## 📚 Documentation
+Run the backend:
 
-Detailed documentation has been moved to the `docs/` folder:
-- **[Watermark Project Plan](docs/WATERMARK_PROJECT_PLAN.md)** - Comprehensive FYP plan
-- **[Roadmap](docs/ROADMAP_AND_IMPROVEMENTS.md)** - Future features
-- **[Spec Sheet](docs/SPEC_SHEET.md)** - Technical specifications
-- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)** - Dev logs
-
----
-
-## 🛠️ Diagnostics
-
-If models fail to load or environment issues occur:
 ```bash
-python tools/doctor.py
+.venv/bin/python3 webui.py --port 7891
 ```
+
+In another terminal, run the React dev server:
+
+```bash
+npm run ui:dev
+```
+
+Vite runs on:
+
+```text
+http://localhost:5173
+```
+
+The Vite config proxies `/api` to `http://127.0.0.1:7891`.
+
+## Tests And Checks
+
+Python tests:
+
+```bash
+python3 -m pytest tests/test_generation_jobs.py tests/test_generation_job_api.py tests/test_voice_library.py -q
+```
+
+Frontend build:
+
+```bash
+npm run ui:build
+```
+
+Playwright smoke test:
+
+```bash
+npx playwright install chromium
+npx playwright test tests/e2e/ui_render_smoke.spec.ts
+```
+
+## Current UI Behavior
+
+The current React UI uses async generation jobs in addition to the legacy direct generate route:
+
+- New async flow: `/api/generation-jobs`
+- Backward-compatible direct route: `/api/generate`
+
+The async flow is what the current React UI uses for queued, persistent, cancellable runs.
+
+## Documentation
+
+- [docs/SPEC_SHEET.md](docs/SPEC_SHEET.md)
+- [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md)
+- [docs/ROADMAP_AND_IMPROVEMENTS.md](docs/ROADMAP_AND_IMPROVEMENTS.md)
+- [docs/FYP_COMPLETION_TASK_PLAN.md](docs/FYP_COMPLETION_TASK_PLAN.md)

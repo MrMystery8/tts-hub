@@ -73,6 +73,51 @@ class TestGenerationJobService(unittest.TestCase):
             self.assertEqual(service.get(job["id"])["status"], "cancelled")
             self.assertEqual(cancel_calls, ["test-model"])
 
+    def test_cancelled_job_does_not_block_next_job(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "generations"
+            first_started = threading.Event()
+            allow_first_exit = threading.Event()
+            cancel_calls: list[str] = []
+
+            def executor(job_id, job_dir, request, set_phase, cancel_event):
+                set_phase("generating")
+                if request.get("text") == "first":
+                    first_started.set()
+                    while not cancel_event.is_set():
+                        allow_first_exit.wait(0.02)
+                    raise RuntimeError("worker terminated")
+                output = job_dir / "output.wav"
+                output.write_bytes(b"audio")
+                return {
+                    "worker_duration_ms": 5.0,
+                    "output": {"path": output.name, "format": "wav", "filename": f"{job_id}.wav"},
+                }
+
+            service = GenerationJobService(
+                root=root,
+                executor=executor,
+                cancel_active=lambda model_id: cancel_calls.append(model_id),
+            )
+            first = service.submit({"model_id": "test-model", "text": "first", "output_format": "wav"}, {})
+            deadline = time.time() + 3
+            while time.time() < deadline and not first_started.is_set():
+                time.sleep(0.02)
+
+            service.cancel(first["id"])
+            deadline = time.time() + 3
+            while time.time() < deadline and service.get(first["id"])["status"] != "cancelled":
+                time.sleep(0.02)
+
+            second = service.submit({"model_id": "test-model", "text": "second", "output_format": "wav"}, {})
+            deadline = time.time() + 3
+            while time.time() < deadline and service.get(second["id"])["status"] not in {"completed", "failed"}:
+                time.sleep(0.02)
+
+            self.assertEqual(service.get(first["id"])["status"], "cancelled")
+            self.assertEqual(service.get(second["id"])["status"], "completed")
+            self.assertEqual(cancel_calls, ["test-model"])
+
 
 if __name__ == "__main__":
     unittest.main()

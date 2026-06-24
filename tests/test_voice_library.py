@@ -48,12 +48,19 @@ class TestVoiceLibrary(unittest.TestCase):
             # List
             voices = lib.list_voices()
             self.assertTrue(any(v.id == voice_id for v in voices))
+            summary = next(v for v in voices if v.id == voice_id)
+            self.assertTrue(summary.has_transcript)
+            self.assertIn("qwen3-tts-mlx", summary.compatible_models)
 
             # Get meta + audio
             got = lib.get_voice_meta(voice_id)
             self.assertEqual(got["id"], voice_id)
             wav_path = lib.get_voice_audio_path(voice_id)
             self.assertTrue(wav_path.exists())
+
+            renamed = lib.rename_voice(voice_id, "Renamed Voice")
+            self.assertEqual(renamed["name"], "Renamed Voice")
+            self.assertEqual(lib.list_voices()[0].name, "Renamed Voice")
 
             # Delete
             lib.delete_voice(voice_id)
