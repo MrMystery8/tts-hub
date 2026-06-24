@@ -28,6 +28,61 @@ export interface VoiceSummary {
   created_at: number;
   duration_s: number;
   has_caches: Record<string, boolean>;
+  has_transcript: boolean;
+  compatible_models: string[];
+}
+
+export type GenerationPhase =
+  | 'queued'
+  | 'preparing'
+  | 'generating'
+  | 'watermarking'
+  | 'converting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface GenerationRequestSnapshot {
+  modelId: string;
+  text: string;
+  promptText: string;
+  voiceId: string | null;
+  outputFormat: 'wav' | 'mp3' | 'flac';
+  watermarkEnabled: boolean;
+  watermarkRun: string | null;
+  settings: AppSettings;
+}
+
+export interface OutputAudioMetadata {
+  path: string;
+  filename: string;
+  format: 'wav' | 'mp3' | 'flac';
+  duration_s?: number | null;
+  sample_rate?: number | null;
+}
+
+export interface GenerationJobSummary {
+  id: string;
+  status: GenerationPhase;
+  phase: GenerationPhase;
+  created_at: number;
+  updated_at: number;
+  started_at?: number | null;
+  completed_at?: number | null;
+  error?: string | null;
+  model_id: string;
+  voice_id?: string | null;
+  text: string;
+  output_format: 'wav' | 'mp3' | 'flac';
+  watermark_enabled: boolean;
+  watermark_run?: string | null;
+  worker_duration_ms?: number | null;
+  output?: OutputAudioMetadata | null;
+  request?: Partial<GenerationRequestSnapshot>;
+}
+
+export interface GenerationJobDetails extends GenerationJobSummary {
+  worker_meta?: Record<string, unknown>;
 }
 
 export interface WatermarkRun {
@@ -143,5 +198,4 @@ export interface AppSnapshot {
   watermarkThresholdAuto: boolean;
   watermarkThresholdManual: string;
   settings: AppSettings;
-  history: AppHistoryItem[];
 }

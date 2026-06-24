@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import type { AppSettings, AppSnapshot, AppHistoryItem, ModelSpec, ModelStatus, SurfaceId, VoiceSummary, WatermarkRun, WatermarkRunDetails } from './types';
+import type { AppSettings, AppSnapshot, GenerationJobDetails, GenerationJobSummary, GenerationRequestSnapshot, ModelSpec, ModelStatus, SurfaceId, VoiceSummary, WatermarkRun, WatermarkRunDetails } from './types';
 import { appendModelParams, buildDefaultSettings, isWatermarkSupported, requiresReferenceAudio, requiresTranscript, WATERMARK_MODEL_MAP, MODEL_ICONS } from './model-settings';
-import { createVoice, deleteVoice, fetchInfo, fetchModels, fetchStatus, fetchVoices, fetchWatermarkRunDetails, fetchWatermarkRuns, generateAudio, getVoiceMeta, unloadModel } from './api';
+import { cancelGenerationJob, createGenerationJob, createVoice, deleteGenerationJob, deleteVoice, fetchGenerationJob, fetchGenerationJobs, fetchInfo, fetchModels, fetchStatus, fetchVoices, fetchWatermarkRunDetails, fetchWatermarkRuns, generationJobAudioUrl, getVoiceMeta, renameVoice, unloadModel } from './api';
 import { sessionStore } from './storage';
 import './styles.css';
 
@@ -156,7 +156,6 @@ function loadSnapshot(): AppSnapshot {
     watermarkThresholdAuto: sessionStore.load<string>('watermarkThresholdAuto', '1') !== '0',
     watermarkThresholdManual: sessionStore.load('watermarkThresholdManual', ''),
     settings: mergeSettings(sessionStore.load<Partial<AppSettings> | null>('settings', null)),
-    history: sessionStore.load<AppHistoryItem[]>('history', []),
   };
 }
 
@@ -222,7 +221,9 @@ function useAppController() {
   const [watermarkThresholdAuto, setWatermarkThresholdAuto] = useState(snapshot.watermarkThresholdAuto);
   const [watermarkThresholdManual, setWatermarkThresholdManual] = useState(snapshot.watermarkThresholdManual);
   const [settings, setSettings] = useState<AppSettings>(snapshot.settings);
-  const [history, setHistory] = useState<AppHistoryItem[]>(snapshot.history);
+  const [generationJobs, setGenerationJobs] = useState<GenerationJobSummary[]>([]);
+  const [activeJob, setActiveJob] = useState<GenerationJobDetails | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState('');
   const [statusMessage, setStatusMessage] = useState('Loading React UI...');
   const [statusKind, setStatusKind] = useState<StatusKind>('loading');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -259,22 +260,37 @@ function useAppController() {
   const supportsWatermark = useMemo(() => isWatermarkSupported(selectedModelId), [selectedModelId]);
   const transcriptRequired = useMemo(() => requiresTranscript(selectedModelId, settings), [selectedModelId, settings]);
   const needsReferenceAudio = useMemo(() => requiresReferenceAudio(selectedModelId), [selectedModelId]);
+  const generationIssues = useMemo(() => {
+    const issues: string[] = [];
+    const hasReference = promptSource.kind !== 'none';
+    if (!selectedModelId) issues.push('Select a model.');
+    if (!text.trim()) issues.push('Enter text to speak.');
+    if (needsReferenceAudio && !hasReference) issues.push('Add reference audio or select a saved voice.');
+    if (transcriptRequired && !promptText.trim()) issues.push('Enter the reference transcript.');
+    if (selectedModelId === 'cosyvoice3-mlx' && settings.cosy.mode === 'instruct' && !settings.cosy.instructText.trim()) {
+      issues.push('Enter CosyVoice instruction text in Model Settings.');
+    }
+    if (selectedModelId === 'voxcpm-ane' && !settings.voxcpm.voice.trim() && !hasReference) {
+      issues.push('Select a cached VoxCPM voice or add reference audio.');
+    }
+    return issues;
+  }, [needsReferenceAudio, promptSource.kind, promptText, selectedModelId, settings.cosy.instructText, settings.cosy.mode, settings.voxcpm.voice, text, transcriptRequired]);
   const surfaceTitle = useMemo(() => {
     switch (activeSurface) {
       case 'models':
-        return 'Models';
+        return 'Model Lab';
       case 'voices':
-        return 'Voices';
+        return 'Voice Library';
       case 'history':
-        return 'History';
+        return 'Runs';
       case 'watermark-lab':
-        return 'Watermark Lab';
+        return 'Provenance Lab';
       case 'system-status':
-        return 'System Status';
+        return 'System Health';
       case 'advanced-settings':
-        return 'Advanced Settings';
+        return 'Model Settings';
       default:
-        return 'Generate';
+        return 'Generate Speech';
     }
   }, [activeSurface]);
 
@@ -539,60 +555,94 @@ function useAppController() {
       const runId = watermarkRun.trim();
       if (runId) form.append('watermark_run', runId);
     }
+    const requestSnapshot: GenerationRequestSnapshot = {
+      modelId,
+      text: textValue,
+      promptText: promptTranscript,
+      voiceId: selectedVoiceId || null,
+      outputFormat,
+      watermarkEnabled,
+      watermarkRun: watermarkRun || null,
+      settings,
+    };
+    form.append('request_snapshot', JSON.stringify(requestSnapshot));
 
     setIsGenerating(true);
-    setStatus(`Generating with ${normalizeModelName(selectedModel?.name || modelId)}...`, 'loading');
+    setStatus(`Queueing ${normalizeModelName(selectedModel?.name || modelId)} generation...`, 'loading');
 
     try {
-      const result = await generateAudio(form);
-      const url = URL.createObjectURL(result.blob);
-      setHistory((current) => [
-        {
-          modelId,
-          timestamp: Date.now(),
-          format: outputFormat,
-          url,
-          watermarkEnabled,
-          watermarkRun: watermarkRun || null,
-          voiceId: selectedVoiceId || null,
-          settingsSummary: `${normalizeModelName(selectedModel?.name || modelId)} • ${outputFormat.toUpperCase()}`,
-        },
-        ...current,
-      ].slice(0, 20));
-      setOutputUrl(url);
-      setOutputFileName(`${modelId}${watermarkEnabled ? '_wm' : ''}.${outputFormat}`);
-      setStatus('Generation complete.', 'success');
-      void updateModelStatus(modelId);
+      const job = await createGenerationJob(form);
+      setActiveJob(job);
+      setGenerationJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setStatus('Generation queued. Long-running models can take several minutes.', 'loading');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error), 'error');
-    } finally {
       setIsGenerating(false);
     }
   };
 
-  const replayHistoryItem = (item: AppHistoryItem) => {
-    if (!item.url) {
-      setStatus('This result is only available for the current session.', 'warning');
-      return;
+  const handleCancelGeneration = async () => {
+    if (!activeJob || ['completed', 'failed', 'cancelled'].includes(activeJob.status)) return;
+    try {
+      const job = await cancelGenerationJob(activeJob.id);
+      setActiveJob(job);
+      setStatus('Cancelling generation...', 'warning');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error), 'error');
     }
-    setOutputUrl(item.url);
-    setOutputFileName(`${item.modelId}${item.watermarkEnabled ? '_wm' : ''}.${item.format}`);
-    setStatus('Loaded result into the output player.', 'success');
-    setSurface('history');
   };
 
-  const handleSaveVoice = async () => {
+  const restoreGenerationJob = async (job: GenerationJobSummary) => {
+    const request = job.request || {};
+    if (request.modelId) handleModelSelect(request.modelId);
+    if (typeof request.text === 'string') setText(request.text);
+    if (typeof request.promptText === 'string') setPromptText(request.promptText);
+    if (request.outputFormat) setOutputFormat(request.outputFormat);
+    if (typeof request.watermarkEnabled === 'boolean') setWatermarkEnabled(request.watermarkEnabled);
+    if (request.watermarkRun !== undefined) setWatermarkRun(request.watermarkRun || '');
+    if (request.settings) setSettings(mergeSettings(request.settings));
+    if (request.voiceId && voices.some((voice) => voice.id === request.voiceId)) {
+      await selectSavedVoice(request.voiceId, { silent: true });
+    } else {
+      await clearPromptAudio();
+    }
+    setSurface('generate');
+    setStatus(request.voiceId ? 'Run settings restored. Review inputs before generating.' : 'Run settings restored. Re-add any temporary reference audio before generating.', 'success');
+  };
+
+  const replayGenerationJob = (job: GenerationJobSummary) => {
+    if (job.status !== 'completed' || !job.output) return;
+    setOutputUrl(generationJobAudioUrl(job.id));
+    setOutputFileName(job.output.filename || `${job.model_id}.${job.output_format}`);
+    setSelectedRunId(job.id);
+    setStatus('Loaded persistent run into the output player.', 'success');
+  };
+
+  const handleDeleteGenerationJob = async (jobId: string) => {
+    try {
+      await deleteGenerationJob(jobId);
+      setGenerationJobs((current) => current.filter((job) => job.id !== jobId));
+      if (selectedRunId === jobId) {
+        setSelectedRunId('');
+        setOutputUrl('');
+      }
+      setStatus('Run deleted.', 'success');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  };
+
+  const handleSaveVoice = async (name: string) => {
     const source = promptSource.kind === 'upload' || promptSource.kind === 'record';
     if (!source) {
       setStatus('Upload or record a voice first.', 'error');
       return;
     }
-
-    const name = (window.prompt('Saved voice name:', '') || '').trim();
-    if (!name) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
 
     const form = new FormData();
-    form.append('name', name);
+    form.append('name', trimmedName);
     if (promptSource.kind === 'upload') {
       form.append('prompt_audio', promptSource.file);
     } else if (promptSource.kind === 'record') {
@@ -619,7 +669,6 @@ function useAppController() {
 
   const handleDeleteVoice = async () => {
     if (!selectedVoiceId) return;
-    if (!window.confirm('Delete this saved voice? This cannot be undone.')) return;
     setStatus('Deleting voice...', 'loading');
     try {
       await deleteVoice(selectedVoiceId);
@@ -633,6 +682,18 @@ function useAppController() {
     }
   };
 
+  const handleRenameVoice = async (voiceId: string, newName: string) => {
+    const name = newName.trim();
+    if (!name) return;
+    try {
+      await renameVoice(voiceId, name);
+      const refreshed = await fetchVoices();
+      setVoices(refreshed);
+      setStatus('Voice renamed.', 'success');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  };
   const handleUnloadModel = async () => {
     if (!selectedModelId) return;
     setStatus(`Unloading ${normalizeModelName(selectedModel?.name || selectedModelId)}...`, 'loading');
@@ -673,7 +734,6 @@ function useAppController() {
     setWatermarkThresholdAuto(true);
     setWatermarkThresholdManual('');
     setSettings(buildDefaultSettings());
-    setHistory([]);
     setPromptSource({ kind: 'none' });
     setEmotionFile(null);
     setWatermarkDetectFile(null);
@@ -760,12 +820,13 @@ function useAppController() {
     (async () => {
       try {
         await sessionStore.init();
-        const [modelsData, infoData, voicesData, watermarkData, statusData] = await Promise.all([
+        const [modelsData, infoData, voicesData, watermarkData, statusData, jobsData] = await Promise.all([
           fetchModels(),
           fetchInfo(),
           fetchVoices(),
           fetchWatermarkRuns(),
           fetchStatus(),
+          fetchGenerationJobs(),
         ]);
         if (cancelled) return;
 
@@ -775,6 +836,7 @@ function useAppController() {
         setWatermarkRuns(watermarkData.runs || []);
         setWatermarkDefaultRunId(watermarkData.default_run_id || null);
         setModelStatuses(statusData.models || {});
+        setGenerationJobs(jobsData);
 
         const nextModelId = snapshot.selectedModelId && modelsData.some((model) => model.id === snapshot.selectedModelId)
           ? snapshot.selectedModelId
@@ -831,10 +893,8 @@ function useAppController() {
     sessionStore.save('watermarkThresholdAuto', watermarkThresholdAuto ? '1' : '0');
     sessionStore.save('watermarkThresholdManual', watermarkThresholdManual);
     sessionStore.save('settings', settings);
-    sessionStore.save('history', history.map((item) => ({ ...item, url: null })));
   }, [
     activeSurface,
-    history,
     outputFormat,
     promptText,
     selectedModelId,
@@ -880,6 +940,54 @@ function useAppController() {
     void updateModelStatus(selectedModelId || undefined);
   }, [hydrated, selectedModelId]);
 
+  useEffect(() => {
+    document.title = `${surfaceTitle} — TTS Hub`;
+  }, [surfaceTitle]);
+
+  const pollCountRef = useRef(0);
+
+  useEffect(() => {
+    if (!activeJob || ['completed', 'failed', 'cancelled'].includes(activeJob.status)) {
+      pollCountRef.current = 0;
+      return;
+    }
+    // Exponential backoff: 500ms → 1s → 2s → 4s, capped at 4s
+    const delay = Math.min(500 * 2 ** pollCountRef.current, 4000);
+    const timer = window.setTimeout(async () => {
+      pollCountRef.current += 1;
+      try {
+        const job = await fetchGenerationJob(activeJob.id);
+        setActiveJob(job);
+        setGenerationJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+        if (job.status === 'completed' && job.output) {
+          pollCountRef.current = 0;
+          setIsGenerating(false);
+          setOutputUrl(generationJobAudioUrl(job.id));
+          setOutputFileName(job.output.filename || `${job.model_id}.${job.output_format}`);
+          setSelectedRunId(job.id);
+          setStatus('Generation complete.', 'success');
+          void updateModelStatus(job.model_id);
+        } else if (job.status === 'failed') {
+          pollCountRef.current = 0;
+          setIsGenerating(false);
+          setStatus(job.error || 'Generation failed.', 'error');
+        } else if (job.status === 'cancelled') {
+          pollCountRef.current = 0;
+          setIsGenerating(false);
+          setStatus('Generation cancelled.', 'warning');
+          void updateModelStatus(job.model_id);
+        } else {
+          setStatus(`${job.phase.charAt(0).toUpperCase()}${job.phase.slice(1)}...`, 'loading');
+        }
+      } catch (error) {
+        pollCountRef.current = 0;
+        setIsGenerating(false);
+        setStatus(error instanceof Error ? error.message : String(error), 'error');
+      }
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [activeJob]);
+
   return {
     models,
     modelStatuses,
@@ -914,12 +1022,14 @@ function useAppController() {
     settings,
     setSettings,
     updateSettings,
-    history,
-    setHistory,
     statusMessage,
     statusKind,
     setStatus,
     isGenerating,
+    generationIssues,
+    generationJobs,
+    activeJob,
+    selectedRunId,
     hydrated,
     promptSource,
     emotionFile,
@@ -945,8 +1055,12 @@ function useAppController() {
     selectSavedVoice,
     handleSaveVoice,
     handleDeleteVoice,
+    handleRenameVoice,
     handleGenerate,
-    replayHistoryItem,
+    handleCancelGeneration,
+    restoreGenerationJob,
+    replayGenerationJob,
+    handleDeleteGenerationJob,
     handleUnloadModel,
     handleResetAll,
     handleClearSession,
@@ -968,6 +1082,7 @@ function useAppController() {
     setInfoAvailable,
     setWatermarkDetectPreviewUrl,
   };
+
 }
 
 function Badge({ tone, children }: { tone: 'neutral' | 'success' | 'warning' | 'info' | 'danger'; children: React.ReactNode }) {
@@ -1018,6 +1133,61 @@ function SettingsGroup({
   );
 }
 
+const NAV_ICONS: Partial<Record<SurfaceId, React.ReactNode>> = {
+  generate: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <line x1="2" y1="6" x2="2" y2="10" />
+      <line x1="5" y1="4" x2="5" y2="12" />
+      <line x1="8" y1="2" x2="8" y2="14" />
+      <line x1="11" y1="4" x2="11" y2="12" />
+      <line x1="14" y1="6" x2="14" y2="10" />
+    </svg>
+  ),
+  models: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" rx="1" />
+      <rect x="9" y="2" width="5" height="5" rx="1" />
+      <rect x="2" y="9" width="5" height="5" rx="1" />
+      <rect x="9" y="9" width="5" height="5" rx="1" />
+    </svg>
+  ),
+  voices: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <rect x="5.5" y="1.5" width="5" height="7" rx="2.5" />
+      <path d="M3 8a5 5 0 0010 0" />
+      <line x1="8" y1="13" x2="8" y2="15" />
+      <line x1="5.5" y1="15" x2="10.5" y2="15" />
+    </svg>
+  ),
+  history: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" />
+      <polyline points="8,5 8,8.5 10.5,10" />
+    </svg>
+  ),
+  'watermark-lab': (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 1.5L2.5 4v5C2.5 12 5.5 14 8 15c2.5-1 5.5-3 5.5-6V4L8 1.5z" />
+      <polyline points="5.5,8.5 7.5,10.5 10.5,7.5" />
+    </svg>
+  ),
+  'system-status': (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="1,8 4,8 6,3 8,13 10,6 12,8 15,8" />
+    </svg>
+  ),
+  'advanced-settings': (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <line x1="1" y1="4" x2="15" y2="4" />
+      <line x1="1" y1="8" x2="15" y2="8" />
+      <line x1="1" y1="12" x2="15" y2="12" />
+      <line x1="4" y1="2" x2="4" y2="6" />
+      <line x1="9" y1="6" x2="9" y2="10" />
+      <line x1="6" y1="10" x2="6" y2="14" />
+    </svg>
+  ),
+};
+
 function SurfaceButton({
   active,
   label,
@@ -1035,9 +1205,9 @@ function SurfaceButton({
       type="button"
       data-surface-link={surface}
       aria-current={active ? 'page' : undefined}
-      aria-pressed={active}
       onClick={() => onClick(surface)}
     >
+      {NAV_ICONS[surface] ? <span className="nav-icon">{NAV_ICONS[surface]}</span> : null}
       {label}
     </button>
   );
@@ -1193,31 +1363,53 @@ function WatermarkRunReview({
   );
 }
 
-function HistoryRow({ item, modelName, onReplay }: { item: AppHistoryItem; modelName: string; onReplay?: (item: AppHistoryItem) => void }) {
+function GenerationJobRow({
+  job,
+  modelName,
+  voiceName,
+  onReplay,
+  onRestore,
+  onDelete,
+}: {
+  job: GenerationJobSummary;
+  modelName: string;
+  voiceName: string;
+  onReplay: (job: GenerationJobSummary) => void;
+  onRestore: (job: GenerationJobSummary) => void;
+  onDelete: (jobId: string) => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const isDone = ['completed', 'failed', 'cancelled'].includes(job.status);
+  const statusTone = job.status === 'completed' ? 'success' : job.status === 'failed' ? 'danger' : job.status === 'cancelled' ? 'warning' : 'info';
   return (
     <div className="history-item">
-      <div className="history-icon">{MODEL_ICONS[item.modelId] || '🔊'}</div>
+      <div className="history-icon">{MODEL_ICONS[job.model_id] || '🔊'}</div>
       <div className="history-info">
         <div className="history-topline">
           <div className="history-title">{modelName}</div>
-          {item.watermarkEnabled ? <Badge tone="warning">Watermark</Badge> : null}
+          <Badge tone={statusTone}>{job.status}</Badge>
         </div>
         <div className="history-meta">
-          {formatDateTime(item.timestamp)} · {String(item.format || '').toUpperCase()}
-          {item.voiceId ? ' · Voice attached' : ''}
+          {formatDateTime(job.created_at)} · {job.output_format.toUpperCase()} · {voiceName}
+          {job.watermark_enabled ? ' · Provenance embedded' : ''}
         </div>
-        {item.settingsSummary ? <div className="history-summary">{item.settingsSummary}</div> : null}
+        <div className="history-prompt">{job.text || 'No prompt recorded'}</div>
+        <div className="history-summary">
+          {job.worker_duration_ms ? `${Math.round(job.worker_duration_ms)} ms generation` : job.phase}
+          {job.output?.duration_s ? ` · ${formatDuration(job.output.duration_s)} audio` : ''}
+        </div>
       </div>
       <div className="history-actions">
-        {item.url && onReplay ? (
-          <button className="btn btn-secondary" type="button" onClick={() => onReplay?.(item)}>
-            Replay
-          </button>
-        ) : null}
-        {item.url ? (
-          <a className="btn btn-secondary" href={item.url} download={`${item.modelId}.${item.format}`}>
-            Download
-          </a>
+        <button className="btn btn-secondary" type="button" onClick={() => void onRestore(job)}>Restore</button>
+        {job.status === 'completed' ? <button className="btn btn-secondary" type="button" onClick={() => onReplay(job)}>Replay</button> : null}
+        {job.status === 'completed' ? <a className="btn btn-secondary" href={generationJobAudioUrl(job.id)} download={job.output?.filename}>↓</a> : null}
+        {isDone && !confirmDelete ? (
+          <button className="btn btn-danger" type="button" onClick={() => setConfirmDelete(true)}>Delete</button>
+        ) : isDone ? (
+          <>
+            <button className="btn btn-danger" type="button" onClick={() => { onDelete(job.id); setConfirmDelete(false); }}>Confirm</button>
+            <button className="btn btn-quiet" type="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </>
         ) : null}
       </div>
     </div>
@@ -1286,6 +1478,119 @@ function shellStatusMessage(kind: StatusKind, message: string): React.ReactNode 
   );
 }
 
+function VoicePicker({
+  voices,
+  selectedVoiceId,
+  onSelect,
+  onManage,
+}: {
+  voices: VoiceSummary[];
+  selectedVoiceId: string;
+  onSelect: (id: string) => void;
+  onManage: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const selected = voices.find((v) => v.id === selectedVoiceId) || null;
+  const filtered = voices.filter(
+    (v) => !query.trim() || v.name.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  const handleSelect = (id: string) => {
+    onSelect(id);
+    setIsOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <div className="voice-picker">
+      <div className="voice-picker-trigger">
+        <div className="voice-picker-current">
+          {selected ? (
+            <>
+              <span className="voice-picker-name">{selected.name}</span>
+              {selected.duration_s ? <span className="badge badge-neutral">{formatDuration(selected.duration_s)}</span> : null}
+              {selected.has_transcript ? <span className="badge badge-success">Transcript</span> : null}
+            </>
+          ) : (
+            <span className="voice-picker-placeholder">No saved voice — use upload or record below</span>
+          )}
+        </div>
+        <div className="voice-picker-actions">
+          {selected ? (
+            <button className="btn btn-quiet btn-compact" type="button" onClick={() => handleSelect('')}>
+              Clear
+            </button>
+          ) : null}
+          <button
+            className="btn btn-secondary btn-compact"
+            type="button"
+            onClick={() => setIsOpen((o) => !o)}
+            aria-expanded={isOpen}
+          >
+            {isOpen ? 'Close' : voices.length ? 'Choose' : 'Library'}
+          </button>
+        </div>
+      </div>
+
+      {isOpen ? (
+        <div className="voice-picker-panel">
+          {voices.length > 3 ? (
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Search saved voices…"
+              autoFocus
+            />
+          ) : null}
+          <div className="voice-picker-list">
+            {filtered.length ? (
+              filtered.map((voice) => {
+                const active = selectedVoiceId === voice.id;
+                return (
+                  <div key={voice.id} className={`voice-picker-card${active ? ' active' : ''}`}>
+                    <div className="voice-picker-card-info">
+                      <span className="voice-picker-card-name">{voice.name}</span>
+                      <div className="voice-picker-card-meta">
+                        {voice.duration_s ? <span className="badge badge-neutral">{formatDuration(voice.duration_s)}</span> : null}
+                        {voice.has_transcript ? <span className="badge badge-success">Transcript</span> : null}
+                        {Object.values(voice.has_caches || {}).some(Boolean) ? <span className="badge badge-info">Cached</span> : null}
+                      </div>
+                      <audio
+                        className="audio-player voice-picker-audio"
+                        controls
+                        preload="none"
+                        src={`/api/voices/${encodeURIComponent(voice.id)}/audio`}
+                      />
+                    </div>
+                    <button
+                      className={active ? 'btn btn-primary btn-compact' : 'btn btn-secondary btn-compact'}
+                      type="button"
+                      disabled={active}
+                      onClick={() => handleSelect(voice.id)}
+                    >
+                      {active ? 'Selected' : 'Select'}
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="voice-picker-empty">
+                {voices.length ? 'No voices match your search.' : 'No saved voices yet.'}
+              </div>
+            )}
+          </div>
+          <button className="btn btn-quiet" type="button" onClick={onManage}>
+            Manage in Voice Library →
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function GenerateSurface({ controller }: { controller: AppController }) {
   const {
     selectedModel,
@@ -1320,7 +1625,14 @@ function GenerateSurface({ controller }: { controller: AppController }) {
     outputFileName,
     statusMessage,
     statusKind,
+    setStatus,
     isGenerating,
+    generationIssues,
+    generationJobs,
+    activeJob,
+    selectedRunId,
+    handleCancelGeneration,
+    restoreGenerationJob,
     settings,
     updateSettings,
   } = controller;
@@ -1328,7 +1640,7 @@ function GenerateSurface({ controller }: { controller: AppController }) {
   const currentModelName = selectedModel ? normalizeModelName(selectedModel.name) : 'Select a model';
   const currentModelStatus = selectedModelStatus || {};
   const currentModelMeta = getModelSurfaceMeta(selectedModel?.id, settings);
-  const requiredSummary = `${needsReferenceAudio ? 'Reference audio required' : 'Reference audio optional'} • ${transcriptRequired ? 'Transcript required' : 'Transcript optional'}${supportsWatermark ? ' • Watermark available in Watermark Lab' : ''}`;
+  const requiredSummary = `${needsReferenceAudio ? 'Reference audio required' : 'Reference audio optional'} • ${transcriptRequired ? 'Transcript required' : 'Transcript optional'}${supportsWatermark ? ' • Provenance available in Provenance Lab' : ''}`;
 
   const needsTranscriptCopy = transcriptRequired ? 'Transcript required for this model.' : 'Transcript optional for this model.';
   const referenceCopy = needsReferenceAudio ? 'Reference audio or saved voice required.' : 'Reference audio optional.';
@@ -1339,12 +1651,25 @@ function GenerateSurface({ controller }: { controller: AppController }) {
       : source.kind === 'record'
         ? 'Recorded reference audio'
         : 'No reference selected';
+  const outputJob = generationJobs.find((job) => job.id === selectedRunId) || (activeJob?.status === 'completed' ? activeJob : null);
+  const elapsedSeconds = activeJob?.started_at
+    ? Math.max(0, ((activeJob.completed_at || Date.now() / 1000) - activeJob.started_at))
+    : 0;
+  const copyOutputSettings = async () => {
+    if (!outputJob?.request) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(outputJob.request, null, 2));
+      setStatus('Run settings copied.', 'success');
+    } catch {
+      setStatus('Clipboard access is unavailable in this browser.', 'warning');
+    }
+  };
 
   return (
     <div className="surface surface-generate">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">Generate</div>
+          <div className="surface-eyebrow">Generate Speech</div>
           <h2>Generate speech</h2>
           <p>
             {selectedModel
@@ -1367,7 +1692,11 @@ function GenerateSurface({ controller }: { controller: AppController }) {
 
       <div className="surface-grid surface-grid-generate">
         <div className="surface-stack">
-          <Panel title="Create Speech" subtitle="Write the line, confirm the model, then generate">
+          <Panel
+            title="Create Speech"
+            subtitle="Write the line, confirm the model, then generate"
+            actions={<button className="btn btn-quiet btn-compact" type="button" onClick={() => setActiveSurface('advanced-settings')}>Model settings</button>}
+          >
             <div className="generate-model-strip">
               <div className="form-group">
                 <label className="form-label" htmlFor="generateModelSelect">Model</label>
@@ -1394,12 +1723,13 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal-value">{requiredSummary}</div>
               </div>
               <button className="btn btn-secondary btn-compact" type="button" onClick={() => setActiveSurface('voices')}>
-                Voice manager
+                Voice Library
               </button>
             </div>
             <div className="form-group">
               <label className="form-label" htmlFor="text">Text to speak</label>
               <textarea id="text" rows={5} value={text} onChange={(event) => setText(event.currentTarget.value)} placeholder="Type what you want the model to say..." />
+              {!text.trim() ? <div className="form-error">Text is required before generation.</div> : null}
             </div>
             <div className="form-row split generate-actions-row">
               <div className="form-row compact output-format-row">
@@ -1419,21 +1749,31 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                 </button>
               </div>
             </div>
-            <div className="status-bar-shell" id="statusBar">
-              {shellStatusMessage(statusKind, statusMessage)}
-            </div>
-          </Panel>
-
-          <Panel title="Output" subtitle="Generated audio will appear here" className="panel-output">
-            <div className="output-player">
-              {outputUrl ? <audio id="output" className="audio-player" controls src={outputUrl} /> : <div className="output-placeholder" id="outputPlaceholder">No audio generated yet</div>}
-              <div className={`output-actions${outputUrl ? '' : ' hidden'}`} id="outputActions">
-                <a className="btn btn-primary" id="download" href={outputUrl || '#'} download={outputFileName}>
-                  Download
-                </a>
+            {generationIssues.length ? (
+              <div className="requirement-list requirement-list-info" aria-label="Checklist before generating">
+                {generationIssues.map((issue) => <div key={issue}>↳ {issue}</div>)}
+              </div>
+            ) : null}
+            <div className="generation-state" id="statusBar" aria-live="polite">
+              <div className="generation-state-main">
+                <div>
+                  <div className="surface-signal-label">Generation state</div>
+                  <div className="generation-phase">{activeJob ? activeJob.phase : statusKind === 'error' ? 'Needs attention' : 'Ready'}</div>
+                </div>
+                <div className="generation-state-meta">
+                  <span>{currentModelName}</span>
+                  {activeJob?.started_at ? <span>{formatDuration(elapsedSeconds)} elapsed</span> : null}
+                </div>
+              </div>
+              <div className="generation-state-footer">
+                <div className="status-bar-shell">{shellStatusMessage(statusKind, statusMessage)}</div>
+                <button className="btn btn-danger" type="button" onClick={() => void handleCancelGeneration()} disabled={!isGenerating || !activeJob}>
+                  Cancel
+                </button>
               </div>
             </div>
           </Panel>
+
         </div>
 
         <div className="surface-stack">
@@ -1447,29 +1787,20 @@ function GenerateSurface({ controller }: { controller: AppController }) {
               <div className="surface-signal-label">Reference source</div>
               <div className="surface-signal-value">{sourceLabel}</div>
             </div>
-            <div className="form-row compact">
-              <label className="form-label" htmlFor="savedVoiceSelect">Saved Voice</label>
-              <select
-                id="savedVoiceSelect"
-                value={selectedVoiceId}
-                onChange={(event) => void selectSavedVoice(event.currentTarget.value)}
-              >
-                <option value="">(Use uploaded/recorded)</option>
-                {voices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name}
-                    {voice.duration_s ? ` (${voice.duration_s.toFixed(1)}s)` : ''}
-                  </option>
-                ))}
-              </select>
-              <button className="btn btn-secondary" type="button" onClick={() => setActiveSurface('voices')}>
-                Manage
-              </button>
+            {needsReferenceAudio && source.kind === 'none' ? <div className="form-error">This model requires reference audio or a saved voice.</div> : null}
+            <div className="form-group">
+              <label className="form-label">Saved Voice</label>
+              <VoicePicker
+                voices={voices}
+                selectedVoiceId={selectedVoiceId}
+                onSelect={(id) => void selectSavedVoice(id)}
+                onManage={() => setActiveSurface('voices')}
+              />
             </div>
 
             <div className="voice-section">
               <div className="voice-method">
-                <label className="file-upload" htmlFor="promptFile">
+                <label className="file-upload" htmlFor="gen-promptFile">
                   <div className="file-upload-icon">📁</div>
                   <div className="file-upload-text">Upload Audio</div>
                   <div className="file-upload-hint">WAV, MP3, or M4A</div>
@@ -1477,7 +1808,7 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                 <input
                   ref={promptFileRef}
                   type="file"
-                  id="promptFile"
+                  id="gen-promptFile"
                   accept="audio/*"
                   onChange={(event) => void setPromptFile(event.currentTarget.files?.[0] || null)}
                 />
@@ -1488,7 +1819,7 @@ function GenerateSurface({ controller }: { controller: AppController }) {
                 <div className="voice-method-desc">Use your microphone</div>
                 <button
                   className={`record-btn${controller.isRecording ? ' recording' : ''}`}
-                  id="recToggle"
+                  id="gen-recToggle"
                   type="button"
                   aria-label={controller.isRecording ? 'Stop recording voice reference' : 'Start recording voice reference'}
                   onClick={() => void setPromptRecording()}
@@ -1501,22 +1832,25 @@ function GenerateSurface({ controller }: { controller: AppController }) {
 
             {source.kind !== 'none' ? (
               <div className="voice-preview">
-                <audio id="promptPreview" className="audio-player" controls src={source.url} />
-                <div className="form-hint" id="promptInfo">{source.info}</div>
+                <audio id="gen-promptPreview" className="audio-player" controls src={source.url} />
+                <div className="form-hint" id="gen-promptInfo">{source.info}</div>
               </div>
             ) : null}
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="promptText">Reference Transcript</label>
-              <textarea
-                id="promptText"
-                rows={3}
-                value={promptText}
-                onChange={(event) => setPromptText(event.currentTarget.value)}
-                placeholder="Enter the exact text spoken in the reference audio"
-              />
-              <div className="form-hint">{needsTranscriptCopy}</div>
-            </div>
+            {(needsReferenceAudio || transcriptRequired) ? (
+              <div className="form-group">
+                <label className="form-label" htmlFor="gen-promptText">Reference Transcript</label>
+                <textarea
+                  id="gen-promptText"
+                  rows={3}
+                  value={promptText}
+                  onChange={(event) => setPromptText(event.currentTarget.value)}
+                  placeholder="Enter the exact text spoken in the reference audio"
+                />
+                <div className="form-hint">{needsTranscriptCopy}</div>
+                {transcriptRequired && !promptText.trim() ? <div className="form-error">A reference transcript is required for the selected mode.</div> : null}
+              </div>
+            ) : null}
 
             {selectedModel?.id === 'index-tts2' ? (
               <div className="form-group">
@@ -1535,6 +1869,34 @@ function GenerateSurface({ controller }: { controller: AppController }) {
               </div>
             ) : null}
           </Panel>
+
+          <Panel title="Output" subtitle="Generated audio — replay, download, or regenerate" className="panel-output">
+            <div className="output-player">
+              {outputUrl ? <audio id="output" className="audio-player" controls src={outputUrl} /> : (
+                <div className="output-placeholder guided-empty" id="outputPlaceholder">
+                  <strong>No output yet</strong>
+                  <span>Generate speech to create a persistent, replayable run.</span>
+                </div>
+              )}
+              {outputJob ? (
+                <div className="output-metadata">
+                  <div><span>Model</span><strong>{normalizeModelName(models.find((model) => model.id === outputJob.model_id)?.name || outputJob.model_id)}</strong></div>
+                  <div><span>Voice</span><strong>{voices.find((voice) => voice.id === outputJob.voice_id)?.name || 'Temporary / default'}</strong></div>
+                  <div><span>Format</span><strong>{outputJob.output_format.toUpperCase()}</strong></div>
+                  <div><span>Audio</span><strong>{formatDuration(outputJob.output?.duration_s)} · {outputJob.output?.sample_rate ? `${outputJob.output.sample_rate} Hz` : 'sample rate unavailable'}</strong></div>
+                  <div><span>Generation</span><strong>{outputJob.worker_duration_ms ? `${Math.round(outputJob.worker_duration_ms)} ms` : 'n/a'}</strong></div>
+                  <div><span>Provenance</span><strong>{outputJob.watermark_enabled ? `Embedded${outputJob.watermark_run ? ` · ${outputJob.watermark_run}` : ''}` : 'Not embedded'}</strong></div>
+                </div>
+              ) : null}
+              <div className={`output-actions${outputUrl ? '' : ' hidden'}`} id="outputActions">
+                <a className="btn btn-primary" id="download" href={outputUrl || '#'} download={outputFileName}>
+                  Download
+                </a>
+                {outputJob ? <button className="btn btn-secondary" type="button" onClick={() => void restoreGenerationJob(outputJob)}>Regenerate</button> : null}
+                {outputJob?.request ? <button className="btn btn-secondary" type="button" onClick={() => void copyOutputSettings()}>Copy Settings</button> : null}
+              </div>
+            </div>
+          </Panel>
         </div>
       </div>
     </div>
@@ -1551,8 +1913,8 @@ function ModelsSurface({ controller }: { controller: AppController }) {
     <div className="surface surface-models">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">Models</div>
-          <h2>Comparison surface</h2>
+          <div className="surface-eyebrow">Model Lab</div>
+          <h2>Compare model capabilities</h2>
           <p>Scan model purpose, readiness, and supported workflows before jumping back to Generate.</p>
         </div>
         <div className="surface-hero-rail">
@@ -1589,7 +1951,6 @@ function ModelsSurface({ controller }: { controller: AppController }) {
           <Panel
             title={selectedModel ? normalizeModelName(selectedModel.name) : 'No model selected'}
             subtitle={selectedModel ? meta.note : 'Pick a model to see detail.'}
-            actions={<button className="btn btn-danger" type="button" onClick={() => void handleUnloadModel()} disabled={!selectedModelId}>Unload</button>}
           >
             <div className="status-badges">
               <Badge tone={status.loaded ? 'success' : 'neutral'}>{status.loaded ? 'Loaded' : 'Ready'}</Badge>
@@ -1597,6 +1958,7 @@ function ModelsSurface({ controller }: { controller: AppController }) {
               {typeof status.total_generations === 'number' ? <Badge tone="neutral">{status.total_generations} runs</Badge> : null}
               {meta.requirementTags.map((label) => <Badge key={label} tone="warning">{label}</Badge>)}
               {selectedModel?.id && isWatermarkSupported(selectedModel.id) ? <Badge tone="info">Watermark</Badge> : null}
+              {status.loaded ? <button className="btn btn-danger btn-compact" type="button" onClick={() => void handleUnloadModel()}>Unload</button> : null}
             </div>
             <div className="model-chip-row model-chip-row-wide">
               {meta.capabilityTags.map((tag) => (
@@ -1626,19 +1988,54 @@ function ModelsSurface({ controller }: { controller: AppController }) {
           </Panel>
         </div>
       </div>
+      <Panel title="Model Comparison" subtitle="Compare input requirements, provenance support, and runtime readiness">
+        <div className="comparison-table">
+          <div className="comparison-head">
+            <span>Model</span><span>Purpose</span><span>Reference</span><span>Transcript</span><span>Provenance</span><span>Runtime</span>
+          </div>
+          {models.map((model) => {
+            const modelMeta = getModelSurfaceMeta(model.id, settings);
+            const modelStatus = modelStatuses[model.id] || {};
+            return (
+              <button key={model.id} className="comparison-row" type="button" onClick={() => setSelectedModelId(model.id)}>
+                <strong>{normalizeModelName(model.name)}</strong>
+                <span>{modelMeta.purpose}</span>
+                <span>{requiresReferenceAudio(model.id) ? 'Required' : 'Optional'}</span>
+                <span>{requiresTranscript(model.id, settings) ? 'Required' : 'Optional'}</span>
+                <span>{isWatermarkSupported(model.id) ? 'Supported' : 'Unavailable'}</span>
+                <span>{modelStatus.loaded ? 'Loaded' : 'Ready'}{modelStatus.device && modelStatus.device !== 'unknown' ? ` · ${modelStatus.device}` : ''}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Panel>
     </div>
   );
 }
 
 function VoicesSurface({ controller }: { controller: AppController }) {
-  const { voices, selectedVoiceId, selectSavedVoice, handleSaveVoice, handleDeleteVoice, promptSource, promptText, setPromptText, clearVoicePreview, setPromptFile, setPromptRecording, promptFileRef, emotionFileRef } = controller;
+  const { voices, selectedVoiceId, selectSavedVoice, handleSaveVoice, handleDeleteVoice, handleRenameVoice, promptSource, promptText, setPromptText, clearVoicePreview, setPromptFile, setPromptRecording, promptFileRef, emotionFileRef } = controller;
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId) || null;
+  const [voiceQuery, setVoiceQuery] = useState('');
+  const [voiceFilter, setVoiceFilter] = useState('all');
+  const [saveName, setSaveName] = useState('');
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [confirmDeleteVoiceId, setConfirmDeleteVoiceId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const filteredVoices = voices.filter((voice) => {
+    const queryMatch = !voiceQuery.trim() || voice.name.toLowerCase().includes(voiceQuery.trim().toLowerCase());
+    const filterMatch = voiceFilter === 'all'
+      || (voiceFilter === 'transcript' && voice.has_transcript)
+      || voice.compatible_models?.includes(voiceFilter);
+    return queryMatch && filterMatch;
+  });
 
   return (
     <div className="surface surface-voices">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">Voices</div>
+          <div className="surface-eyebrow">Voice Library</div>
           <h2>Voice profile manager</h2>
           <p>Keep temporary reference audio separate from reusable saved voices, with preview and transcript context in one place.</p>
         </div>
@@ -1671,12 +2068,12 @@ function VoicesSurface({ controller }: { controller: AppController }) {
             </div>
             <div className="voice-section">
               <div className="voice-method">
-                <label className="file-upload" htmlFor="promptFile">
+                <label className="file-upload" htmlFor="voices-promptFile">
                   <div className="file-upload-icon">📁</div>
                   <div className="file-upload-text">Upload Audio</div>
                   <div className="file-upload-hint">WAV, MP3, or M4A</div>
                 </label>
-                <input ref={promptFileRef} type="file" id="promptFile" accept="audio/*" onChange={(event) => void setPromptFile(event.currentTarget.files?.[0] || null)} />
+                <input ref={promptFileRef} type="file" id="voices-promptFile" accept="audio/*" onChange={(event) => void setPromptFile(event.currentTarget.files?.[0] || null)} />
               </div>
               <div className="voice-method">
                 <div className="voice-method-icon">🎤</div>
@@ -1684,7 +2081,7 @@ function VoicesSurface({ controller }: { controller: AppController }) {
                 <div className="voice-method-desc">Use your microphone</div>
                 <button
                   className={`record-btn${controller.isRecording ? ' recording' : ''}`}
-                  id="recToggle"
+                  id="voices-recToggle"
                   type="button"
                   aria-label={controller.isRecording ? 'Stop recording voice reference' : 'Start recording voice reference'}
                   onClick={() => void setPromptRecording()}
@@ -1696,14 +2093,14 @@ function VoicesSurface({ controller }: { controller: AppController }) {
 
             {promptSource.kind !== 'none' ? (
               <div className="voice-preview">
-                <audio id="promptPreview" className="audio-player" controls src={promptSource.url} />
-                <div className="form-hint" id="promptInfo">{promptSource.info}</div>
+                <audio id="voices-promptPreview" className="audio-player" controls src={promptSource.url} />
+                <div className="form-hint" id="voices-promptInfo">{promptSource.info}</div>
               </div>
             ) : null}
 
             <div className="form-row compact">
-              <label className="form-label" htmlFor="savedVoiceSelect">Saved Voice</label>
-              <select id="savedVoiceSelect" value={selectedVoiceId} onChange={(event) => void selectSavedVoice(event.currentTarget.value)}>
+              <label className="form-label" htmlFor="voices-savedVoiceSelect">Saved Voice</label>
+              <select id="voices-savedVoiceSelect" value={selectedVoiceId} onChange={(event) => void selectSavedVoice(event.currentTarget.value)}>
                 <option value="">(Use uploaded/recorded)</option>
                 {voices.map((voice) => (
                   <option key={voice.id} value={voice.id}>{voice.name}</option>
@@ -1712,16 +2109,42 @@ function VoicesSurface({ controller }: { controller: AppController }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label" htmlFor="promptText">Reference Transcript</label>
-              <textarea id="promptText" rows={3} value={promptText} onChange={(event) => setPromptText(event.currentTarget.value)} />
+              <label className="form-label" htmlFor="voices-promptText">Reference Transcript</label>
+              <textarea id="voices-promptText" rows={3} value={promptText} onChange={(event) => setPromptText(event.currentTarget.value)} />
               <div className="form-hint">Saved for reuse in transcript-aware models.</div>
             </div>
 
-            <div className="action-row">
-              <button className="btn btn-secondary" id="saveVoiceBtn" type="button" onClick={() => void handleSaveVoice()}>Save voice</button>
-              <button className="btn btn-danger" id="deleteVoiceBtn" type="button" onClick={() => void handleDeleteVoice()} disabled={!selectedVoiceId}>Delete voice</button>
-              <button className="btn btn-secondary" type="button" onClick={() => void clearVoicePreview()}>Clear</button>
-            </div>
+            {showSaveForm ? (
+              <div className="form-group">
+                <label className="form-label" htmlFor="voicesSaveName">Voice name</label>
+                <input
+                  id="voicesSaveName"
+                  type="text"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.currentTarget.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleSaveVoice(saveName); setShowSaveForm(false); setSaveName(''); } if (e.key === 'Escape') { setShowSaveForm(false); setSaveName(''); } }}
+                  placeholder="e.g. Alex warm"
+                  autoFocus
+                />
+                <div className="action-row">
+                  <button className="btn btn-primary" type="button" onClick={() => { void handleSaveVoice(saveName); setShowSaveForm(false); setSaveName(''); }}>Save</button>
+                  <button className="btn btn-quiet" type="button" onClick={() => { setShowSaveForm(false); setSaveName(''); }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="action-row">
+                <button className="btn btn-secondary" id="saveVoiceBtn" type="button" disabled={promptSource.kind === 'none'} onClick={() => setShowSaveForm(true)}>Save voice</button>
+                {!confirmDeleteVoiceId ? (
+                  <button className="btn btn-danger" id="deleteVoiceBtn" type="button" onClick={() => setConfirmDeleteVoiceId(selectedVoiceId)} disabled={!selectedVoiceId}>Delete voice</button>
+                ) : (
+                  <>
+                    <button className="btn btn-danger" type="button" onClick={() => { void handleDeleteVoice(); setConfirmDeleteVoiceId(null); }}>Confirm delete</button>
+                    <button className="btn btn-quiet" type="button" onClick={() => setConfirmDeleteVoiceId(null)}>Cancel</button>
+                  </>
+                )}
+                <button className="btn btn-secondary" type="button" onClick={() => void clearVoicePreview()}>Clear</button>
+              </div>
+            )}
           </Panel>
         </div>
         <div className="surface-stack">
@@ -1732,8 +2155,18 @@ function VoicesSurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal-value">{selectedVoice ? selectedVoice.name : 'No saved voice selected'}</div>
               </div>
             </div>
+            <div className="library-toolbar">
+              <input type="text" value={voiceQuery} onChange={(event) => setVoiceQuery(event.currentTarget.value)} placeholder="Search saved voices..." aria-label="Search saved voices" />
+              <select value={voiceFilter} onChange={(event) => setVoiceFilter(event.currentTarget.value)} aria-label="Filter saved voices">
+                <option value="all">All voices</option>
+                <option value="transcript">Has transcript</option>
+                <option value="qwen3-tts-mlx">Qwen compatible</option>
+                <option value="index-tts2">Index compatible</option>
+                <option value="chatterbox-multilingual">Chatterbox compatible</option>
+              </select>
+            </div>
             <div className="voice-library">
-              {voices.length ? voices.map((voice) => (
+              {filteredVoices.length ? filteredVoices.map((voice) => (
                 <div key={voice.id} className={`voice-card${selectedVoiceId === voice.id ? ' active' : ''}`}>
                   <div className="voice-card-head">
                     <div className="voice-card-main">
@@ -1743,20 +2176,47 @@ function VoicesSurface({ controller }: { controller: AppController }) {
                     {selectedVoiceId === voice.id ? <Badge tone="info">Selected</Badge> : null}
                   </div>
                   <div className="voice-card-tags">
+                    <Badge tone={voice.has_transcript ? 'success' : 'neutral'}>{voice.has_transcript ? 'Transcript saved' : 'No transcript'}</Badge>
                     {voice.has_caches?.['qwen3-tts-mlx'] ? <Badge tone="info">Qwen cache</Badge> : null}
                     {voice.has_caches?.['index-tts2'] ? <Badge tone="info">Index cache</Badge> : null}
                     {voice.has_caches?.['chatterbox-multilingual'] ? <Badge tone="info">Chatterbox cache</Badge> : null}
                   </div>
+                  <audio className="audio-player" controls preload="none" src={`/api/voices/${encodeURIComponent(voice.id)}/audio`} />
                   <div className="voice-card-footer">
-                    <button className="btn btn-secondary" type="button" onClick={() => void selectSavedVoice(voice.id)}>Use</button>
+                    {renamingId === voice.id ? (
+                      <>
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.currentTarget.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { void handleRenameVoice(voice.id, renameValue); setRenamingId(null); } if (e.key === 'Escape') setRenamingId(null); }}
+                          autoFocus
+                          style={{ flex: '1 1 auto' }}
+                        />
+                        <button className="btn btn-primary btn-compact" type="button" onClick={() => { void handleRenameVoice(voice.id, renameValue); setRenamingId(null); }}>Save</button>
+                        <button className="btn btn-quiet btn-compact" type="button" onClick={() => setRenamingId(null)}>✕</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn btn-quiet" type="button" onClick={() => { setRenamingId(voice.id); setRenameValue(voice.name); }}>Rename</button>
+                        <button className={selectedVoiceId === voice.id ? 'btn btn-primary' : 'btn btn-secondary'} type="button" onClick={() => void selectSavedVoice(voice.id)} disabled={selectedVoiceId === voice.id}>
+                          {selectedVoiceId === voice.id ? 'Selected' : 'Select'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-              )) : <div className="history-empty">No saved voices yet.</div>}
+              )) : (
+                <div className="history-empty guided-empty">
+                  <strong>{voices.length ? 'No voices match this filter' : 'No saved voices yet'}</strong>
+                  <span>{voices.length ? 'Change the search or compatibility filter.' : 'Upload or record reference audio, add an optional transcript, then save it for reuse.'}</span>
+                </div>
+              )}
             </div>
             {selectedVoice ? (
               <div className="surface-subpanel">
                 <div className="surface-subpanel-copy">
-                  <div className="surface-signal-label">Selected voice details</div>
+                  <div className="surface-signal-label">Active voice</div>
                   <div className="surface-signal-value">
                     {formatDuration(selectedVoice.duration_s)} · saved {formatDateTime(selectedVoice.created_at)}
                   </div>
@@ -1777,25 +2237,26 @@ function VoicesSurface({ controller }: { controller: AppController }) {
 }
 
 function HistorySurface({ controller }: { controller: AppController }) {
-  const { history, models, outputUrl, outputFileName, replayHistoryItem } = controller;
-  const latestItem = history[0] || null;
+  const { generationJobs, models, voices, outputUrl, outputFileName, replayGenerationJob, restoreGenerationJob, handleDeleteGenerationJob } = controller;
+  const latestItem = generationJobs[0] || null;
+  const [detailsJob, setDetailsJob] = useState<GenerationJobSummary | null>(null);
 
   return (
     <div className="surface surface-history">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">History</div>
-          <h2>Session review</h2>
-          <p>Review recent generations, replay the latest render, and keep the current session context close to hand.</p>
+          <div className="surface-eyebrow">Runs</div>
+          <h2>Persistent generation runs</h2>
+          <p>Review, replay, restore, download, or remove generated outputs across browser sessions.</p>
         </div>
         <div className="surface-hero-rail">
           <div className="hero-stat">
             <div className="hero-stat-label">Latest result</div>
-            <div className="hero-stat-value">{latestItem ? normalizeModelName(models.find((model) => model.id === latestItem.modelId)?.name || latestItem.modelId) : 'No generations yet'}</div>
+            <div className="hero-stat-value">{latestItem ? normalizeModelName(models.find((model) => model.id === latestItem.model_id)?.name || latestItem.model_id) : 'No runs yet'}</div>
           </div>
           <div className="hero-stat">
             <div className="hero-stat-label">Session items</div>
-            <div className="hero-stat-value">{history.length}</div>
+            <div className="hero-stat-value">{generationJobs.length}</div>
           </div>
         </div>
       </div>
@@ -1808,31 +2269,44 @@ function HistorySurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal">
                   <div className="surface-signal-label">Current session</div>
                   <div className="surface-signal-value">
-                    {normalizeModelName(models.find((model) => model.id === latestItem.modelId)?.name || latestItem.modelId)} · {String(latestItem.format || '').toUpperCase()}
-                    {latestItem.watermarkEnabled ? ' · Watermark enabled' : ''}
+                    {normalizeModelName(models.find((model) => model.id === latestItem.model_id)?.name || latestItem.model_id)} · {latestItem.output_format.toUpperCase()}
+                    {latestItem.watermark_enabled ? ' · Provenance embedded' : ''}
                   </div>
                 </div>
-                {outputUrl ? <audio id="output" className="audio-player" controls src={outputUrl} /> : <div className="output-placeholder" id="outputPlaceholder">No audio generated yet</div>}
-                <div className={`output-actions${outputUrl ? '' : ' hidden'}`} id="outputActions">
-                  <a className="btn btn-primary" id="download" href={outputUrl || '#'} download={outputFileName}>Download</a>
-                  {latestItem.url ? <button className="btn btn-secondary" type="button" onClick={() => replayHistoryItem(latestItem)}>Replay latest</button> : null}
+                {latestItem.status === 'completed' ? <audio id="output" className="audio-player" controls src={generationJobAudioUrl(latestItem.id)} /> : <div className="output-placeholder" id="outputPlaceholder">Latest run is {latestItem.status}.</div>}
+                <div className={`output-actions${latestItem.status === 'completed' ? '' : ' hidden'}`} id="outputActions">
+                  <a className="btn btn-primary" id="download" href={generationJobAudioUrl(latestItem.id)} download={latestItem.output?.filename || outputFileName}>Download</a>
+                  {latestItem.status === 'completed' ? <button className="btn btn-secondary" type="button" onClick={() => replayGenerationJob(latestItem)}>Replay latest</button> : null}
                 </div>
               </div>
             ) : (
-              <div className="history-empty" id="historyLatestEmpty">No generations yet</div>
+              <div className="history-empty guided-empty" id="historyLatestEmpty"><strong>No runs yet</strong><span>Completed, failed, and cancelled generations will appear here with persistent audio and settings.</span></div>
             )}
           </Panel>
           <Panel title="Session Log" subtitle="Recent outputs from this session">
             <div className="history-list">
-              {history.length ? history.map((item) => (
-                <HistoryRow
-                  key={`${item.modelId}-${item.timestamp}`}
-                  item={item}
-                  modelName={normalizeModelName(models.find((model) => model.id === item.modelId)?.name || item.modelId)}
-                  onReplay={replayHistoryItem}
+              {generationJobs.length ? generationJobs.map((job) => (
+                <GenerationJobRow
+                  key={job.id}
+                  job={job}
+                  modelName={normalizeModelName(models.find((model) => model.id === job.model_id)?.name || job.model_id)}
+                  voiceName={voices.find((voice) => voice.id === job.voice_id)?.name || 'Temporary / default voice'}
+                  onReplay={replayGenerationJob}
+                  onRestore={restoreGenerationJob}
+                  onDelete={(jobId) => void handleDeleteGenerationJob(jobId)}
                 />
-              )) : <div className="history-empty" id="historyLogEmpty">No generations yet</div>}
+              )) : <div className="history-empty guided-empty" id="historyLogEmpty"><strong>No persistent runs</strong><span>Generate speech to create the first reproducible run.</span></div>}
             </div>
+          </Panel>
+        </div>
+        <div className="surface-stack">
+          <Panel title="Run Details" subtitle="Captured request snapshot and output metadata">
+            {detailsJob ? (
+              <div className="surface-subpanel surface-subpanel-stack">
+                <div className="surface-signal-value">{detailsJob.id}</div>
+                <pre className="watermark-report">{JSON.stringify({ request: detailsJob.request, output: detailsJob.output, error: detailsJob.error }, null, 2)}</pre>
+              </div>
+            ) : <div className="history-empty guided-empty"><strong>Select a run</strong><span>Use Details to inspect the settings and output metadata captured for a generation.</span></div>}
           </Panel>
         </div>
       </div>
@@ -1862,12 +2336,15 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
     watermarkDetectFileRef,
     supportsWatermark,
   } = controller;
+  const detectionSummary = parseWatermarkDetectResult(watermarkDetectResult);
+  const probability = Number.parseFloat(detectionSummary.probability);
+  const probabilityPercent = Number.isFinite(probability) ? Math.max(0, Math.min(100, probability * 100)) : 0;
 
   return (
     <div className="surface surface-watermark">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">Watermark Lab</div>
+          <div className="surface-eyebrow">Provenance Lab</div>
           <h2>Embed and detect provenance</h2>
           <p>Keep watermark operations separate from the main generation flow, with only real run data and analysis output on screen.</p>
         </div>
@@ -1968,7 +2445,7 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
                 <div className="surface-signal-value">Interpretation updates after each detection run.</div>
               </div>
               <div className="watermark-detect-summary">
-                {Object.entries(parseWatermarkDetectResult(watermarkDetectResult))
+                {Object.entries(detectionSummary)
                   .filter(([, value]) => value && value !== 'n/a')
                   .map(([label, value]) => (
                     <div key={label} className="watermark-summary-card">
@@ -1977,6 +2454,17 @@ function WatermarkLabSurface({ controller }: { controller: AppController }) {
                     </div>
                   ))}
               </div>
+              {Number.isFinite(probability) ? (
+                <div className="confidence-panel">
+                  <div className="confidence-copy">
+                    <strong>{probabilityPercent.toFixed(1)}% watermark probability</strong>
+                    <span>{detectionSummary.detected === 'YES' ? 'The selected run classified this audio as carrying provenance.' : 'The selected run did not classify this audio as carrying provenance.'}</span>
+                  </div>
+                  <div className="confidence-track" aria-label={`${probabilityPercent.toFixed(1)} percent watermark probability`}>
+                    <span style={{ width: `${probabilityPercent}%` }} />
+                  </div>
+                </div>
+              ) : null}
               <SettingsGroup title="Raw detection text">
                 <pre className="watermark-report" id="watermarkTestResult">{watermarkDetectResult}</pre>
               </SettingsGroup>
@@ -2015,7 +2503,7 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
     <div className="surface surface-status">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">System Status</div>
+          <div className="surface-eyebrow">System Health</div>
           <h2>System telemetry</h2>
           <p>Only real runtime and environment data is shown here, with the current worker state and ffmpeg readiness prioritized.</p>
         </div>
@@ -2041,7 +2529,7 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
           <div className="status-card-label">Selected model</div>
           <div className="status-card-value">{selectedModel ? normalizeModelName(selectedModel.name) : 'None selected'}</div>
           <div className="status-card-meta">
-            {selectedStatus.loaded ? 'Loaded' : 'Ready'} · {selectedStatus.device || 'unknown device'}
+            {selectedStatus.loaded ? 'Loaded' : 'Ready'}{selectedStatus.device && selectedStatus.device !== 'unknown' ? ` · ${selectedStatus.device}` : ' · device available after load'}
           </div>
         </div>
         <div className="status-card">
@@ -2071,7 +2559,7 @@ function SystemStatusSurface({ controller }: { controller: AppController }) {
                 </div>
                 <div className="system-model-stat">
                   <div>{status.loaded ? 'Loaded' : 'Idle'}</div>
-                  <div className="system-model-meta">{status.device || 'unknown device'}</div>
+                  <div className="system-model-meta">{status.device && status.device !== 'unknown' ? status.device : 'Available after load'}</div>
                 </div>
                 <div className="system-model-stat">
                   <div>{typeof status.last_generation_duration_ms === 'number' ? `${Math.round(status.last_generation_duration_ms)} ms` : 'n/a'}</div>
@@ -2100,7 +2588,7 @@ function AdvancedSettingsSurface({ controller }: { controller: AppController }) 
     <div className="surface surface-advanced">
       <div className="surface-hero">
         <div className="surface-hero-copy">
-          <div className="surface-eyebrow">Advanced Settings</div>
+          <div className="surface-eyebrow">Model Settings</div>
           <h2>Model-specific tuning</h2>
           <p>Specialist controls stay grouped here, with the current Generate workspace reading the same values underneath.</p>
         </div>
@@ -2504,13 +2992,11 @@ export default function App() {
   const [isPending, startTransition] = useTransition();
 
   const sidebarSurfaceButtons: Array<{ id: SurfaceId; label: string }> = [
-    { id: 'generate', label: 'Generate' },
-    { id: 'models', label: 'Models' },
-    { id: 'voices', label: 'Voices' },
-    { id: 'history', label: 'History' },
-    { id: 'watermark-lab', label: 'Watermark Lab' },
-    { id: 'system-status', label: 'System Status' },
-    { id: 'advanced-settings', label: 'Advanced Settings' },
+    { id: 'generate', label: 'Generate Speech' },
+    { id: 'models', label: 'Model Lab' },
+    { id: 'voices', label: 'Voice Library' },
+    { id: 'history', label: 'Runs' },
+    { id: 'watermark-lab', label: 'Provenance Lab' },
   ];
 
   const content = (() => {
@@ -2568,6 +3054,9 @@ export default function App() {
               Model library
             </button>
           ) : null}
+          <button className="btn btn-quiet sidebar-action" type="button" onClick={() => startTransition(() => controller.setActiveSurface('system-status'))}>
+            System Health
+          </button>
           <button className="btn btn-quiet sidebar-action" id="clearSession" type="button" onClick={() => void controller.handleClearSession()}>
             Clear session
           </button>
@@ -2597,6 +3086,9 @@ export default function App() {
           {content}
         </div>
 
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" id="appStatus">
+          {controller.statusMessage}
+        </div>
         <div id="systemClock" className="sr-only">{controller.systemClock}</div>
         <div id="surfaceStatus" className="sr-only">{controller.surfaceTitle}</div>
         <div id="ffmpegRuntimeStatus" className="sr-only">{controller.infoAvailable ? 'Available' : 'Unavailable'}</div>
