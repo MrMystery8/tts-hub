@@ -1,0 +1,2017 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c0d10; --bg-1:#121419; --bg-2:#171a20; --bg-3:#1e222a; --bg-hover:#232832;
+    --line:#262b34; --line-2:#333a45; --line-3:#414a57;
+    --tx:#e9ebef; --tx-2:#9aa2ad; --tx-3:#6b7280; --tx-4:#4c535e;
+    --accent:#3ddc97; --accent-tx:#06140e; --accent-dim:rgba(61,220,151,.13); --accent-line:rgba(61,220,151,.4);
+    --warn:#f2b53d; --warn-dim:rgba(242,181,61,.14);
+    --err:#f2624f; --err-dim:rgba(242,98,79,.14);
+    --blue:#4aa3ff; --blue-dim:rgba(74,163,255,.14);
+    --purple:#b48cff; --purple-dim:rgba(180,140,255,.14);
+    --shadow:0 8px 30px rgba(0,0,0,.45);
+    --radius:8px;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+    --sans:"IBM Plex Sans",system-ui,sans-serif;
+  }
+  [data-theme="light"]{
+    --bg:#eef0f3; --bg-1:#ffffff; --bg-2:#ffffff; --bg-3:#f4f6f8; --bg-hover:#eceef2;
+    --line:#e2e6ec; --line-2:#d4d9e1; --line-3:#c3cad4;
+    --tx:#15181d; --tx-2:#5a626d; --tx-3:#838b96; --tx-4:#a7aeb8;
+    --accent:#10996a; --accent-tx:#ffffff; --accent-dim:rgba(16,153,106,.1); --accent-line:rgba(16,153,106,.35);
+    --warn:#b9821b; --warn-dim:rgba(185,130,27,.12);
+    --err:#d23f2c; --err-dim:rgba(210,63,44,.1);
+    --blue:#2a7fe0; --blue-dim:rgba(42,127,224,.1);
+    --purple:#7d52d6; --purple-dim:rgba(125,82,214,.1);
+    --shadow:0 8px 30px rgba(20,30,50,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%}
+  body{font-family:var(--sans);background:var(--bg);color:var(--tx);-webkit-font-smoothing:antialiased;font-size:13px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:var(--line-3);background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
+  input,textarea,select,button{font-family:inherit;color:inherit}
+  textarea{resize:none}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  button{cursor:pointer;border:none;background:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes bar{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  @keyframes sweep{0%{left:-30%}100%{left:100%}}
+  .fade-in{animation:fade .18s ease both}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;height:100vh;width:100vw;background:var(--bg);color:var(--tx);overflow:hidden">
+
+  <!-- ============ NAV RAIL ============ -->
+  <nav style="width:212px;flex:0 0 212px;background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column">
+    <div style="height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line)">
+      <div style="width:22px;height:22px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto">
+        <svg width="13" height="13" viewBox="0 0 13 13"><g fill="var(--accent-tx)"><rect x="0" y="5" width="2" height="3" rx="1"/><rect x="3" y="2" width="2" height="9" rx="1"/><rect x="6" y="0" width="2" height="13" rx="1"/><rect x="9" y="3" width="2" height="7" rx="1"/></g></svg>
+      </div>
+      <div style="font-weight:700;letter-spacing:.04em;font-size:13px">TTS&nbsp;HUB</div>
+      <div style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--tx-4);letter-spacing:.05em">v2</div>
+    </div>
+
+    <div style="padding:10px 10px;display:flex;flex-direction:column;gap:2px">
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="5">
+        <button onClick="{{ item.onClick }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:7px;text-align:left;font-size:13px;font-weight:500;width:100%;color:{{ item.color }};background:{{ item.bg }};transition:background .12s" style-hover="background:var(--bg-hover)">
+          <span style="width:17px;height:17px;flex:0 0 auto;display:flex;align-items:center;justify-content:center" data-icon="{{ item.icon }}"></span>
+          <span>{{ item.label }}</span>
+          <sc-if value="{{ item.badge }}" hint-placeholder-val="{{ true }}">
+            <span style="margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:600;min-width:18px;text-align:center;padding:1px 6px;border-radius:10px;background:{{ item.badgeBg }};color:{{ item.badgeColor }}">{{ item.badge }}</span>
+          </sc-if>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="margin-top:auto;padding:12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx-2)">
+        <span style="width:7px;height:7px;border-radius:50%;background:{{ ffmpegDot }};flex:0 0 auto"></span>
+        <span>ffmpeg {{ ffmpegLabel }}</span>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--tx-3)">{{ serverClock }}</span>
+      </div>
+      <div style="display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px">
+        <button onClick="{{ setDark }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ darkTxt }};background:{{ darkBg }}">Dark</button>
+        <button onClick="{{ setLight }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ lightTxt }};background:{{ lightBg }}">Light</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ============ MAIN ============ -->
+  <main style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- GENERATE -->
+    <sc-if value="{{ isGenerate }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;min-height:0">
+
+        <!-- model rail -->
+        <section style="width:{{ railW }};flex:0 0 {{ railW }};border-right:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
+          <sc-if value="{{ railClosed }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ toggleRail }}" title="Expand models" style="height:52px;border-bottom:1px solid var(--line);color:var(--tx-3);font-size:13px" style-hover="color:var(--accent)">⟩</button>
+            <div style="flex:1;overflow-y:auto;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:7px">
+              <sc-for list="{{ railDots }}" as="d" hint-placeholder-count="7">
+                <button onClick="{{ d.onSelect }}" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;position:relative;background:{{ d.sel }}1a;font-size:11px;font-weight:700;color:var(--tx-2)">
+                  <span style="position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:{{ d.dot }}"></span>{{ d.letter }}
+                </button>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ railOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="height:52px;display:flex;align-items:center;padding:0 12px 0 16px;border-bottom:1px solid var(--line);flex:0 0 auto">
+            <span style="font-size:11px;font-weight:600;letter-spacing:.07em;color:var(--tx-3);text-transform:uppercase">Models</span>
+            <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--tx-3);margin-right:8px">{{ loadedCount }}/{{ modelCount }}</span>
+            <button onClick="{{ toggleRail }}" title="Collapse" style="color:var(--tx-3);font-size:13px" style-hover="color:var(--accent)">⟨</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:8px">
+            <sc-for list="{{ modelRail }}" as="m" hint-placeholder-count="7">
+              <button onClick="{{ m.onSelect }}" style="display:block;width:100%;text-align:left;padding:11px 12px 11px 13px;margin-bottom:5px;border-radius:8px;border:1px solid {{ m.borderColor }};background:{{ m.bg }};border-left:3px solid {{ m.accentBar }};transition:background .12s" style-hover="background:var(--bg-hover)">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="width:8px;height:8px;border-radius:50%;background:{{ m.dot }};flex:0 0 auto"></span>
+                  <span style="font-weight:600;font-size:12.5px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.name }}</span>
+                </div>
+                <div style="font-family:var(--mono);font-size:10px;color:var(--tx-3);margin:5px 0 7px;padding-left:16px">{{ m.meta }}</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:16px">
+                  <sc-for list="{{ m.chips }}" as="c" hint-placeholder-count="2">
+                    <span style="font-size:9.5px;font-weight:600;letter-spacing:.02em;padding:2px 6px;border-radius:4px;background:{{ c.bg }};color:{{ c.color }};text-transform:uppercase">{{ c.label }}</span>
+                  </sc-for>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+          </sc-if>
+        </section>
+
+        <!-- console -->
+        <section style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+          <div style="height:52px;flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:0 20px;border-bottom:1px solid var(--line)">
+            <div style="min-width:0">
+              <div style="font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ selModelName }}</div>
+            </div>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+              <span style="font-size:11px;color:var(--tx-3)">Requirements</span>
+              <sc-for list="{{ reqBadges }}" as="r" hint-placeholder-count="2">
+                <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:6px;background:{{ r.bg }};color:{{ r.color }}">
+                  <span style="font-size:10px">{{ r.mark }}</span>{{ r.label }}
+                </span>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px">
+
+            <!-- script editor -->
+            <div>
+              <div style="display:flex;align-items:baseline;margin-bottom:7px">
+                <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Script</label>
+                <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:{{ charColor }}">{{ charCount }} chars</span>
+              </div>
+              <textarea onChange="{{ onText }}" value="{{ text }}" placeholder="Type or paste the text to synthesize..." rows="6" style="width:100%;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:13px 14px;font-size:14px;line-height:1.55;color:var(--tx)" style-focus="border-color:var(--accent)"></textarea>
+            </div>
+
+            <!-- reference voice -->
+            <sc-if value="{{ showReference }}" hint-placeholder-val="{{ true }}">
+              <div style="border:1px solid var(--line);border-radius:10px;background:var(--bg-1);overflow:hidden">
+                <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)">
+                  <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Reference Voice</label>
+                  <sc-if value="{{ refRequired }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:10px;font-weight:600;color:var(--warn);background:var(--warn-dim);padding:2px 7px;border-radius:4px">Required</span>
+                  </sc-if>
+                  <div style="margin-left:auto;display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px;gap:2px">
+                    <sc-for list="{{ refTabs }}" as="t" hint-placeholder-count="4">
+                      <button onClick="{{ t.onClick }}" style="padding:5px 11px;border-radius:5px;font-size:11.5px;font-weight:600;color:{{ t.color }};background:{{ t.bg }}">{{ t.label }}</button>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="padding:14px">
+                  <!-- saved -->
+                  <sc-if value="{{ refSaved }}" hint-placeholder-val="{{ true }}">
+                    <sc-if value="{{ hasCompatibleVoices }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;flex-direction:column;gap:6px;max-height:232px;overflow-y:auto;padding-right:3px">
+                        <sc-for list="{{ compatibleVoices }}" as="v" hint-placeholder-count="3">
+                          <div style="display:flex;align-items:center;gap:8px;border-radius:8px;border:1px solid {{ v.border }};background:{{ v.bg }};padding-right:9px">
+                            <button onClick="{{ v.onPick }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:11px;padding:9px 11px;text-align:left;background:transparent">
+                              <span style="width:9px;height:9px;border-radius:50%;border:2px solid {{ v.radio }};flex:0 0 auto;background:{{ v.radioFill }}"></span>
+                              <span style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.name }}</span>
+                              <span style="font-family:var(--mono);font-size:10px;color:var(--tx-3);flex:0 0 auto">{{ v.dur }}</span>
+                              <sc-if value="{{ v.hasTranscript }}" hint-placeholder-val="{{ true }}">
+                                <span style="font-size:9px;font-weight:600;color:var(--blue);background:var(--blue-dim);padding:1px 6px;border-radius:4px;flex:0 0 auto">TRANSCRIPT</span>
+                              </sc-if>
+                              <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--tx-4);flex:0 0 auto">{{ v.created }}</span>
+                            </button>
+                            <button onClick="{{ v.onPreview }}" title="Preview voice" style="flex:0 0 auto;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;background:{{ v.previewBg }};color:{{ v.previewTx }};border:1px solid var(--line-2)">{{ v.playGlyph }}</button>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ noCompatibleVoices }}" hint-placeholder-val="{{ true }}">
+                      <div style="text-align:center;padding:18px;color:var(--tx-3);font-size:12px">No saved voices compatible with this model. <button onClick="{{ goVoices }}" style="color:var(--accent);font-weight:600;text-decoration:underline">Create one</button></div>
+                    </sc-if>
+                  </sc-if>
+                  <!-- upload -->
+                  <sc-if value="{{ refUpload }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <button onClick="{{ mockUpload }}" style="flex:0 0 auto;padding:18px 22px;border:1.5px dashed var(--line-3);border-radius:9px;background:var(--bg-3);color:var(--tx-2);font-size:12px;font-weight:600" style-hover="border-color:var(--accent);color:var(--accent)">＋ Choose .wav / .mp3</button>
+                      <sc-if value="{{ refFileReady }}" hint-placeholder-val="{{ true }}">
+                        <div style="flex:1;display:flex;align-items:center;gap:10px">
+                          <div data-wave="mini" data-wave-url="{{ refPreviewUrl }}" data-wave-seek style="flex:1;height:34px"></div>
+                          <span style="font-family:var(--mono);font-size:11px;color:var(--tx-2)">{{ refFileName }}</span>
+                          <button onClick="{{ previewReference }}" style="padding:7px 11px;border:1px solid var(--line-2);border-radius:6px;color:var(--tx-2);font-weight:600;font-size:11px">{{ refPreviewLabel }}</button>
+                          <button onClick="{{ saveReferenceVoice }}" style="padding:7px 11px;border-radius:6px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:11px">Save</button>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                  <!-- record -->
+                  <sc-if value="{{ refRecord }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <button onClick="{{ mockRecord }}" style="display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:11px 18px;border-radius:9px;font-weight:600;font-size:12.5px;background:{{ recBtnBg }};color:{{ recBtnTx }}">
+                        <span style="width:10px;height:10px;border-radius:{{ recDotRadius }};background:{{ recBtnTx }}"></span>{{ recBtnLabel }}
+                      </button>
+                      <sc-if value="{{ refFileReady }}" hint-placeholder-val="{{ true }}">
+                        <div style="flex:1;display:flex;align-items:center;gap:10px"><div data-wave="mini" data-wave-url="{{ refPreviewUrl }}" data-wave-seek style="flex:1;height:34px"></div><span style="font-family:var(--mono);font-size:11px;color:var(--tx-2)">{{ refFileName }}</span><button onClick="{{ previewReference }}" style="padding:7px 11px;border:1px solid var(--line-2);border-radius:6px;color:var(--tx-2);font-weight:600;font-size:11px">{{ refPreviewLabel }}</button><button onClick="{{ saveReferenceVoice }}" style="padding:7px 11px;border-radius:6px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:11px">Save</button></div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+
+                  <!-- transcript -->
+                  <sc-if value="{{ showTranscript }}" hint-placeholder-val="{{ true }}">
+                    <div style="margin-top:14px">
+                      <div style="display:flex;align-items:baseline;margin-bottom:6px">
+                        <label style="font-size:11px;font-weight:600;color:var(--tx-2)">Reference transcript</label>
+                        <sc-if value="{{ transcriptRequired }}" hint-placeholder-val="{{ true }}"><span style="margin-left:7px;font-size:10px;font-weight:600;color:var(--warn)">required</span></sc-if>
+                        <span style="margin-left:auto;font-size:10.5px;color:var(--tx-3)">{{ transcriptHint }}</span>
+                      </div>
+                      <textarea onChange="{{ onPromptText }}" value="{{ promptText }}" placeholder="What the reference audio says, verbatim..." rows="2" style="width:100%;background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;line-height:1.5" style-focus="border-color:var(--accent)"></textarea>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- emotion reference audio -->
+            <sc-if value="{{ showEmotionReference }}" hint-placeholder-val="{{ true }}">
+              <div style="border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:14px;display:flex;align-items:center;gap:14px">
+                <div style="min-width:160px">
+                  <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Emotion reference</div>
+                  <div style="font-size:11px;color:var(--warn);margin-top:3px">required for emo_ref</div>
+                </div>
+                <button onClick="{{ chooseEmotionFile }}" style="flex:0 0 auto;padding:12px 16px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px" style-hover="border-color:var(--accent);color:var(--accent)">＋ Choose emotion audio</button>
+                <sc-if value="{{ emoFileReady }}" hint-placeholder-val="{{ true }}">
+                  <div style="flex:1;display:flex;align-items:center;gap:10px;min-width:0">
+                    <div data-wave="mini" data-wave-url="{{ emoPreviewUrl }}" data-wave-seek style="flex:1;height:30px"></div>
+                    <span style="font-family:var(--mono);font-size:11px;color:var(--tx-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ emoFileName }}</span>
+                    <button onClick="{{ previewEmotion }}" style="padding:7px 11px;border:1px solid var(--line-2);border-radius:6px;color:var(--tx-2);font-weight:600;font-size:11px">{{ emoPreviewLabel }}</button>
+                    <button onClick="{{ clearEmotionFile }}" style="padding:7px 10px;border:1px solid var(--err);border-radius:6px;color:var(--err);background:var(--err-dim);font-weight:600;font-size:11px">Clear</button>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- cosy instruct text -->
+            <sc-if value="{{ showInstruct }}" hint-placeholder-val="{{ true }}">
+              <div>
+                <label style="display:block;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase;margin-bottom:7px">Instruction <span style="color:var(--warn);letter-spacing:0;text-transform:none">required</span></label>
+                <input onChange="{{ onInstruct }}" value="{{ instructText }}" placeholder="e.g. Speak slowly with a warm, calm tone" style="width:100%;background:var(--bg-1);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px" style-focus="border-color:var(--accent)"/>
+              </div>
+            </sc-if>
+          </div>
+
+          <!-- action bar -->
+          <div style="flex:0 0 auto;border-top:1px solid var(--line);padding:13px 20px;display:flex;align-items:center;gap:16px;background:var(--bg-1)">
+            <div>
+              <div style="font-size:10px;font-weight:600;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Format</div>
+              <div style="display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px;gap:2px">
+                <sc-for list="{{ formatTabs }}" as="f" hint-placeholder-count="3">
+                  <button onClick="{{ f.onClick }}" style="padding:6px 13px;border-radius:5px;font-size:11.5px;font-weight:600;font-family:var(--mono);color:{{ f.color }};background:{{ f.bg }}">{{ f.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:600;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Watermark</div>
+              <button onClick="{{ toggleWatermark }}" style="display:flex;align-items:center;gap:9px;padding:6px 11px;border:1px solid var(--line);border-radius:7px;background:var(--bg-3);opacity:{{ wmOpacity }}" disabled="{{ wmDisabled }}">
+                <span style="width:30px;height:17px;border-radius:9px;background:{{ wmTrack }};position:relative;transition:background .15s;flex:0 0 auto">
+                  <span style="position:absolute;top:2px;left:{{ wmKnobX }};width:13px;height:13px;border-radius:50%;background:#fff;transition:left .15s"></span>
+                </span>
+                <span style="font-size:11.5px;font-weight:600;color:var(--tx-2)">{{ wmLabel }}</span>
+              </button>
+            </div>
+
+            <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+              <sc-if value="{{ blockReason }}" hint-placeholder-val="{{ true }}">
+                <span style="font-size:11.5px;color:var(--err);max-width:260px;text-align:right">{{ blockReason }}</span>
+              </sc-if>
+              <button onClick="{{ runGenerate }}" disabled="{{ runDisabled }}" style="display:flex;align-items:center;gap:9px;padding:12px 26px;border-radius:8px;font-size:14px;font-weight:700;background:{{ runBg }};color:{{ runColor }};opacity:{{ runOpacity }};box-shadow:{{ runShadow }}">
+                <svg width="12" height="13" viewBox="0 0 12 13"><path d="M1 1.5 L11 6.5 L1 11.5 Z" fill="currentColor"/></svg>
+                {{ runLabel }}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- settings panel -->
+        <section style="width:{{ setW }};flex:0 0 {{ setW }};border-left:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
+          <sc-if value="{{ setClosed }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ toggleSet }}" title="Expand settings" style="height:52px;border-bottom:1px solid var(--line);color:var(--tx-3);font-size:13px" style-hover="color:var(--accent)">⟨</button>
+            <div style="flex:1;display:flex;align-items:flex-start;justify-content:center;padding-top:18px"><span style="writing-mode:vertical-rl;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)">Model Settings</span></div>
+          </sc-if>
+          <sc-if value="{{ setOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="height:52px;flex:0 0 auto;display:flex;align-items:center;padding:0 12px 0 16px;border-bottom:1px solid var(--line)">
+            <button onClick="{{ toggleSet }}" title="Collapse" style="color:var(--tx-3);font-size:13px;margin-right:9px" style-hover="color:var(--accent)">⟩</button>
+            <span style="font-size:11px;font-weight:600;letter-spacing:.07em;color:var(--tx-3);text-transform:uppercase">Model Settings</span>
+            <button onClick="{{ resetSettings }}" style="margin-left:auto;font-size:11px;color:var(--tx-3);font-weight:600" style-hover="color:var(--accent)">Reset</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:10px 12px">
+            <sc-for list="{{ settingGroups }}" as="g" hint-placeholder-count="3">
+              <div style="margin-bottom:8px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2);overflow:hidden">
+                <button onClick="{{ g.onToggle }}" style="display:flex;align-items:center;gap:8px;width:100%;padding:11px 13px;text-align:left">
+                  <span style="font-weight:600;font-size:12.5px">{{ g.title }}</span>
+                  <span style="font-size:10px;color:var(--tx-4);font-family:var(--mono)">{{ g.count }}</span>
+                  <span style="margin-left:auto;color:var(--tx-3);font-size:11px;transform:{{ g.caret }}">▾</span>
+                </button>
+                <sc-if value="{{ g.open }}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:4px 13px 13px;display:flex;flex-direction:column;gap:13px">
+                    <sc-for list="{{ g.fields }}" as="f" hint-placeholder-count="3">
+                      <div>
+                        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+                          <label style="font-size:12px;font-weight:500;color:var(--tx)">{{ f.label }}</label>
+                          <sc-if value="{{ f.isSlider }}" hint-placeholder-val="{{ true }}"><span style="margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent)">{{ f.display }}</span></sc-if>
+                        </div>
+                        <sc-if value="{{ f.help }}" hint-placeholder-val="{{ true }}"><div style="font-size:10.5px;color:var(--tx-3);margin:-2px 0 7px;line-height:1.4">{{ f.help }}</div></sc-if>
+
+                        <sc-if value="{{ f.isSlider }}" hint-placeholder-val="{{ true }}">
+                          <input type="range" min="{{ f.min }}" max="{{ f.max }}" step="{{ f.step }}" value="{{ f.value }}" onChange="{{ f.onInput }}" style="width:100%;accent-color:var(--accent)"/>
+                        </sc-if>
+                        <sc-if value="{{ f.isNumber }}" hint-placeholder-val="{{ true }}">
+                          <input type="number" min="{{ f.min }}" max="{{ f.max }}" step="{{ f.step }}" value="{{ f.value }}" onChange="{{ f.onInput }}" style="width:100%;background:var(--bg-1);border:1px solid var(--line-2);border-radius:6px;padding:8px 10px;font-size:12.5px;font-family:var(--mono)" style-focus="border-color:var(--accent)"/>
+                        </sc-if>
+                        <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                          <input value="{{ f.value }}" onChange="{{ f.onInput }}" placeholder="{{ f.placeholder }}" style="width:100%;background:var(--bg-1);border:1px solid var(--line-2);border-radius:6px;padding:8px 10px;font-size:12.5px;font-family:var(--mono)" style-focus="border-color:var(--accent)"/>
+                        </sc-if>
+                        <sc-if value="{{ f.isSelect }}" hint-placeholder-val="{{ true }}">
+                          <select value="{{ f.value }}" onChange="{{ f.onInput }}" style="width:100%;background:var(--bg-1);border:1px solid var(--line-2);border-radius:6px;padding:8px 10px;font-size:12.5px" style-focus="border-color:var(--accent)">
+                            <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                          </select>
+                        </sc-if>
+                        <sc-if value="{{ f.isToggle }}" hint-placeholder-val="{{ true }}">
+                          <button onClick="{{ f.onToggle }}" style="display:flex;align-items:center;gap:9px;width:100%;padding:8px 11px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-1);text-align:left">
+                            <span style="width:30px;height:17px;border-radius:9px;background:{{ f.track }};position:relative;flex:0 0 auto;transition:background .15s"><span style="position:absolute;top:2px;left:{{ f.knobX }};width:13px;height:13px;border-radius:50%;background:#fff;transition:left .15s"></span></span>
+                            <span style="font-size:12px;color:var(--tx-2)">{{ f.toggleText }}</span>
+                          </button>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+            <div style="height:8px"></div>
+          </div>
+          </sc-if>
+        </section>
+      </div>
+
+      <!-- transport dock -->
+      <div style="flex:0 0 auto;border-top:1px solid var(--line);background:var(--bg-2);min-height:88px;display:flex;align-items:stretch">
+        <!-- idle -->
+        <sc-if value="{{ transportIdle }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;display:flex;align-items:center;gap:12px;padding:0 24px;color:var(--tx-3);font-size:12.5px">
+            <span style="width:28px;height:28px;border-radius:7px;border:1px dashed var(--line-2);display:flex;align-items:center;justify-content:center">⌁</span>
+            Output appears here. Run a generation to begin.
+          </div>
+        </sc-if>
+        <!-- running -->
+        <sc-if value="{{ transportRunning }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;display:flex;align-items:center;gap:22px;padding:0 24px">
+            <div style="display:flex;align-items:center;gap:10px;flex:0 0 auto">
+              <span style="width:32px;height:32px;border:2.5px solid var(--accent-dim);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite"></span>
+              <div>
+                <div style="font-weight:700;font-size:13px">{{ activePhaseLabel }}</div>
+                <div style="font-family:var(--mono);font-size:10.5px;color:var(--tx-3)">{{ activeJobModel }} · {{ activeElapsed }}</div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;align-items:center;gap:6px;max-width:560px">
+              <sc-for list="{{ phaseSteps }}" as="p" hint-placeholder-count="6">
+                <div style="flex:1;display:flex;flex-direction:column;gap:5px;align-items:center">
+                  <div style="width:100%;height:4px;border-radius:3px;background:{{ p.bar }};overflow:hidden;position:relative">
+                    <sc-if value="{{ p.active }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;top:0;width:30%;height:100%;background:var(--accent);animation:sweep 1.1s ease-in-out infinite"></span></sc-if>
+                  </div>
+                  <span style="font-size:9px;font-weight:600;color:{{ p.tx }};text-transform:uppercase;letter-spacing:.02em">{{ p.label }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <button onClick="{{ cancelJob }}" style="flex:0 0 auto;padding:9px 18px;border:1px solid var(--err);color:var(--err);border-radius:7px;font-weight:600;font-size:12.5px;background:var(--err-dim)">Cancel</button>
+          </div>
+        </sc-if>
+        <!-- output -->
+        <sc-if value="{{ transportDone }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;display:flex;align-items:center;gap:18px;padding:0 24px">
+            <button onClick="{{ togglePlay }}" style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--accent-tx);display:flex;align-items:center;justify-content:center;flex:0 0 auto">
+              <sc-if value="{{ isPlaying }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" viewBox="0 0 13 13"><rect x="2" y="1" width="3.5" height="11" rx="1" fill="currentColor"/><rect x="7.5" y="1" width="3.5" height="11" rx="1" fill="currentColor"/></svg></sc-if>
+              <sc-if value="{{ isPaused }}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 1.5 L12.5 7 L2 12.5 Z" fill="currentColor"/></svg></sc-if>
+            </button>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:5px">
+                <span style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ outName }}</span>
+                <span style="font-size:9.5px;font-weight:700;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:4px">DONE</span>
+                <sc-if value="{{ outWatermarked }}" hint-placeholder-val="{{ true }}"><span style="font-size:9.5px;font-weight:700;color:var(--purple);background:var(--purple-dim);padding:2px 7px;border-radius:4px">WATERMARKED</span></sc-if>
+                <span style="margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--tx-3)">{{ outMeta }}</span>
+              </div>
+              <div data-wave="full" data-wave-url="{{ outAudioUrl }}" data-wave-seek style="height:38px;width:100%"></div>
+            </div>
+            <div style="display:flex;gap:8px;flex:0 0 auto">
+              <button onClick="{{ downloadOut }}" style="display:flex;align-items:center;gap:7px;padding:10px 16px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12.5px">
+                <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1 V8 M3 5.5 L6 8.5 L9 5.5 M2 10.5 H10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>Download
+              </button>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- other surfaces mount here -->
+    <sc-if value="{{ isVoices }}" hint-placeholder-val="{{ true }}"><div data-surface="voices" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div></sc-if>
+    <sc-if value="{{ isJobs }}" hint-placeholder-val="{{ true }}"><div data-surface="jobs" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div></sc-if>
+    <sc-if value="{{ isModels }}" hint-placeholder-val="{{ true }}"><div data-surface="models" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div></sc-if>
+    <sc-if value="{{ isWatermark }}" hint-placeholder-val="{{ true }}"><div data-surface="watermark" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div></sc-if>
+  </main>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ true }}">
+    <div class="fade-in" style="position:fixed;bottom:108px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:10px;padding:11px 18px;border-radius:9px;background:{{ toastBg }};border:1px solid {{ toastLine }};color:{{ toastColor }};box-shadow:var(--shadow);font-size:12.5px;font-weight:500;max-width:520px">
+      <span style="width:7px;height:7px;border-radius:50%;background:{{ toastDot }};flex:0 0 auto"></span>{{ toast }}
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;}}">
+class Component extends DCLogic {
+  state = {
+    theme: 'dark',
+    surface: 'generate',
+    selectedModelId: 'index-tts2',
+    text: 'The studio falls quiet as the console lights settle into a slow, even glow.',
+    promptText: '',
+    instructText: '',
+    refMode: 'saved',
+    selectedVoiceId: 'v_lina',
+    refFileReady: false,
+    refFileName: '',
+    recording: false,
+    outputFormat: 'wav',
+    watermarkEnabled: false,
+    settings: this.defaults(),
+    openGroups: { 'index-tts2:Basics': true, 'chatterbox-multilingual:Basics': true, 'f5-hindi-urdu:Basics': true, 'cosyvoice3-mlx:Basics': true, 'qwen3-tts-mlx:Basics': true, 'pocket-tts:Basics': true, 'voxcpm-ane:Basics': true },
+    jobs: this.seedJobs(),
+    statusMap: this.seedStatus(),
+    voices: this.seedVoices(),
+    activeJobId: null,
+    outputJobId: null,
+    railOpen: true,
+    setOpen: true,
+    isPlaying: false,
+    activeAudioUrl: '',
+    audioCurrent: 0,
+    audioDuration: 0,
+    toast: null,
+    toastKind: 'success',
+    clock: Date.now(),
+    // voices surface
+    addingVoice: false,
+    newVoiceName: '',
+    renamingId: null,
+    renameValue: '',
+    // jobs surface
+    jobFilter: 'all',
+    jobDetailId: null,
+    // watermark
+    selectedRunId: 'wm_run_a',
+    wmVerifyFile: null,
+    wmThreshold: 0.35,
+    wmDetectResult: null,
+    // audio previews
+    refFileBlob: null,
+    refPreviewUrl: '',
+    emoFileBlob: null,
+    emoFileName: '',
+    emoPreviewUrl: '',
+    expandedVoiceId: null,
+    voiceMeta: {},
+    voiceSearch: '',
+    voiceSort: 'recent',
+  };
+
+  models = [
+    { id: 'index-tts2', name: 'IndexTTS2', desc: 'PyTorch AR zero-shot TTS with emotion control; MPS-optimized.' },
+    { id: 'qwen3-tts-mlx', name: 'Qwen3-TTS MLX', desc: 'MLX Qwen3-TTS Base voice cloning; optional auto-transcribe.' },
+    { id: 'chatterbox-multilingual', name: 'Chatterbox Multilingual', desc: 'Multilingual TTS with optional cloning; long-form chunking.' },
+    { id: 'f5-hindi-urdu', name: 'F5 Hindi/Urdu', desc: 'Hindi/Urdu cloning with Roman→Devanagari conversion.' },
+    { id: 'cosyvoice3-mlx', name: 'CosyVoice3 MLX', desc: 'MLX CosyVoice3 zero-shot / cross-lingual / instruct.' },
+    { id: 'pocket-tts', name: 'Pocket TTS', desc: 'CPU-first low-latency streaming TTS with optional cloning.' },
+    { id: 'voxcpm-ane', name: 'VoxCPM ANE', desc: 'CoreML/ANE VoxCPM with prompt-cache cloning.' },
+  ];
+
+  defaults() {
+    return {
+      index: { emoMode: 'speaker', emoAlpha: 0.65, useRandom: false, emoVector: '[0,0,0,0,0,0,0.45,0]', emoText: '', maxTextTokens: 120, maxMelTokens: 1500, fastMode: false, doSample: true, temperature: 0.8, topP: 0.8, topK: 30, numBeams: 3, repetitionPenalty: 10, lengthPenalty: 0 },
+      chatterbox: { language: 'hi', usePrompt: true, cfgWeight: 0.5, temperature: 0.8, exaggeration: 0.5, fastMode: false, enableChunking: true, maxChunkChars: 150, crossfadeMs: 50, enableDf: false, enableNovasr: false },
+      f5: { romanMode: true, overridesEnabled: true, overridesText: '', crossFade: 0.15, nfeStep: 32, speed: 1, removeSilence: false, seed: -1 },
+      cosy: { model: '8bit', mode: 'zero_shot', language: 'auto', speed: 1, instructText: '' },
+      qwen: { model: 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit', autoTranscribe: true, language: 'auto', speed: 1, temperature: 0.7, maxTokens: 1200 },
+      pocket: { voice: 'hf://kyutai/tts-voices/alba-mackenna/casual.wav', temperature: 0.8, lsdDecodeSteps: 8, eosThreshold: 0.4, noiseClamp: '', truncatePrompt: false },
+      voxcpm: { voice: '', cfgValue: 2, inferenceTimesteps: 10, maxLength: 2048 },
+    };
+  }
+
+  seedStatus() {
+    return {
+      'index-tts2': { loaded: true, device: 'mps', last_generation_duration_ms: 8420, total_generations: 47, last_generation_time: Date.now() - 1000 * 60 * 6 },
+      'qwen3-tts-mlx': { loaded: true, device: 'mlx', last_generation_duration_ms: 5210, total_generations: 31, last_generation_time: Date.now() - 1000 * 60 * 22 },
+      'chatterbox-multilingual': { loaded: false, device: 'mps', total_generations: 12 },
+      'f5-hindi-urdu': { loaded: false, device: 'mps', total_generations: 8 },
+      'cosyvoice3-mlx': { loaded: false, device: 'mlx', total_generations: 19 },
+      'pocket-tts': { loaded: false, device: 'cpu', total_generations: 3 },
+      'voxcpm-ane': { loaded: false, device: 'ane', total_generations: 0 },
+    };
+  }
+
+  seedVoices() {
+    const now = Date.now();
+    return [
+      { id: 'v_lina', name: 'Lina — narration', created_at: now - 86400000 * 3, duration_s: 12.4, has_transcript: true, compatible_models: ['index-tts2', 'f5-hindi-urdu', 'cosyvoice3-mlx', 'qwen3-tts-mlx', 'voxcpm-ane', 'chatterbox-multilingual'] },
+      { id: 'v_arman', name: 'Arman — promo', created_at: now - 86400000 * 8, duration_s: 8.1, has_transcript: false, compatible_models: ['index-tts2', 'cosyvoice3-mlx', 'qwen3-tts-mlx', 'chatterbox-multilingual'] },
+      { id: 'v_meera', name: 'Meera — Hindi', created_at: now - 86400000 * 1, duration_s: 15.9, has_transcript: true, compatible_models: ['f5-hindi-urdu', 'index-tts2', 'voxcpm-ane', 'cosyvoice3-mlx'] },
+      { id: 'v_kai', name: 'Kai — calm', created_at: now - 3600000 * 5, duration_s: 6.7, has_transcript: true, compatible_models: ['index-tts2', 'qwen3-tts-mlx', 'voxcpm-ane'] },
+    ];
+  }
+
+  seedJobs() {
+    const now = Date.now();
+    return [
+      { id: 'job_4001', status: 'completed', phase: 'completed', model_id: 'index-tts2', voice_id: 'v_lina', text: 'The studio falls quiet as the console lights settle into a slow, even glow.', output_format: 'wav', watermark_enabled: true, watermark_run: 'wm_run_a', created_at: now - 1000 * 60 * 6, worker_duration_ms: 8420, output: { filename: 'index-tts2_4001.wav', format: 'wav', duration_s: 6.2, sample_rate: 24000 } },
+      { id: 'job_4000', status: 'completed', phase: 'completed', model_id: 'qwen3-tts-mlx', voice_id: 'v_arman', text: 'Welcome back to the broadcast. Today we cover three quick updates.', output_format: 'mp3', watermark_enabled: false, created_at: now - 1000 * 60 * 22, worker_duration_ms: 5210, output: { filename: 'qwen3_4000.mp3', format: 'mp3', duration_s: 4.8, sample_rate: 24000 } },
+      { id: 'job_3998', status: 'failed', phase: 'failed', model_id: 'f5-hindi-urdu', voice_id: 'v_meera', text: 'Aaj ka mausam bahut suhana hai aur hawa thandi chal rahi hai.', output_format: 'wav', watermark_enabled: false, created_at: now - 1000 * 60 * 41, error: 'Worker exited: reference transcript shorter than minimum length.' },
+      { id: 'job_3995', status: 'cancelled', phase: 'cancelled', model_id: 'chatterbox-multilingual', voice_id: null, text: 'A long multilingual passage that was cancelled mid-run by the operator.', output_format: 'flac', watermark_enabled: false, created_at: now - 1000 * 60 * 70 },
+      { id: 'job_3990', status: 'completed', phase: 'completed', model_id: 'cosyvoice3-mlx', voice_id: 'v_lina', text: 'Cross-lingual synthesis sample rendered for the demo reel.', output_format: 'wav', watermark_enabled: false, created_at: now - 1000 * 60 * 130, worker_duration_ms: 9930, output: { filename: 'cosy_3990.wav', format: 'wav', duration_s: 5.1, sample_rate: 24000 } },
+    ];
+  }
+
+  // ---------- helpers ----------
+  model(id) { return this.models.find(m => m.id === id); }
+  s() { return this.state.settings; }
+  needsRef(id) { return ['index-tts2', 'f5-hindi-urdu', 'cosyvoice3-mlx', 'qwen3-tts-mlx'].includes(id); }
+  needsTranscript(id) {
+    const s = this.s();
+    if (id === 'f5-hindi-urdu') return true;
+    if (id === 'cosyvoice3-mlx') return s.cosy.mode === 'zero_shot' || s.cosy.mode === 'instruct';
+    if (id === 'voxcpm-ane') return true;
+    return false;
+  }
+  wmSupported(id) { return id === 'index-tts2' || id === 'qwen3-tts-mlx'; }
+  refReady() {
+    const st = this.state;
+    if (st.refMode === 'saved') return !!st.selectedVoiceId && this.compatVoices().some(v => v.id === st.selectedVoiceId);
+    if (st.refMode === 'upload' || st.refMode === 'record') return st.refFileReady;
+    return false;
+  }
+  compatVoices() { return this.state.voices.filter(v => v.compatible_models.includes(this.state.selectedModelId)); }
+  fmtAgo(t) {
+    const d = Math.floor((Date.now() - t) / 1000);
+    if (d < 60) return d + 's ago';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+    return Math.floor(d / 86400) + 'd ago';
+  }
+  fmtDur(ms) { if (ms == null) return '—'; return (ms / 1000).toFixed(1) + 's'; }
+  fmtSec(s) { if (s == null) return '—'; const m = Math.floor(s / 60), sec = Math.round(s % 60); return m + ':' + String(sec).padStart(2, '0'); }
+
+  componentDidMount() {
+    this._clock = setInterval(() => this.setState({ clock: Date.now() }), 1000);
+    this.drawWaves(); this.injectIcons();
+    this._applyBucket();
+    this._onResize = () => this._applyBucket();
+    window.addEventListener('resize', this._onResize);
+    const root = this._rootEl();
+    if (root && window.ResizeObserver) {
+      this._ro = new ResizeObserver(() => this._applyBucket());
+      this._ro.observe(root);
+    }
+  }
+  _applyBucket() {
+    const root = this._rootEl(); if (!root) return;
+    const w = root.clientWidth || window.innerWidth;
+    const bucket = w < 1080 ? 'sm' : w < 1320 ? 'md' : 'lg';
+    if (bucket === this._bucket) return;
+    this._bucket = bucket;
+    this.setState({ railOpen: bucket !== 'sm', setOpen: bucket === 'lg' });
+  }
+  componentDidUpdate() { this.drawWaves(); this.mountSurface(); this.injectIcons(); }
+
+  injectIcons() {
+    const root = this._rootEl(); if (!root) return;
+    const I = {
+      gen: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 8h2l1.5-4 3 9 2-6 1 3h2.5"/></svg>',
+      voice: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="5.5" y="1.5" width="5" height="8.5" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V14.5"/></svg>',
+      jobs: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
+      models: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+      wm: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5l5 2v4c0 3-2.2 5.2-5 6.5C5.2 12.7 3 10.5 3 7.5v-4z"/><path d="M6 8l1.5 1.5L10.5 6.5"/></svg>',
+    };
+    root.querySelectorAll('[data-icon]').forEach(el => {
+      const k = el.getAttribute('data-icon');
+      if (el.__icon === k) return; el.__icon = k;
+      if (I[k]) el.innerHTML = I[k];
+    });
+  }
+  componentWillUnmount() { clearInterval(this._clock); if (this._jobTimer) clearTimeout(this._jobTimer); if (this._ro) this._ro.disconnect(); if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  // ---------- scroll preservation across imperative re-renders ----------
+  // Mark any scroll container with data-scroll-keep="<unique-key>". Call __captureScroll(root)
+  // before root.innerHTML='' and __restoreScroll(root, snap) after re-attaching content.
+  __captureScroll(root) {
+    const snap = {};
+    if (root) root.querySelectorAll('[data-scroll-keep]').forEach(el => { snap[el.getAttribute('data-scroll-keep')] = el.scrollTop; });
+    return snap;
+  }
+  __restoreScroll(root, snap) {
+    if (!root || !snap) return;
+    root.querySelectorAll('[data-scroll-keep]').forEach(el => { const k = el.getAttribute('data-scroll-keep'); if (snap[k] != null) el.scrollTop = snap[k]; });
+  }
+
+  // ---------- waveform engine ----------
+  __hash(str) { let h = 0; const s = String(str || 'x'); for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return h; }
+
+  // Deterministic per-source placeholder so each voice looks distinct before/without decode.
+  __placeholderPeaks(key, n) {
+    const seed = this.__hash(key);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const v = Math.abs(Math.sin(i * 0.55 + seed * 0.013) * Math.cos(i * 0.17 + seed * 0.0007));
+      const env = 0.55 + 0.45 * Math.sin((i / n) * Math.PI); // taper ends like a real clip
+      out.push(Math.max(0.08, v * env));
+    }
+    return out;
+  }
+
+  // Decode real audio into N normalized peaks (cached by url+resolution).
+  async __peaksFor(url, n) {
+    this._peakCache = this._peakCache || {};
+    this._peakPending = this._peakPending || {};
+    const key = url + '@' + n;
+    if (this._peakCache[key]) return this._peakCache[key];
+    if (this._peakPending[key]) return this._peakPending[key];
+    const job = (async () => {
+      try {
+        const res = await fetch(url);
+        const buf = await res.arrayBuffer();
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ac = new Ctx();
+        const audio = await ac.decodeAudioData(buf);
+        if (ac.close) ac.close();
+        const ch = audio.getChannelData(0);
+        const block = Math.max(1, Math.floor(ch.length / n));
+        const peaks = []; let max = 0;
+        for (let i = 0; i < n; i++) {
+          let sum = 0; const start = i * block;
+          for (let j = 0; j < block; j++) { const s = ch[start + j] || 0; sum += s * s; }
+          const rms = Math.sqrt(sum / block); peaks.push(rms); if (rms > max) max = rms;
+        }
+        const norm = peaks.map(v => (max > 0 ? Math.max(0.06, Math.min(1, v / max)) : 0.06));
+        this._peakCache[key] = norm; return norm;
+      } catch (e) {
+        const ph = this.__placeholderPeaks(url, n); this._peakCache[key] = ph; return ph;
+      } finally { delete this._peakPending[key]; }
+    })();
+    this._peakPending[key] = job; return job;
+  }
+
+  __buildWaveBars(el, peaks, kind) {
+    el.innerHTML = '';
+    el.style.display = 'flex'; el.style.alignItems = 'center'; el.style.gap = (kind === 'mini' ? '1.5px' : '2px');
+    const bars = [];
+    peaks.forEach(p => {
+      const b = document.createElement('div');
+      b.style.cssText = 'flex:1;border-radius:2px;min-width:1px;background:var(--accent);height:' + Math.round(8 + p * 92) + '%;transition:background .08s,opacity .08s';
+      el.appendChild(b); bars.push(b);
+    });
+    el.__bars = bars;
+  }
+
+  __waveFraction(el) {
+    const url = el.getAttribute('data-wave-url') || '';
+    if (url && this.state.activeAudioUrl === url && this._audio && this._audio.duration && !this._audio.ended) {
+      const f = this._audio.currentTime / this._audio.duration;
+      if (this._audio.paused && f <= 0.0001) return -1; // idle/reset → resting look
+      return Math.min(1, f);
+    }
+    return -1; // not the active source, or finished → resting state
+  }
+
+  __paintWave(el) {
+    const bars = el.__bars; if (!bars || !bars.length) return;
+    const frac = this.__waveFraction(el);
+    if (frac < 0) { // resting
+      for (let i = 0; i < bars.length; i++) { bars[i].style.background = 'var(--accent)'; bars[i].style.opacity = '0.4'; }
+      return;
+    }
+    const cut = Math.round(frac * bars.length);
+    for (let i = 0; i < bars.length; i++) {
+      const played = i < cut;
+      bars[i].style.background = played ? 'var(--accent)' : 'var(--tx-3)';
+      bars[i].style.opacity = played ? '1' : (i === cut ? '0.85' : '0.32');
+    }
+  }
+
+  __attachSeek(el) {
+    if (el.__seekBound) return; el.__seekBound = true;
+    el.style.cursor = 'pointer'; el.title = 'Click to seek';
+    el.addEventListener('click', e => {
+      const url = el.getAttribute('data-wave-url') || ''; if (!url) return;
+      const rect = el.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const abs = new URL(url, window.location.href).href;
+      if (this.state.activeAudioUrl === abs && this._audio && this._audio.duration) {
+        this._audio.currentTime = frac * this._audio.duration; this.__paintWave(el);
+      } else {
+        this.playUrl(url);
+        const a = this._audio;
+        const onMeta = () => { try { a.currentTime = frac * (a.duration || 0); } catch (err) {} a.removeEventListener('loadedmetadata', onMeta); };
+        a.addEventListener('loadedmetadata', onMeta);
+      }
+    });
+  }
+
+  drawWaves() {
+    const root = this._rootEl();
+    if (!root) return;
+    root.querySelectorAll('[data-wave]').forEach(el => {
+      const kind = el.getAttribute('data-wave');
+      const rawUrl = el.getAttribute('data-wave-url') || '';
+      const url = rawUrl ? new URL(rawUrl, window.location.href).href : '';
+      if (url && el.getAttribute('data-wave-url') !== url) el.setAttribute('data-wave-url', url);
+      const w = el.clientWidth || 300;
+      const n = kind === 'mini' ? Math.max(24, Math.min(48, Math.floor(w / 5))) : Math.max(48, Math.min(96, Math.floor(w / 6)));
+      const sig = kind + '|' + url + '|' + n;
+      if (el.__sig !== sig) {
+        el.__sig = sig;
+        this._peakCache = this._peakCache || {};
+        const cached = url ? this._peakCache[url + '@' + n] : null;
+        this.__buildWaveBars(el, cached || this.__placeholderPeaks(url || kind, n), kind);
+        if (el.getAttribute('data-wave-seek') !== null) this.__attachSeek(el);
+        if (url && !cached) {
+          this.__peaksFor(url, n).then(peaks => {
+            // still the same element/resolution?
+            if (el.__sig === sig) { this.__buildWaveBars(el, peaks, kind); if (el.getAttribute('data-wave-seek') !== null) { el.__seekBound = false; this.__attachSeek(el); } this.__paintWave(el); }
+          });
+        }
+      }
+      this.__paintWave(el);
+    });
+  }
+
+  __paintActiveWaves() {
+    const root = this._rootEl(); if (!root) return;
+    const active = this.state.activeAudioUrl || '__none__';
+    root.querySelectorAll('[data-wave]').forEach(el => { if ((el.getAttribute('data-wave-url') || '') === active) this.__paintWave(el); });
+  }
+
+  __startWaveAnim() {
+    if (this._waveRAF) return;
+    const tick = () => { this._waveRAF = requestAnimationFrame(tick); this.__paintActiveWaves(); };
+    this._waveRAF = requestAnimationFrame(tick);
+  }
+
+  __stopWaveAnim() {
+    if (this._waveRAF) { cancelAnimationFrame(this._waveRAF); this._waveRAF = null; }
+    this.__paintActiveWaves();
+  }
+  _rootEl() { return this._root || (this._root = document.querySelector('[data-theme]')); }
+
+  // surface sub-renderers (built imperatively into the data-surface mount)
+  mountSurface() {
+    const map = { voices: 'renderVoices', jobs: 'renderJobs', models: 'renderModels', watermark: 'renderWatermark' };
+    Object.keys(map).forEach(k => {
+      const el = document.querySelector('[data-surface="' + k + '"]');
+      if (el && this.state.surface === k) this[map[k]](el);
+    });
+  }
+
+  // ---------- actions ----------
+  selectModel(id) {
+    const next = { selectedModelId: id };
+    if (this.needsRef(id) && this.state.refMode === 'none') next.refMode = 'saved';
+    if (!this.needsRef(id) && id !== 'voxcpm-ane' && id !== 'pocket-tts') {} 
+    this.setState(next);
+  }
+  setRefMode(m) { this.setState({ refMode: m }); }
+  pickVoice(id) { this.setState({ refMode: 'saved', selectedVoiceId: id }); }
+  setFormat(f) { this.setState({ outputFormat: f }); }
+  toggleWm() { if (this.wmSupported(this.state.selectedModelId)) this.setState(s => ({ watermarkEnabled: !s.watermarkEnabled })); }
+  mockUpload() { this.setState({ refFileReady: true, refFileName: 'reference_take_02.wav · 0:11' }); this.flash('Reference audio loaded.', 'success'); }
+  mockRecord() {
+    if (this.state.recording) { this.setState({ recording: false, refFileReady: true, refFileName: 'recording_live.wav · 0:07' }); this.flash('Recording captured.', 'success'); }
+    else { this.setState({ recording: true }); }
+  }
+  setSetting(group, key, val) { this.setState(s => ({ settings: { ...s.settings, [group]: { ...s.settings[group], [key]: val } } })); }
+  toggleGroup(modelKey, title) { const k = modelKey + ':' + title; this.setState(s => ({ openGroups: { ...s.openGroups, [k]: !s.openGroups[k] } })); }
+  resetSettings() { this.setState({ settings: this.defaults() }); this.flash('Settings reset to defaults.', 'success'); }
+  setSurface(s) { this.setState({ surface: s }); }
+  flash(msg, kind) { this.setState({ toast: msg, toastKind: kind || 'success' }); clearTimeout(this._toast); this._toast = setTimeout(() => this.setState({ toast: null }), 3200); }
+
+
+  runGenerate() {
+    const reason = this.validate();
+    if (reason) { this.flash(reason, 'error'); return; }
+    const id = this.state.selectedModelId;
+    const job = {
+      id: 'job_' + Math.floor(4000 + Math.random() * 5000),
+      status: 'queued', phase: 'queued', model_id: id, voice_id: this.state.refMode === 'saved' ? this.state.selectedVoiceId : null,
+      text: this.state.text, output_format: this.state.outputFormat, watermark_enabled: this.state.watermarkEnabled && this.wmSupported(id),
+      watermark_run: this.state.watermarkEnabled ? this.state.selectedRunId : null, created_at: Date.now(), _started: Date.now(),
+    };
+    this.setState(s => ({ jobs: [job, ...s.jobs], activeJobId: job.id, isPlaying: false }));
+    this.advance(job.id, 0);
+  }
+  phaseChainFor(id) {
+    const wm = this.state.jobs.find(j => j.id === id);
+    const base = ['queued', 'preparing', 'generating'];
+    if (wm && wm.watermark_enabled) base.push('watermarking');
+    base.push('converting', 'completed');
+    return base;
+  }
+  advance(id, step) {
+    const chain = this.phaseChainFor(id);
+    if (step >= chain.length) return;
+    const phase = chain[step];
+    this.setState(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, status: phase, phase } : j) }));
+    if (phase === 'completed') {
+      this.setState(s => {
+        const jobs = s.jobs.map(j => {
+          if (j.id !== id) return j;
+          const dur = 4000 + Math.floor(Math.random() * 7000);
+          return { ...j, worker_duration_ms: dur, output: { filename: j.model_id + '_' + j.id.replace('job_', '') + '.' + j.output_format, format: j.output_format, duration_s: 3 + Math.random() * 5, sample_rate: 24000 } };
+        });
+        const stat = { ...s.statusMap };
+        const m = jobs.find(j => j.id === id);
+        stat[m.model_id] = { ...stat[m.model_id], loaded: true, total_generations: (stat[m.model_id].total_generations || 0) + 1, last_generation_duration_ms: m.worker_duration_ms, last_generation_time: Date.now() };
+        return { jobs, statusMap: stat, activeJobId: null, outputJobId: id, isPlaying: true };
+      });
+      this.flash('Generation complete.', 'success');
+      return;
+    }
+    const delay = phase === 'generating' ? 2600 : phase === 'watermarking' ? 1600 : 1100;
+    this._jobTimer = setTimeout(() => {
+      const cur = this.state.jobs.find(j => j.id === id);
+      if (!cur || cur.status === 'cancelled') return;
+      this.advance(id, step + 1);
+    }, delay);
+  }
+  cancelJob() {
+    const id = this.state.activeJobId;
+    if (!id) return;
+    if (this._jobTimer) clearTimeout(this._jobTimer);
+    this.setState(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, status: 'cancelled', phase: 'cancelled' } : j), activeJobId: null }));
+    this.flash('Generation cancelled.', 'warn');
+  }
+  togglePlay() { this.setState(s => ({ isPlaying: !s.isPlaying })); }
+  downloadOut() { this.flash('Download started.', 'success'); }
+
+  // job/voice/model/watermark actions
+  unloadModel(id) { this.setState(s => ({ statusMap: { ...s.statusMap, [id]: { ...s.statusMap[id], loaded: false } } })); this.flash(this.model(id).name + ' unloaded — memory freed.', 'success'); }
+  loadModel(id) { this.setState(s => ({ statusMap: { ...s.statusMap, [id]: { ...s.statusMap[id], loaded: true } } })); this.flash(this.model(id).name + ' loaded.', 'success'); }
+  deleteJob(id) { this.setState(s => ({ jobs: s.jobs.filter(j => j.id !== id), jobDetailId: s.jobDetailId === id ? null : s.jobDetailId })); this.flash('Run deleted.', 'success'); }
+  cancelJobById(id) { if (this._jobTimer) clearTimeout(this._jobTimer); this.setState(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, status: 'cancelled', phase: 'cancelled' } : j), activeJobId: s.activeJobId === id ? null : s.activeJobId })); this.flash('Run cancelled.', 'warn'); }
+  replayJob(j) { if (j.status !== 'completed') return; this.setState({ outputJobId: j.id, surface: 'generate', isPlaying: true }); this.flash('Loaded run into output player.', 'success'); }
+  restoreJob(j) { this.setState({ selectedModelId: j.model_id, text: j.text, outputFormat: j.output_format, watermarkEnabled: !!j.watermark_enabled, selectedVoiceId: j.voice_id || this.state.selectedVoiceId, refMode: j.voice_id ? 'saved' : this.state.refMode, surface: 'generate' }); this.flash('Run settings restored. Review before generating.', 'success'); }
+  deleteVoice(id) { this.setState(s => ({ voices: s.voices.filter(v => v.id !== id), selectedVoiceId: s.selectedVoiceId === id ? '' : s.selectedVoiceId })); this.flash('Voice deleted.', 'success'); }
+  startRename(v) { this.setState({ renamingId: v.id, renameValue: v.name }); }
+  commitRename() { const id = this.state.renamingId, name = this.state.renameValue.trim(); if (id && name) this.setState(s => ({ voices: s.voices.map(v => v.id === id ? { ...v, name } : v), renamingId: null })); else this.setState({ renamingId: null }); if (name) this.flash('Voice renamed.', 'success'); }
+  addVoice() { const name = this.state.newVoiceName.trim(); if (!name) { this.flash('Name the voice first.', 'error'); return; } const v = { id: 'v_' + Math.random().toString(36).slice(2, 7), name, created_at: Date.now(), duration_s: 7 + Math.random() * 8, has_transcript: !!this.state.promptText.trim(), compatible_models: this.models.map(m => m.id) }; this.setState(s => ({ voices: [v, ...s.voices], addingVoice: false, newVoiceName: '' })); this.flash('Voice saved to library.', 'success'); }
+  useVoice(v) { this.setState({ selectedModelId: v.compatible_models[0], selectedVoiceId: v.id, refMode: 'saved', surface: 'generate' }); this.flash('Voice loaded into Generate.', 'success'); }
+
+  // ---------- settings schema ----------
+  fld(group, key, label, opts) {
+    const v = this.s()[group][key];
+    const o = opts || {};
+    const f = { key, label, help: o.help || null, isSlider: false, isNumber: false, isText: false, isSelect: false, isToggle: false, value: v };
+    if (o.type === 'slider') { f.isSlider = true; f.min = o.min; f.max = o.max; f.step = o.step; f.display = (o.fmt ? o.fmt(v) : String(v)); f.onInput = e => this.setSetting(group, key, o.int ? parseInt(e.target.value, 10) : parseFloat(e.target.value)); }
+    else if (o.type === 'number') { f.isNumber = true; f.min = o.min; f.max = o.max; f.step = o.step || 1; f.onInput = e => this.setSetting(group, key, o.int === false ? parseFloat(e.target.value) : parseInt(e.target.value, 10)); }
+    else if (o.type === 'select') { f.isSelect = true; f.options = o.options; f.onInput = e => this.setSetting(group, key, e.target.value); }
+    else if (o.type === 'toggle') { f.isToggle = true; f.track = v ? 'var(--accent)' : 'var(--line-3)'; f.knobX = v ? '15px' : '2px'; f.toggleText = v ? (o.on || 'Enabled') : (o.off || 'Disabled'); f.onToggle = () => this.setSetting(group, key, !v); }
+    else { f.isText = true; f.placeholder = o.placeholder || ''; f.onInput = e => this.setSetting(group, key, e.target.value); }
+    return f;
+  }
+  groupObj(modelKey, title, fields) {
+    const open = !!this.state.openGroups[modelKey + ':' + title];
+    return { title, count: fields.length + ' params', open, caret: open ? 'rotate(0deg)' : 'rotate(-90deg)', fields, onToggle: () => this.toggleGroup(modelKey, title) };
+  }
+  schema(id) {
+    const G = (t, f) => this.groupObj(id, t, f);
+    if (id === 'index-tts2') return [
+      G('Basics', [
+        this.fld('index', 'emoMode', 'Emotion mode', { type: 'select', options: [{ value: 'speaker', label: 'From speaker' }, { value: 'emo_ref', label: 'Emotion reference audio' }, { value: 'emo_vector', label: 'Emotion vector' }, { value: 'emo_text', label: 'Emotion text prompt' }] }),
+        this.fld('index', 'emoAlpha', 'Emotion strength', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
+        ...(this.s().index.emoMode === 'emo_vector' ? [this.fld('index', 'emoVector', 'Emotion vector', { type: 'text', placeholder: '[0,0,...]' })] : []),
+        ...(this.s().index.emoMode === 'emo_text' ? [this.fld('index', 'emoText', 'Emotion text', { type: 'text', placeholder: 'happy and bright' })] : []),
+      ]),
+      G('Sampling', [
+        this.fld('index', 'doSample', 'Sampling', { type: 'toggle', on: 'Stochastic', off: 'Greedy' }),
+        this.fld('index', 'temperature', 'Temperature', { type: 'slider', min: 0.1, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('index', 'topP', 'Top-p', { type: 'slider', min: 0.1, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('index', 'topK', 'Top-k', { type: 'number', min: 0, max: 100 }),
+        this.fld('index', 'numBeams', 'Beams', { type: 'number', min: 1, max: 8 }),
+        this.fld('index', 'repetitionPenalty', 'Repetition penalty', { type: 'slider', min: 1, max: 15, step: 0.5, fmt: v => v.toFixed(1) }),
+        this.fld('index', 'lengthPenalty', 'Length penalty', { type: 'slider', min: -2, max: 2, step: 0.1, fmt: v => v.toFixed(1) }),
+      ]),
+      G('Advanced', [
+        this.fld('index', 'useRandom', 'Randomize seed', { type: 'toggle' }),
+        this.fld('index', 'fastMode', 'Fast mode', { type: 'toggle', help: 'Lower quality, faster inference.' }),
+        this.fld('index', 'maxTextTokens', 'Max text tokens / segment', { type: 'number', min: 20, max: 400 }),
+        this.fld('index', 'maxMelTokens', 'Max mel tokens', { type: 'number', min: 200, max: 4000, step: 50 }),
+      ]),
+    ];
+    if (id === 'chatterbox-multilingual') return [
+      G('Basics', [
+        this.fld('chatterbox', 'language', 'Language', { type: 'select', options: [{ value: 'hi', label: 'Hindi' }, { value: 'en', label: 'English' }, { value: 'es', label: 'Spanish' }, { value: 'fr', label: 'French' }, { value: 'de', label: 'German' }, { value: 'zh', label: 'Chinese' }] }),
+        this.fld('chatterbox', 'usePrompt', 'Use prompt audio', { type: 'toggle' }),
+        this.fld('chatterbox', 'exaggeration', 'Exaggeration', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('chatterbox', 'cfgWeight', 'CFG weight', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('chatterbox', 'temperature', 'Temperature', { type: 'slider', min: 0.1, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) }),
+      ]),
+      G('Long-form', [
+        this.fld('chatterbox', 'enableChunking', 'Chunk long text', { type: 'toggle' }),
+        this.fld('chatterbox', 'maxChunkChars', 'Max chunk chars', { type: 'number', min: 40, max: 400 }),
+        this.fld('chatterbox', 'crossfadeMs', 'Crossfade', { type: 'slider', min: 0, max: 200, step: 5, int: true, fmt: v => v + ' ms' }),
+      ]),
+      G('Post-processing', [
+        this.fld('chatterbox', 'enableDf', 'DeepFilterNet denoise', { type: 'toggle' }),
+        this.fld('chatterbox', 'enableNovasr', 'NovaSR super-resolution', { type: 'toggle' }),
+        this.fld('chatterbox', 'fastMode', 'Fast mode', { type: 'toggle' }),
+      ]),
+    ];
+    if (id === 'f5-hindi-urdu') return [
+      G('Basics', [
+        this.fld('f5', 'romanMode', 'Roman → Devanagari', { type: 'toggle', help: 'Convert Roman Hindi/Urdu input to native script.' }),
+        this.fld('f5', 'speed', 'Speed', { type: 'slider', min: 0.5, max: 2, step: 0.05, fmt: v => v.toFixed(2) + '×' }),
+        this.fld('f5', 'removeSilence', 'Remove silence', { type: 'toggle' }),
+      ]),
+      G('Overrides', [
+        this.fld('f5', 'overridesEnabled', 'Pronunciation overrides', { type: 'toggle' }),
+        ...(this.s().f5.overridesEnabled ? [this.fld('f5', 'overridesText', 'Override map', { type: 'text', placeholder: 'word=उच्चारण, ...' })] : []),
+      ]),
+      G('Advanced', [
+        this.fld('f5', 'nfeStep', 'NFE steps', { type: 'number', min: 4, max: 64 }),
+        this.fld('f5', 'crossFade', 'Cross-fade', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) + 's' }),
+        this.fld('f5', 'seed', 'Seed', { type: 'number', min: -1, max: 999999, help: '-1 for random.' }),
+      ]),
+    ];
+    if (id === 'cosyvoice3-mlx') return [
+      G('Basics', [
+        this.fld('cosy', 'mode', 'Mode', { type: 'select', options: [{ value: 'zero_shot', label: 'Zero-shot (needs transcript)' }, { value: 'cross_lingual', label: 'Cross-lingual' }, { value: 'instruct', label: 'Instruct (needs instruction)' }] }),
+        this.fld('cosy', 'model', 'Quantization', { type: 'select', options: [{ value: '8bit', label: '8-bit' }, { value: '4bit', label: '4-bit' }, { value: 'bf16', label: 'bf16' }] }),
+        this.fld('cosy', 'language', 'Language', { type: 'text', placeholder: 'auto' }),
+        this.fld('cosy', 'speed', 'Speed', { type: 'slider', min: 0.5, max: 2, step: 0.05, fmt: v => v.toFixed(2) + '×' }),
+      ]),
+    ];
+    if (id === 'qwen3-tts-mlx') return [
+      G('Basics', [
+        this.fld('qwen', 'model', 'Model', { type: 'select', options: [{ value: 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit', label: '1.7B Base · 8-bit' }, { value: 'mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit', label: '0.6B Base · 8-bit' }] }),
+        this.fld('qwen', 'autoTranscribe', 'Auto-transcribe reference', { type: 'toggle', help: 'Transcribe reference audio automatically.' }),
+        this.fld('qwen', 'language', 'Language', { type: 'text', placeholder: 'auto' }),
+        this.fld('qwen', 'speed', 'Speed', { type: 'slider', min: 0.5, max: 2, step: 0.05, fmt: v => v.toFixed(2) + '×' }),
+      ]),
+      G('Sampling', [
+        this.fld('qwen', 'temperature', 'Temperature', { type: 'slider', min: 0.1, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('qwen', 'maxTokens', 'Max tokens', { type: 'number', min: 100, max: 4000, step: 50 }),
+      ]),
+    ];
+    if (id === 'pocket-tts') return [
+      G('Basics', [
+        this.fld('pocket', 'voice', 'Preset voice URL / name', { type: 'text', placeholder: 'hf://...' }),
+        this.fld('pocket', 'temperature', 'Temperature', { type: 'slider', min: 0.1, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) }),
+      ]),
+      G('Decoding', [
+        this.fld('pocket', 'lsdDecodeSteps', 'LSD decode steps', { type: 'number', min: 1, max: 32 }),
+        this.fld('pocket', 'eosThreshold', 'EOS threshold', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
+        this.fld('pocket', 'noiseClamp', 'Noise clamp', { type: 'text', placeholder: 'optional' }),
+        this.fld('pocket', 'truncatePrompt', 'Truncate prompt', { type: 'toggle' }),
+      ]),
+    ];
+    if (id === 'voxcpm-ane') return [
+      G('Basics', [
+        this.fld('voxcpm', 'voice', 'Cached voice name', { type: 'text', placeholder: 'leave blank to use prompt audio' }),
+        this.fld('voxcpm', 'cfgValue', 'CFG value', { type: 'slider', min: 1, max: 5, step: 0.1, fmt: v => v.toFixed(1) }),
+      ]),
+      G('Inference', [
+        this.fld('voxcpm', 'inferenceTimesteps', 'Inference timesteps', { type: 'number', min: 4, max: 50 }),
+        this.fld('voxcpm', 'maxLength', 'Max length', { type: 'number', min: 256, max: 4096, step: 64 }),
+      ]),
+    ];
+    return [];
+  }
+
+  statusPill(status) {
+    const map = {
+      queued: ['var(--tx-2)', 'var(--bg-3)', 'Queued'], preparing: ['var(--blue)', 'var(--blue-dim)', 'Preparing'],
+      generating: ['var(--accent)', 'var(--accent-dim)', 'Generating'], watermarking: ['var(--purple)', 'var(--purple-dim)', 'Watermarking'],
+      converting: ['var(--warn)', 'var(--warn-dim)', 'Converting'], completed: ['var(--accent)', 'var(--accent-dim)', 'Completed'],
+      failed: ['var(--err)', 'var(--err-dim)', 'Failed'], cancelled: ['var(--tx-3)', 'var(--bg-3)', 'Cancelled'],
+    };
+    return map[status] || map.queued;
+  }
+
+  // ============ MAIN renderVals ============
+  renderVals() {
+    const st = this.state, id = st.selectedModelId, sel = this.model(id), stat = st.statusMap;
+    const v = {};
+    v.theme = st.theme;
+    v.setDark = () => this.setState({ theme: 'dark' });
+    v.setLight = () => this.setState({ theme: 'light' });
+    v.darkBg = st.theme === 'dark' ? 'var(--bg-1)' : 'transparent';
+    v.darkTxt = st.theme === 'dark' ? 'var(--tx)' : 'var(--tx-3)';
+    v.lightBg = st.theme === 'light' ? 'var(--bg-1)' : 'transparent';
+    v.lightTxt = st.theme === 'light' ? 'var(--tx)' : 'var(--tx-3)';
+    v.darkBg = st.theme === 'dark' ? 'var(--accent)' : 'transparent';
+    v.darkTxt = st.theme === 'dark' ? 'var(--accent-tx)' : 'var(--tx-3)';
+    v.lightBg = st.theme === 'light' ? 'var(--accent)' : 'transparent';
+    v.lightTxt = st.theme === 'light' ? 'var(--accent-tx)' : 'var(--tx-3)';
+
+    // nav
+    const activeJobsCount = st.jobs.filter(j => ['queued', 'preparing', 'generating', 'watermarking', 'converting'].includes(j.status)).length;
+    const navDef = [
+      { id: 'generate', label: 'Generate', icon: 'gen' },
+      { id: 'voices', label: 'Voices', icon: 'voice', badge: st.voices.length },
+      { id: 'jobs', label: 'Jobs', icon: 'jobs', badge: activeJobsCount || null, accentBadge: activeJobsCount > 0 },
+      { id: 'models', label: 'Models & System', icon: 'models' },
+      { id: 'watermark', label: 'Watermark Lab', icon: 'wm' },
+    ];
+    v.navItems = navDef.map(n => ({
+      label: n.label, icon: n.icon, onClick: () => this.setSurface(n.id),
+      color: st.surface === n.id ? 'var(--tx)' : 'var(--tx-2)',
+      bg: st.surface === n.id ? 'var(--bg-3)' : 'transparent',
+      badge: n.badge || null,
+      badgeBg: n.accentBadge ? 'var(--accent)' : 'var(--bg-hover)',
+      badgeColor: n.accentBadge ? 'var(--accent-tx)' : 'var(--tx-2)',
+    }));
+    v.ffmpegDot = 'var(--accent)'; v.ffmpegLabel = 'ready';
+    v.serverClock = new Date(st.clock).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    v.isGenerate = st.surface === 'generate';
+    v.isVoices = st.surface === 'voices';
+    v.isJobs = st.surface === 'jobs';
+    v.isModels = st.surface === 'models';
+    v.isWatermark = st.surface === 'watermark';
+
+    v.loadedCount = this.models.filter(m => stat[m.id] && stat[m.id].loaded).length;
+    v.modelCount = this.models.length;
+    v.railOpen = st.railOpen; v.railClosed = !st.railOpen;
+    v.railW = st.railOpen ? '248px' : '52px';
+    v.toggleRail = () => this.setState(s => ({ railOpen: !s.railOpen }));
+    v.setOpen = st.setOpen; v.setClosed = !st.setOpen;
+    v.setW = st.setOpen ? '344px' : '52px';
+    v.toggleSet = () => this.setState(s => ({ setOpen: !s.setOpen }));
+    v.railDots = this.models.map(m => ({ dot: (stat[m.id] && stat[m.id].loaded) ? 'var(--accent)' : 'var(--line-3)', sel: m.id === id ? 'var(--accent)' : 'transparent', onSelect: () => this.selectModel(m.id), letter: m.name[0] }));
+
+    // model rail
+    v.modelRail = this.models.map(m => {
+      const ms = stat[m.id] || {};
+      const chips = [];
+      if (this.needsRef(m.id)) chips.push({ label: 'ref', bg: 'var(--warn-dim)', color: 'var(--warn)' });
+      if (m.id === 'f5-hindi-urdu' || m.id === 'voxcpm-ane') chips.push({ label: 'transcript', bg: 'var(--blue-dim)', color: 'var(--blue)' });
+      if (this.wmSupported(m.id)) chips.push({ label: 'watermark', bg: 'var(--purple-dim)', color: 'var(--purple)' });
+      const isSel = m.id === id;
+      return {
+        name: m.name, onSelect: () => this.selectModel(m.id),
+        dot: ms.loaded ? 'var(--accent)' : 'var(--line-3)',
+        meta: (ms.loaded ? 'loaded' : 'idle') + ' · ' + (ms.device || '—') + ' · ' + (ms.total_generations || 0) + ' runs',
+        chips,
+        bg: isSel ? 'var(--bg-3)' : 'transparent',
+        borderColor: isSel ? 'var(--accent-line)' : 'var(--line)',
+        accentBar: isSel ? 'var(--accent)' : 'transparent',
+      };
+    });
+
+    // console header
+    v.selModelName = sel ? sel.name : '—';
+    const reqs = [];
+    reqs.push({ key: 'text', label: 'Script', ok: !!st.text.trim() });
+    if (this.needsRef(id)) reqs.push({ key: 'ref', label: 'Reference', ok: this.refReady() });
+    if (id === 'index-tts2' && this.s().index.emoMode === 'emo_ref') reqs.push({ key: 'emo', label: 'Emotion', ok: !!st.emoFileBlob });
+    if (this.needsTranscript(id)) reqs.push({ key: 'tr', label: 'Transcript', ok: !!st.promptText.trim() || (id === 'voxcpm-ane' && !!this.s().voxcpm.voice.trim()) });
+    if (id === 'cosyvoice3-mlx' && this.s().cosy.mode === 'instruct') reqs.push({ key: 'in', label: 'Instruction', ok: !!st.instructText.trim() });
+    v.reqBadges = reqs.map(r => ({ label: r.label, mark: r.ok ? '✓' : '○', bg: r.ok ? 'var(--accent-dim)' : 'var(--bg-3)', color: r.ok ? 'var(--accent)' : 'var(--tx-3)' }));
+
+    // script
+    v.text = st.text;
+    v.onText = e => this.setState({ text: e.target.value });
+    v.charCount = st.text.length;
+    v.charColor = st.text.length > 0 ? 'var(--tx-3)' : 'var(--err)';
+
+    // reference
+    v.showReference = this.needsRef(id) || id === 'voxcpm-ane' || id === 'chatterbox-multilingual';
+    v.refRequired = this.needsRef(id);
+    const tabs = [['saved', 'Saved'], ['upload', 'Upload'], ['record', 'Record'], ['none', 'None']];
+    v.refTabs = tabs.map(([k, l]) => ({ label: l, onClick: () => this.setRefMode(k), color: st.refMode === k ? 'var(--accent-tx)' : 'var(--tx-2)', bg: st.refMode === k ? 'var(--accent)' : 'transparent' }));
+    v.refSaved = st.refMode === 'saved'; v.refUpload = st.refMode === 'upload'; v.refRecord = st.refMode === 'record';
+    const cv = this.compatVoices();
+    v.hasCompatibleVoices = v.refSaved && cv.length > 0;
+    v.noCompatibleVoices = v.refSaved && cv.length === 0;
+    v.compatibleVoices = cv.map(vo => {
+      const aUrl = new URL(this.__voiceAudioUrl(vo.id), window.location.href).href;
+      const playing = st.activeAudioUrl === aUrl && st.isPlaying;
+      return {
+        name: vo.name, dur: this.fmtSec(vo.duration_s), created: this.fmtAgo(vo.created_at), hasTranscript: vo.has_transcript,
+        onPick: () => this.pickVoice(vo.id),
+        onPreview: () => this.playUrl(this.__voiceAudioUrl(vo.id)),
+        playGlyph: playing ? '❚❚' : '▶',
+        previewBg: playing ? 'var(--accent)' : 'var(--bg-3)',
+        previewTx: playing ? 'var(--accent-tx)' : 'var(--tx-2)',
+        border: st.selectedVoiceId === vo.id ? 'var(--accent-line)' : 'var(--line)',
+        bg: st.selectedVoiceId === vo.id ? 'var(--accent-dim)' : 'var(--bg-2)',
+        radio: st.selectedVoiceId === vo.id ? 'var(--accent)' : 'var(--line-3)',
+        radioFill: st.selectedVoiceId === vo.id ? 'var(--accent)' : 'transparent',
+      };
+    });
+    v.goVoices = () => this.setSurface('voices');
+    v.mockUpload = () => this.mockUpload();
+    v.mockRecord = () => this.mockRecord();
+    v.refFileReady = st.refFileReady; v.refFileName = st.refFileName; v.refPreviewUrl = st.refPreviewUrl;
+    v.previewReference = () => this.previewReference();
+    v.saveReferenceVoice = () => this.saveReferenceVoice();
+    v.refPreviewLabel = st.refPreviewUrl && st.activeAudioUrl === st.refPreviewUrl && st.isPlaying ? 'Stop' : 'Listen';
+    v.recBtnBg = st.recording ? 'var(--err)' : 'var(--bg-3)'; v.recBtnTx = st.recording ? '#fff' : 'var(--tx-2)';
+    v.recBtnLabel = st.recording ? 'Stop recording' : 'Start recording'; v.recDotRadius = st.recording ? '2px' : '50%';
+    v.showTranscript = (this.needsTranscript(id) || id === 'qwen3-tts-mlx') && st.refMode !== 'none';
+    v.transcriptRequired = this.needsTranscript(id);
+    v.transcriptHint = id === 'qwen3-tts-mlx' ? (this.s().qwen.autoTranscribe ? 'optional — auto-transcribe on' : 'optional') : 'verbatim';
+    v.promptText = st.promptText; v.onPromptText = e => this.setState({ promptText: e.target.value });
+
+    v.showInstruct = id === 'cosyvoice3-mlx' && this.s().cosy.mode === 'instruct';
+    v.instructText = st.instructText; v.onInstruct = e => this.setState({ instructText: e.target.value });
+    v.showEmotionReference = id === 'index-tts2' && this.s().index.emoMode === 'emo_ref';
+    v.chooseEmotionFile = () => this.chooseEmotionFile();
+    v.previewEmotion = () => this.previewEmotion();
+    v.clearEmotionFile = () => this.clearEmotionFile();
+    v.emoFileReady = !!st.emoFileBlob;
+    v.emoFileName = st.emoFileName || ''; v.emoPreviewUrl = st.emoPreviewUrl;
+    v.emoPreviewLabel = st.emoPreviewUrl && st.activeAudioUrl === st.emoPreviewUrl && st.isPlaying ? 'Stop' : 'Listen';
+
+    // action bar
+    const fmts = ['wav', 'mp3', 'flac'];
+    v.formatTabs = fmts.map(f => ({ label: f.toUpperCase(), onClick: () => this.setFormat(f), color: st.outputFormat === f ? 'var(--accent-tx)' : 'var(--tx-2)', bg: st.outputFormat === f ? 'var(--accent)' : 'transparent' }));
+    const wmOk = this.wmSupported(id);
+    v.toggleWatermark = () => this.toggleWm();
+    v.wmDisabled = !wmOk; v.wmOpacity = wmOk ? '1' : '0.5';
+    const wmOn = wmOk && st.watermarkEnabled;
+    v.wmTrack = wmOn ? 'var(--accent)' : 'var(--line-3)'; v.wmKnobX = wmOn ? '15px' : '2px';
+    v.wmLabel = !wmOk ? 'Not supported' : (wmOn ? 'On' : 'Off');
+
+    const reason = this.validate();
+    v.blockReason = reason;
+    v.runDisabled = !!reason;
+    v.runLabel = reason ? 'Run' : 'Run generation';
+    v.runBg = reason ? 'var(--bg-3)' : 'var(--accent)';
+    v.runColor = reason ? 'var(--tx-3)' : 'var(--accent-tx)';
+    v.runOpacity = reason ? '0.7' : '1';
+    v.runShadow = reason ? 'none' : '0 4px 14px rgba(61,220,151,.25)';
+    v.runGenerate = () => this.runGenerate();
+
+    // settings
+    v.settingGroups = this.schema(id);
+    v.resetSettings = () => this.resetSettings();
+
+    // transport
+    const active = st.activeJobId ? st.jobs.find(j => j.id === st.activeJobId) : null;
+    const out = st.outputJobId ? st.jobs.find(j => j.id === st.outputJobId && j.status === 'completed') : null;
+    v.transportRunning = !!active;
+    v.transportDone = !active && !!out;
+    v.transportIdle = !active && !out;
+    if (active) {
+      const chain = ['queued', 'preparing', 'generating', 'watermarking', 'converting'];
+      const labels = { queued: 'Queued', preparing: 'Preparing', generating: 'Generating', watermarking: 'Watermark', converting: 'Convert' };
+      const wmJob = active.watermark_enabled;
+      const shown = chain.filter(p => p !== 'watermarking' || wmJob);
+      const curIdx = shown.indexOf(active.phase);
+      v.activePhaseLabel = labels[active.phase] || 'Working';
+      v.activeJobModel = this.model(active.model_id).name;
+      v.activeElapsed = Math.max(0, Math.floor((Date.now() - (active._started || Date.now())) / 1000)) + 's elapsed';
+      v.phaseSteps = shown.map((p, i) => ({
+        label: labels[p], active: i === curIdx,
+        bar: i < curIdx ? 'var(--accent)' : 'var(--line-2)',
+        tx: i <= curIdx ? 'var(--tx-2)' : 'var(--tx-4)',
+      }));
+      v.cancelJob = () => this.cancelJob();
+    }
+    if (out) {
+      v.outName = out.output.filename;
+      v.outWatermarked = !!out.watermark_enabled;
+      const audioTime = st.audioDuration ? ' · ' + this.fmtSec(st.audioCurrent) + '/' + this.fmtSec(st.audioDuration) : '';
+      v.outMeta = this.fmtSec(out.output.duration_s) + ' · ' + (out.output.sample_rate / 1000) + 'kHz · ' + out.output_format.toUpperCase() + audioTime;
+      const outUrl = new URL(this.__audioUrl(out.id), window.location.href).href;
+      const outActive = st.activeAudioUrl === outUrl;
+      v.outAudioUrl = outUrl;
+      v.isPlaying = outActive && st.isPlaying; v.isPaused = !(outActive && st.isPlaying);
+      v.togglePlay = () => this.togglePlay();
+      v.downloadOut = () => this.downloadOut();
+    }
+
+    // toast
+    v.toast = st.toast;
+    const tk = { success: ['var(--accent)', 'var(--accent-dim)', 'var(--accent-line)', 'var(--tx)'], error: ['var(--err)', 'var(--err-dim)', 'var(--err)', 'var(--tx)'], warn: ['var(--warn)', 'var(--warn-dim)', 'var(--warn)', 'var(--tx)'] }[st.toastKind] || ['var(--accent)', 'var(--bg-2)', 'var(--line)', 'var(--tx)'];
+    v.toastDot = tk[0]; v.toastBg = tk[1]; v.toastLine = tk[2]; v.toastColor = tk[3];
+
+    return v;
+  }
+
+  // ============ surface renderers (imperative) ============
+  el(tag, style, props) { const e = document.createElement(tag); if (style) e.style.cssText = style; if (props) Object.assign(e, props); return e; }
+
+  renderVoices(root) {
+    const q = (this.state.voiceSearch || '').trim().toLowerCase();
+    const sort = this.state.voiceSort || 'recent';
+    let list = this.state.voices.slice();
+    if (q) list = list.filter(v => (v.name || '').toLowerCase().includes(q));
+    list.sort((a, b) => sort === 'name' ? (a.name || '').localeCompare(b.name || '') : sort === 'duration' ? (b.duration_s || 0) - (a.duration_s || 0) : (this.__ms(b.created_at) - this.__ms(a.created_at)));
+    const sig = 'voices2|' + this.state.voices.length + '|' + this.state.renamingId + '|' + this.state.addingVoice + '|' + this.state.theme + '|' + this.state.renameValue + '|' + this.state.newVoiceName + '|' + this.state.activeAudioUrl + '|' + this.state.isPlaying + '|' + this.state.expandedVoiceId + '|' + q + '|' + sort + '|' + JSON.stringify(this.state.voiceMeta || {});
+    if (root.__sig === sig) return; root.__sig = sig;
+    const __ss = this.__captureScroll(root);
+    root.innerHTML = '';
+    const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;padding:0 24px;border-bottom:1px solid var(--line)');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Voice Library' }));
+    head.appendChild(this.el('div', 'margin-left:12px;font-family:var(--mono);font-size:11px;color:var(--tx-3)', { textContent: this.state.voices.length + ' saved' }));
+    const addBtn = this.el('button', 'margin-left:auto;padding:9px 16px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12.5px', { textContent: '＋ Add voice' });
+    addBtn.onclick = () => this.setState({ addingVoice: !this.state.addingVoice });
+    head.appendChild(addBtn);
+    root.appendChild(head);
+
+    const body = this.el('div', 'flex:1;overflow-y:auto;padding:18px 24px');
+    body.setAttribute('data-scroll-keep', 'voices-body');
+
+    const tb = this.el('div', 'display:flex;gap:10px;align-items:center;margin-bottom:16px');
+    const search = this.el('input', 'flex:1;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--tx)', { placeholder: 'Search voices…', value: this.state.voiceSearch });
+    search.oninput = e => this.setState({ voiceSearch: e.target.value });
+    setTimeout(() => { if (document.activeElement !== search && this.state.voiceSearch) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch (err) {} } }, 0);
+    tb.appendChild(search);
+    const sortSel = this.el('select', 'background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:12.5px;color:var(--tx-2);cursor:pointer');
+    [['recent', 'Recent'], ['name', 'Name A–Z'], ['duration', 'Duration']].forEach(([val, label]) => { const o = this.el('option', '', { value: val, textContent: label }); if (sort === val) o.selected = true; sortSel.appendChild(o); });
+    sortSel.onchange = e => this.setState({ voiceSort: e.target.value });
+    tb.appendChild(sortSel);
+    body.appendChild(tb);
+
+    if (this.state.addingVoice) {
+      const card = this.el('div', 'border:1px solid var(--accent-line);border-radius:10px;background:var(--bg-1);padding:16px;margin-bottom:18px;display:flex;flex-direction:column;gap:12px');
+      card.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'New reference voice' }));
+      const row = this.el('div', 'display:flex;gap:10px;align-items:center');
+      const up = this.el('button', 'padding:14px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Upload audio' });
+      up.onclick = () => this.addVoice();
+      const rec = this.el('button', 'padding:14px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '● Record' });
+      rec.onclick = () => { this.setSurface('generate'); this.setRefMode('record'); this.mockRecord(); };
+      row.appendChild(up); row.appendChild(rec); card.appendChild(row);
+      const name = this.el('input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px', { placeholder: 'Voice name', value: this.state.newVoiceName });
+      name.oninput = e => this.setState({ newVoiceName: e.target.value });
+      card.appendChild(name);
+      const tr = this.el('input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px', { placeholder: 'Reference transcript (optional)', value: this.state.promptText });
+      tr.oninput = e => this.setState({ promptText: e.target.value });
+      card.appendChild(tr);
+      const acts = this.el('div', 'display:flex;gap:8px;justify-content:flex-end');
+      const cancel = this.el('button', 'padding:8px 16px;border:1px solid var(--line-2);border-radius:7px;color:var(--tx-2);font-weight:600;font-size:12px', { textContent: 'Cancel' });
+      cancel.onclick = () => this.setState({ addingVoice: false });
+      const save = this.el('button', 'padding:8px 18px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12px', { textContent: 'Save voice' });
+      save.onclick = () => this.addVoice();
+      acts.appendChild(cancel); acts.appendChild(save); card.appendChild(acts);
+      body.appendChild(card);
+    }
+
+    if (this.state.voices.length === 0 && !this.state.addingVoice) {
+      const empty = this.el('div', 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:80px;color:var(--tx-3);text-align:center');
+      empty.appendChild(this.el('div', 'font-size:15px;font-weight:600;color:var(--tx-2)', { textContent: 'No voices yet' }));
+      empty.appendChild(this.el('div', 'font-size:12.5px;max-width:300px', { textContent: 'Add a reference voice to reuse it across models without re-uploading audio every run.' }));
+      body.appendChild(empty);
+    } else if (list.length === 0) {
+      const empty = this.el('div', 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:60px;color:var(--tx-3);text-align:center');
+      empty.appendChild(this.el('div', 'font-size:13px;font-weight:600;color:var(--tx-2)', { textContent: 'No voices match "' + this.state.voiceSearch + '"' }));
+      body.appendChild(empty);
+    }
+
+    const rows = this.el('div', 'display:flex;flex-direction:column;gap:10px');
+    list.forEach(vo => {
+      const voiceUrl = this.__voiceAudioUrl(vo.id);
+      const voiceAbs = new URL(voiceUrl, window.location.href).href;
+      const playing = this.state.activeAudioUrl === voiceAbs && this.state.isPlaying;
+      const card = this.el('div', 'border:1px solid ' + (playing ? 'var(--accent-line)' : 'var(--line)') + ';border-radius:10px;background:var(--bg-1);padding:12px 14px;display:flex;flex-direction:column;gap:10px');
+
+      const row = this.el('div', 'display:flex;align-items:center;gap:13px');
+      const play = this.el('button', 'flex:0 0 auto;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;background:' + (playing ? 'var(--accent)' : 'var(--bg-3)') + ';color:' + (playing ? 'var(--accent-tx)' : 'var(--tx-2)') + ';border:1px solid var(--line-2)', { textContent: playing ? '❚❚' : '▶' });
+      play.onclick = () => this.playUrl(voiceUrl);
+      row.appendChild(play);
+
+      const info = this.el('div', 'flex:0 0 auto;width:190px;display:flex;flex-direction:column;gap:5px');
+      if (this.state.renamingId === vo.id) {
+        const inp = this.el('input', 'width:100%;background:var(--bg-2);border:1px solid var(--accent);border-radius:6px;padding:5px 8px;font-size:13px;font-weight:600', { value: this.state.renameValue });
+        inp.oninput = e => this.setState({ renameValue: e.target.value });
+        inp.onkeydown = e => { if (e.key === 'Enter') this.commitRename(); if (e.key === 'Escape') this.setState({ renamingId: null }); };
+        inp.onblur = () => this.commitRename();
+        setTimeout(() => inp.focus(), 0);
+        info.appendChild(inp);
+      } else {
+        const nameRow = this.el('div', 'display:flex;align-items:center;gap:7px');
+        nameRow.appendChild(this.el('div', 'font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: vo.name }));
+        if (vo.has_transcript) nameRow.appendChild(this.el('span', 'font-size:8.5px;font-weight:700;color:var(--blue);background:var(--blue-dim);padding:1px 5px;border-radius:4px;flex:0 0 auto', { textContent: 'TXT' }));
+        info.appendChild(nameRow);
+        const meta = this.el('div', 'display:flex;gap:10px;font-family:var(--mono);font-size:10px;color:var(--tx-3)');
+        meta.appendChild(this.el('span', '', { textContent: this.fmtSec(vo.duration_s) }));
+        meta.appendChild(this.el('span', '', { textContent: this.fmtAgo(vo.created_at) }));
+        info.appendChild(meta);
+      }
+      row.appendChild(info);
+
+      const wave = this.el('div', 'flex:1;min-width:110px;height:40px');
+      wave.setAttribute('data-wave', 'full'); wave.setAttribute('data-wave-url', voiceUrl); wave.setAttribute('data-wave-seek', '');
+      row.appendChild(wave);
+
+      const acts = this.el('div', 'flex:0 0 auto;display:flex;gap:6px');
+      const mk = (label, fn, primary) => { const b = this.el('button', 'padding:7px 11px;border-radius:6px;font-size:11px;font-weight:600;' + (primary ? 'background:var(--accent);color:var(--accent-tx)' : 'border:1px solid var(--line-2);color:var(--tx-2)'), { textContent: label }); b.onclick = fn; return b; };
+      acts.appendChild(mk('Use', () => this.useVoice(vo), true));
+      if (vo.has_transcript) acts.appendChild(mk(this.state.expandedVoiceId === vo.id ? 'Hide' : 'Text', () => this.toggleVoiceTranscript(vo.id)));
+      acts.appendChild(mk('Rename', () => this.startRename(vo)));
+      acts.appendChild(mk('Delete', () => this.deleteVoice(vo.id)));
+      row.appendChild(acts);
+      card.appendChild(row);
+
+      const chips = this.el('div', 'display:flex;flex-wrap:wrap;gap:4px;padding-left:51px');
+      this.voiceCacheLabels(vo).forEach(label => chips.appendChild(this.el('span', 'font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:4px;background:var(--accent-dim);color:var(--accent)', { textContent: label })));
+      vo.compatible_models.slice(0, 5).forEach(mid => chips.appendChild(this.el('span', 'font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--bg-3);color:var(--tx-2)', { textContent: this.model(mid) ? this.model(mid).name.split(' ')[0] : mid })));
+      if (vo.compatible_models.length > 5) chips.appendChild(this.el('span', 'font-size:9.5px;font-weight:600;padding:2px 7px;color:var(--tx-3)', { textContent: '+' + (vo.compatible_models.length - 5) }));
+      card.appendChild(chips);
+
+      if (this.state.expandedVoiceId === vo.id) {
+        const metaObj = (this.state.voiceMeta || {})[vo.id];
+        const panel = this.el('div', 'border:1px solid var(--line);border-radius:8px;background:var(--bg-2);padding:11px;font-size:12px;line-height:1.5;color:var(--tx-2);margin-left:51px');
+        panel.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);margin-bottom:6px', { textContent: 'Transcript' }));
+        panel.appendChild(this.el('div', '', { textContent: metaObj ? (metaObj.prompt_text || 'No transcript saved for this voice.') : 'Loading transcript...' }));
+        card.appendChild(panel);
+      }
+
+      rows.appendChild(card);
+    });
+    body.appendChild(rows);
+    root.appendChild(body);
+    this.__restoreScroll(root, __ss);
+    this.drawWaves();
+  }
+
+  renderJobs(root) {
+    const sig = 'jobs' + this.state.jobs.map(j => j.id + j.status).join(',') + this.state.jobFilter + this.state.jobDetailId + this.state.theme + this.state.activeAudioUrl + this.state.isPlaying;
+    if (root.__sig === sig) return; root.__sig = sig;
+    const __ss = this.__captureScroll(root);
+    root.innerHTML = '';
+    const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:0 24px;border-bottom:1px solid var(--line)');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Jobs' }));
+    const filters = this.el('div', 'margin-left:auto;display:flex;gap:2px;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px');
+    [['all', 'All'], ['active', 'Active'], ['completed', 'Completed'], ['failed', 'Failed']].forEach(([k, l]) => {
+      const b = this.el('button', 'padding:6px 13px;border-radius:5px;font-size:11.5px;font-weight:600;' + (this.state.jobFilter === k ? 'background:var(--accent);color:var(--accent-tx)' : 'color:var(--tx-2)'), { textContent: l });
+      b.onclick = () => this.setState({ jobFilter: k });
+      filters.appendChild(b);
+    });
+    head.appendChild(filters);
+    root.appendChild(head);
+
+    const wrap = this.el('div', 'flex:1;display:flex;min-height:0');
+    const body = this.el('div', 'flex:1;overflow-y:auto;min-width:0');
+    body.setAttribute('data-scroll-keep', 'jobs-body');
+
+    const activeStates = ['queued', 'preparing', 'generating', 'watermarking', 'converting'];
+    let jobs = this.state.jobs;
+    if (this.state.jobFilter === 'active') jobs = jobs.filter(j => activeStates.includes(j.status));
+    else if (this.state.jobFilter === 'completed') jobs = jobs.filter(j => j.status === 'completed');
+    else if (this.state.jobFilter === 'failed') jobs = jobs.filter(j => j.status === 'failed' || j.status === 'cancelled');
+
+    if (jobs.length === 0) {
+      const empty = this.el('div', 'padding:80px;text-align:center;color:var(--tx-3);font-size:13px', { textContent: 'No jobs match this filter.' });
+      body.appendChild(empty);
+    }
+
+    const cols = 'grid-template-columns:116px minmax(160px,1fr) 130px 64px 78px 86px';
+    const hdr = this.el('div', 'display:grid;' + cols + ';gap:12px;padding:11px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--tx-3)');
+    ['Status', 'Text', 'Model', 'Format', 'Duration', 'When'].forEach(h => hdr.appendChild(this.el('div', '', { textContent: h })));
+    if (jobs.length) body.appendChild(hdr);
+
+    jobs.forEach(j => {
+      const [col, bg, label] = this.statusPill(j.status);
+      const row = this.el('div', 'display:grid;' + cols + ';gap:12px;padding:13px 24px;border-bottom:1px solid var(--line);align-items:center;cursor:pointer;' + (this.state.jobDetailId === j.id ? 'background:var(--bg-3)' : ''));
+      row.onmouseenter = () => { if (this.state.jobDetailId !== j.id) row.style.background = 'var(--bg-1)'; };
+      row.onmouseleave = () => { if (this.state.jobDetailId !== j.id) row.style.background = ''; };
+      row.onclick = () => this.setState({ jobDetailId: j.id });
+      const pill = this.el('div', 'display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:' + col + ';background:' + bg + ';padding:4px 9px;border-radius:5px;width:fit-content');
+      if (activeStates.includes(j.status)) pill.appendChild(this.el('span', 'width:6px;height:6px;border-radius:50%;background:' + col + ';animation:pulse 1.2s infinite'));
+      pill.appendChild(this.el('span', '', { textContent: label }));
+      row.appendChild(pill);
+      row.appendChild(this.el('div', 'font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)', { textContent: j.text }));
+      row.appendChild(this.el('div', 'font-size:12px;color:var(--tx-2)', { textContent: this.model(j.model_id).name }));
+      row.appendChild(this.el('div', 'font-family:var(--mono);font-size:11px;color:var(--tx-2)', { textContent: j.output_format.toUpperCase() }));
+      row.appendChild(this.el('div', 'font-family:var(--mono);font-size:11px;color:var(--tx-2)', { textContent: this.fmtDur(j.worker_duration_ms) }));
+      row.appendChild(this.el('div', 'font-family:var(--mono);font-size:10.5px;color:var(--tx-3)', { textContent: this.fmtAgo(j.created_at) }));
+      body.appendChild(row);
+    });
+    wrap.appendChild(body);
+
+    // detail drawer
+    const dj = this.state.jobDetailId ? this.state.jobs.find(j => j.id === this.state.jobDetailId) : null;
+    if (dj) {
+      const d = this.el('div', 'width:340px;flex:0 0 340px;border-left:1px solid var(--line);background:var(--bg-1);overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:16px');
+      d.setAttribute('data-scroll-keep', 'jobs-detail');
+      const dh = this.el('div', 'display:flex;align-items:center;gap:10px');
+      const [col, bg, label] = this.statusPill(dj.status);
+      dh.appendChild(this.el('div', 'font-weight:700;font-size:14px', { textContent: 'Run ' + dj.id.replace('job_', '#') }));
+      dh.appendChild(this.el('span', 'font-size:11px;font-weight:600;color:' + col + ';background:' + bg + ';padding:3px 9px;border-radius:5px', { textContent: label }));
+      const close = this.el('button', 'margin-left:auto;color:var(--tx-3);font-size:16px;width:24px;height:24px', { textContent: '×' });
+      close.onclick = () => this.setState({ jobDetailId: null });
+      dh.appendChild(close);
+      d.appendChild(dh);
+
+      if (dj.status === 'completed' && dj.output) {
+        const player = this.el('div', 'border:1px solid var(--line);border-radius:9px;background:var(--bg-2);padding:13px;display:flex;flex-direction:column;gap:10px');
+        const jobUrl = this.__audioUrl ? this.__audioUrl(dj.id) : ('/api/generation-jobs/' + encodeURIComponent(dj.id) + '/audio');
+        const jobAbs = new URL(jobUrl, window.location.href).href;
+        const w = this.el('div', 'height:36px'); w.setAttribute('data-wave', 'full'); w.setAttribute('data-wave-url', jobUrl); w.setAttribute('data-wave-seek', ''); player.appendChild(w);
+        const prow = this.el('div', 'display:flex;gap:8px');
+        const play = this.el('button', 'flex:1;padding:9px;border-radius:7px;background:var(--bg-3);border:1px solid var(--line-2);font-weight:600;font-size:12px;color:var(--tx-2)', { textContent: this.state.activeAudioUrl === jobAbs && this.state.isPlaying ? 'Ⅱ Pause' : '▶ Play' });
+        play.onclick = () => this.playUrl(jobUrl);
+        const dl = this.el('a', 'flex:1;padding:9px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12px;text-align:center;text-decoration:none', { textContent: '↓ Download', href: jobUrl, download: dj.output.filename || ('output.' + dj.output_format) });
+        prow.appendChild(play); prow.appendChild(dl); player.appendChild(prow);
+        d.appendChild(player);
+      }
+      if (dj.error) {
+        const err = this.el('div', 'border:1px solid var(--err);background:var(--err-dim);border-radius:8px;padding:12px;font-size:12px;color:var(--err);line-height:1.5');
+        err.appendChild(this.el('div', 'font-weight:700;margin-bottom:4px', { textContent: 'Error' }));
+        err.appendChild(this.el('div', '', { textContent: dj.error }));
+        d.appendChild(err);
+      }
+
+      const facts = [['Model', this.model(dj.model_id).name], ['Voice', dj.voice_id ? (this.state.voices.find(x => x.id === dj.voice_id) || {}).name || dj.voice_id : 'ad-hoc / none'], ['Format', dj.output_format.toUpperCase()], ['Watermark', dj.watermark_enabled ? 'enabled' : 'off'], ['Duration', this.fmtDur(dj.worker_duration_ms)], ['Created', new Date(dj.created_at).toLocaleString()]];
+      const fl = this.el('div', 'display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden');
+      facts.forEach(([k, val], i) => { const r = this.el('div', 'display:flex;justify-content:space-between;gap:12px;padding:9px 12px;font-size:12px;' + (i % 2 ? 'background:var(--bg-2)' : '')); r.appendChild(this.el('span', 'color:var(--tx-3)', { textContent: k })); r.appendChild(this.el('span', 'font-weight:600;text-align:right', { textContent: val })); fl.appendChild(r); });
+      d.appendChild(fl);
+
+      const tw = this.el('div', '');
+      tw.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);margin-bottom:6px', { textContent: 'Script' }));
+      tw.appendChild(this.el('div', 'font-size:12.5px;line-height:1.5;color:var(--tx-2);background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:11px', { textContent: dj.text }));
+      d.appendChild(tw);
+
+      const acts = this.el('div', 'display:flex;flex-wrap:wrap;gap:8px');
+      const mk = (l, fn, danger) => { const b = this.el('button', 'flex:1;min-width:90px;padding:9px;border-radius:7px;font-size:11.5px;font-weight:600;' + (danger ? 'border:1px solid var(--err);color:var(--err);background:var(--err-dim)' : 'border:1px solid var(--line-2);color:var(--tx-2)'), { textContent: l }); b.onclick = fn; return b; };
+      acts.appendChild(mk('Restore settings', () => this.restoreJob(dj)));
+      if (activeStates.includes(dj.status)) acts.appendChild(mk('Cancel', () => this.cancelJobById(dj.id), true));
+      acts.appendChild(mk('Delete', () => this.deleteJob(dj.id), true));
+      d.appendChild(acts);
+      wrap.appendChild(d);
+    }
+
+    root.appendChild(wrap);
+    this.__restoreScroll(root, __ss);
+    this.drawWaves();
+  }
+
+  renderModels(root) {
+    const sig = 'models' + JSON.stringify(this.state.statusMap) + this.state.theme + this.state.clock;
+    const __ss = this.__captureScroll(root);
+    root.innerHTML = '';
+    const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--line)');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Models & System' }));
+    const loaded = this.models.filter(m => this.state.statusMap[m.id].loaded).length;
+    head.appendChild(this.el('div', 'margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--tx-3)', { textContent: loaded + ' loaded · ffmpeg ready · ' + new Date(this.state.clock).toLocaleTimeString() }));
+    root.appendChild(head);
+
+    const body = this.el('div', 'flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:11px');
+    body.setAttribute('data-scroll-keep', 'models-body');
+    this.models.forEach(m => {
+      const ms = this.state.statusMap[m.id];
+      const c = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px 18px;display:flex;align-items:center;gap:18px');
+      const left = this.el('div', 'flex:1;min-width:0');
+      const t = this.el('div', 'display:flex;align-items:center;gap:9px;margin-bottom:5px');
+      t.appendChild(this.el('span', 'width:9px;height:9px;border-radius:50%;background:' + (ms.loaded ? 'var(--accent)' : 'var(--line-3)'), {}));
+      t.appendChild(this.el('span', 'font-weight:700;font-size:13.5px', { textContent: m.name }));
+      t.appendChild(this.el('span', 'font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:4px;' + (ms.loaded ? 'color:var(--accent);background:var(--accent-dim)' : 'color:var(--tx-3);background:var(--bg-3)'), { textContent: ms.loaded ? 'Loaded' : 'Unloaded' }));
+      left.appendChild(t);
+      left.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3);line-height:1.4', { textContent: m.desc }));
+      c.appendChild(left);
+
+      const stats = this.el('div', 'display:flex;gap:26px;flex:0 0 auto');
+      const mkStat = (label, val) => { const s = this.el('div', 'text-align:right'); s.appendChild(this.el('div', 'font-family:var(--mono);font-size:14px;font-weight:600;color:var(--tx)', { textContent: val })); s.appendChild(this.el('div', 'font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--tx-3);margin-top:2px', { textContent: label })); return s; };
+      stats.appendChild(mkStat('Device', ms.device || '—'));
+      stats.appendChild(mkStat('Runs', String(ms.total_generations || 0)));
+      stats.appendChild(mkStat('Last gen', this.fmtDur(ms.last_generation_duration_ms)));
+      c.appendChild(stats);
+
+      const btn = this.el('button', 'flex:0 0 auto;padding:9px 16px;border-radius:7px;font-weight:600;font-size:12px;' + (ms.loaded ? 'border:1px solid var(--err);color:var(--err);background:var(--err-dim)' : 'border:1px solid var(--line-2);color:var(--tx-2)'), { textContent: ms.loaded ? 'Unload' : 'Load' });
+      btn.onclick = () => ms.loaded ? this.unloadModel(m.id) : this.loadModel(m.id);
+      c.appendChild(btn);
+      body.appendChild(c);
+    });
+    root.appendChild(body);
+    this.__restoreScroll(root, __ss);
+  }
+
+  renderWatermark(root) {
+    const runs = [
+      { id: 'wm_run_a', label: 'sanity_ids_v2', status: 'passed', updated_at: Date.now() - 3600000 * 4, metrics: { accuracy: 0.991, ber: 0.004, snr_db: 41.2, payload_bits: 16 }, config: { model: 'index-tts2', threshold: 0.35, embed_strength: 0.06 }, report: 'Decoder recovered 16/16 payload bits across 240 eval clips. BER well below 0.01 target; perceptual SNR within transparent range.' },
+      { id: 'wm_run_b', label: 'qwen_overfit_check', status: 'passed', updated_at: Date.now() - 86400000, metrics: { accuracy: 0.984, ber: 0.009, snr_db: 39.7, payload_bits: 16 }, config: { model: 'qwen3-tts-mlx', threshold: 0.35, embed_strength: 0.07 }, report: 'Overfit guardrail held on held-out speakers. Slight BER increase under MP3 re-encode but within tolerance.' },
+      { id: 'wm_run_c', label: 'robustness_mp3', status: 'review', updated_at: Date.now() - 86400000 * 3, metrics: { accuracy: 0.93, ber: 0.041, snr_db: 36.1, payload_bits: 16 }, config: { model: 'index-tts2', threshold: 0.4, embed_strength: 0.05 }, report: 'Aggressive 64kbps re-encode degrades recovery. Flagged for review; consider raising embed strength.' },
+    ];
+    const sig = 'wm' + this.state.selectedRunId + this.state.theme + this.state.wmThreshold;
+    if (root.__sig === sig) return; root.__sig = sig;
+    root.innerHTML = '';
+    const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--line)');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Watermark Lab' }));
+    head.appendChild(this.el('div', 'margin-left:12px;font-size:12px;color:var(--tx-3)', { textContent: 'Inspect runs and verify audio for embedded payloads' }));
+    root.appendChild(head);
+
+    const wrap = this.el('div', 'flex:1;display:flex;min-height:0');
+    const list = this.el('div', 'width:280px;flex:0 0 280px;border-right:1px solid var(--line);background:var(--bg-1);overflow-y:auto;padding:12px');
+    list.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);padding:6px 8px 10px', { textContent: 'Runs' }));
+    runs.forEach(r => {
+      const sel = this.state.selectedRunId === r.id;
+      const stCol = r.status === 'passed' ? 'var(--accent)' : r.status === 'review' ? 'var(--warn)' : 'var(--err)';
+      const b = this.el('button', 'display:block;width:100%;text-align:left;padding:11px 12px;margin-bottom:5px;border-radius:8px;border:1px solid ' + (sel ? 'var(--accent-line)' : 'var(--line)') + ';background:' + (sel ? 'var(--bg-3)' : 'transparent') + ';border-left:3px solid ' + (sel ? 'var(--accent)' : 'transparent'));
+      const tr = this.el('div', 'display:flex;align-items:center;gap:8px;margin-bottom:4px');
+      tr.appendChild(this.el('span', 'width:7px;height:7px;border-radius:50%;background:' + stCol));
+      tr.appendChild(this.el('span', 'font-weight:600;font-size:12.5px', { textContent: r.label }));
+      b.appendChild(tr);
+      b.appendChild(this.el('div', 'font-family:var(--mono);font-size:10px;color:var(--tx-3);padding-left:15px', { textContent: r.status + ' · ' + this.fmtAgo(r.updated_at) }));
+      b.onclick = () => this.setState({ selectedRunId: r.id });
+      list.appendChild(b);
+    });
+    wrap.appendChild(list);
+
+    const detail = this.el('div', 'flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:18px;min-width:0');
+    const r = runs.find(x => x.id === this.state.selectedRunId) || runs[0];
+    const stCol = r.status === 'passed' ? 'var(--accent)' : r.status === 'review' ? 'var(--warn)' : 'var(--err)';
+    const dh = this.el('div', 'display:flex;align-items:center;gap:12px');
+    dh.appendChild(this.el('div', 'font-weight:700;font-size:17px', { textContent: r.label }));
+    dh.appendChild(this.el('span', 'font-size:11px;font-weight:700;text-transform:uppercase;color:' + stCol + ';background:' + stCol.replace('var(--', 'var(--').replace(')', '-dim)') + ';padding:3px 10px;border-radius:5px', { textContent: r.status }));
+    detail.appendChild(dh);
+
+    const metrics = this.el('div', 'display:grid;grid-template-columns:repeat(4,1fr);gap:12px');
+    const mdef = [['Accuracy', (r.metrics.accuracy * 100).toFixed(1) + '%'], ['Bit error rate', (r.metrics.ber * 100).toFixed(2) + '%'], ['SNR', r.metrics.snr_db.toFixed(1) + ' dB'], ['Payload', r.metrics.payload_bits + ' bits']];
+    mdef.forEach(([k, val]) => { const c = this.el('div', 'border:1px solid var(--line);border-radius:9px;background:var(--bg-1);padding:14px'); c.appendChild(this.el('div', 'font-family:var(--mono);font-size:22px;font-weight:600;color:var(--tx)', { textContent: val })); c.appendChild(this.el('div', 'font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--tx-3);margin-top:4px', { textContent: k })); metrics.appendChild(c); });
+    detail.appendChild(metrics);
+
+    const cfgWrap = this.el('div', '');
+    cfgWrap.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);margin-bottom:8px', { textContent: 'Config' }));
+    const cfg = this.el('div', 'display:flex;flex-wrap:wrap;gap:8px');
+    Object.entries(r.config).forEach(([k, val]) => { const c = this.el('div', 'font-family:var(--mono);font-size:11.5px;padding:6px 11px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2)'); c.appendChild(this.el('span', 'color:var(--tx-3)', { textContent: k + ': ' })); c.appendChild(this.el('span', 'color:var(--tx);font-weight:600', { textContent: String(val) })); cfg.appendChild(c); });
+    cfgWrap.appendChild(cfg);
+    detail.appendChild(cfgWrap);
+
+    const rep = this.el('div', '');
+    rep.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);margin-bottom:8px', { textContent: 'Report excerpt' }));
+    rep.appendChild(this.el('div', 'font-size:13px;line-height:1.6;color:var(--tx-2);background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:14px', { textContent: r.report }));
+    detail.appendChild(rep);
+
+    const verify = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px;display:flex;flex-direction:column;gap:12px');
+    verify.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'Verify audio' }));
+    verify.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3)', { textContent: 'Upload a clip to check for an embedded watermark payload.' }));
+    const vrow = this.el('div', 'display:flex;align-items:center;gap:12px');
+    const up = this.el('button', 'padding:12px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Choose audio' });
+    up.onclick = () => this.flash('Verified: payload detected (16/16 bits, confidence 0.97).', 'success');
+    vrow.appendChild(up);
+    const tl = this.el('div', 'display:flex;align-items:center;gap:9px');
+    tl.appendChild(this.el('span', 'font-size:12px;color:var(--tx-3)', { textContent: 'Threshold' }));
+    const slider = this.el('input', 'width:130px;accent-color:var(--accent)', {}); slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = this.state.wmThreshold;
+    slider.oninput = e => this.setState({ wmThreshold: parseFloat(e.target.value) });
+    tl.appendChild(slider);
+    tl.appendChild(this.el('span', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);width:36px', { textContent: this.state.wmThreshold.toFixed(2) }));
+    vrow.appendChild(tl);
+    verify.appendChild(vrow);
+    detail.appendChild(verify);
+
+    wrap.appendChild(detail);
+    root.appendChild(wrap);
+  }
+
+  // ============ Claude Exact backend wiring overrides ============
+  componentDidMount() {
+    this._clock = setInterval(() => this.setState({ clock: Date.now() }), 1000);
+    this.drawWaves(); this.injectIcons();
+    this._applyBucket();
+    this._onResize = () => this._applyBucket();
+    window.addEventListener('resize', this._onResize);
+    const root = this._rootEl();
+    if (root && window.ResizeObserver) {
+      this._ro = new ResizeObserver(() => this._applyBucket());
+      this._ro.observe(root);
+    }
+    this.__initAudioEngine();
+    this.__initExactBackend();
+  }
+
+  componentWillUnmount() {
+    clearInterval(this._clock);
+    if (this._jobTimer) clearTimeout(this._jobTimer);
+    if (this._pollTimer) clearInterval(this._pollTimer);
+    if (this._coreTimer) clearInterval(this._coreTimer);
+    this.pause();
+    if (this._audio) {
+      this._audio.src = '';
+      this._audio = null;
+    }
+    this.__revokeObjectUrl('refPreviewUrl');
+    this.__revokeObjectUrl('emoPreviewUrl');
+    if (this._ro) this._ro.disconnect();
+    if (this._onResize) window.removeEventListener('resize', this._onResize);
+  }
+
+  async __api(url, init) {
+    const res = await fetch(url, init);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    return data;
+  }
+
+  __ms(ts) { if (!ts) return Date.now(); return Math.abs(ts) < 1e12 ? ts * 1000 : ts; }
+  __modelName(name) { return String(name || '').split(' (')[0] || String(name || 'Model'); }
+  __activeStatus(status) { return ['queued', 'preparing', 'generating', 'watermarking', 'converting'].includes(status); }
+  __audioUrl(jobId) { return '/api/generation-jobs/' + encodeURIComponent(jobId) + '/audio'; }
+  __voiceAudioUrl(voiceId) { return '/api/voices/' + encodeURIComponent(voiceId) + '/audio'; }
+
+  __initAudioEngine() {
+    if (this._audio) return;
+    const audio = new Audio();
+    audio.preload = 'none';
+    audio.addEventListener('play', () => { this.setState({ isPlaying: true, activeAudioUrl: audio.src || this.state.activeAudioUrl }); this.__startWaveAnim(); });
+    audio.addEventListener('pause', () => { this.setState({ isPlaying: false, audioCurrent: audio.currentTime || 0, audioDuration: audio.duration || 0 }); this.__stopWaveAnim(); });
+    audio.addEventListener('ended', () => { this.setState({ isPlaying: false, audioCurrent: 0 }); this.__stopWaveAnim(); });
+    audio.addEventListener('timeupdate', () => this.setState({ audioCurrent: audio.currentTime || 0, audioDuration: Number.isFinite(audio.duration) ? audio.duration : 0 }));
+    audio.addEventListener('loadedmetadata', () => this.setState({ audioDuration: Number.isFinite(audio.duration) ? audio.duration : 0 }));
+    this._audio = audio;
+  }
+
+  playUrl(url) {
+    if (!url) return;
+    this.__initAudioEngine();
+    const absolute = new URL(url, window.location.href).href;
+    if (this._audio.src === absolute && !this._audio.paused) {
+      this.pause();
+      return;
+    }
+    if (this._audio.src !== absolute) {
+      this._audio.src = absolute;
+      this.setState({ activeAudioUrl: absolute, audioCurrent: 0, audioDuration: 0 });
+    }
+    this._audio.play().catch(e => this.flash((e && e.message) || 'Playback failed.', 'error'));
+  }
+
+  pause() {
+    if (this._audio && !this._audio.paused) this._audio.pause();
+  }
+
+  togglePlay() {
+    const out = this.state.outputJobId ? this.state.jobs.find(j => j.id === this.state.outputJobId && j.output) : null;
+    if (!out) return;
+    this.playUrl(this.__audioUrl(out.id));
+  }
+
+  __revokeObjectUrl(key) {
+    const url = this.state && this.state[key];
+    if (url && String(url).startsWith('blob:')) {
+      try { URL.revokeObjectURL(url); } catch {}
+    }
+  }
+
+  __setPreviewUrl(key, blob) {
+    this.__revokeObjectUrl(key);
+    return blob ? URL.createObjectURL(blob) : '';
+  }
+
+  previewReference() {
+    if (!this.state.refPreviewUrl) return;
+    this.playUrl(this.state.refPreviewUrl);
+  }
+
+  previewEmotion() {
+    if (!this.state.emoPreviewUrl) return;
+    this.playUrl(this.state.emoPreviewUrl);
+  }
+
+  clearEmotionFile() {
+    this.__revokeObjectUrl('emoPreviewUrl');
+    this.setState({ emoFileBlob: null, emoFileName: '', emoPreviewUrl: '' });
+  }
+
+  chooseEmotionFile() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      input.remove();
+      if (!file) return;
+      const url = this.__setPreviewUrl('emoPreviewUrl', file);
+      this.setState({ emoFileBlob: file, emoFileName: file.name, emoPreviewUrl: url });
+      this.flash('Emotion reference loaded.', 'success');
+    };
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  __defaultStatusMap(models, incoming) {
+    const out = {};
+    (models || this.models).forEach(m => {
+      const s = (incoming && incoming[m.id]) || {};
+      out[m.id] = {
+        loaded: !!s.loaded,
+        device: s.device || 'unknown',
+        last_generation_duration_ms: s.last_generation_duration_ms || null,
+        last_generation_time: this.__ms(s.last_generation_time),
+        total_generations: s.total_generations || 0,
+      };
+    });
+    return out;
+  }
+
+  __normalizeJob(j) {
+    return {
+      ...j,
+      created_at: this.__ms(j.created_at),
+      updated_at: this.__ms(j.updated_at),
+      completed_at: j.completed_at ? this.__ms(j.completed_at) : null,
+      _started: this.__ms(j.started_at || j.created_at),
+      phase: j.phase || j.status,
+      output_format: j.output_format || (j.output && j.output.format) || 'wav',
+    };
+  }
+
+  __normalizeVoice(v) {
+    return {
+      ...v,
+      created_at: this.__ms(v.created_at),
+      compatible_models: Array.isArray(v.compatible_models) ? v.compatible_models : this.models.map(m => m.id),
+      has_caches: v.has_caches || {},
+    };
+  }
+
+  voiceCacheLabels(voice) {
+    const caches = (voice && voice.has_caches) || {};
+    const labels = [];
+    if (caches['qwen3-tts-mlx']) labels.push('Qwen cache');
+    if (caches['index-tts2']) labels.push('Index cache');
+    if (caches['chatterbox-multilingual']) labels.push('Chatterbox cache');
+    if (!labels.length && caches[this.state.selectedModelId]) labels.push('Warm for selected model');
+    return labels;
+  }
+
+  async toggleVoiceTranscript(id) {
+    if (this.state.expandedVoiceId === id) {
+      this.setState({ expandedVoiceId: null });
+      return;
+    }
+    this.setState({ expandedVoiceId: id });
+    if ((this.state.voiceMeta || {})[id]) return;
+    try {
+      const meta = await this.__api('/api/voices/' + encodeURIComponent(id));
+      this.setState(s => ({ voiceMeta: { ...(s.voiceMeta || {}), [id]: meta } }));
+    } catch (e) {
+      this.setState(s => ({ voiceMeta: { ...(s.voiceMeta || {}), [id]: { prompt_text: e.message || 'Transcript unavailable.' } } }));
+    }
+  }
+
+  async __initExactBackend() {
+    await this.__refreshCore(false);
+    this._coreTimer = setInterval(() => this.__refreshCore(true), 5000);
+  }
+
+  async __refreshCore(quiet) {
+    try {
+      const [modelsRes, infoRes, statusRes, voicesRes, jobsRes, runsRes] = await Promise.all([
+        this.__api('/api/models'),
+        this.__api('/api/info'),
+        this.__api('/api/status'),
+        this.__api('/api/voices'),
+        this.__api('/api/generation-jobs'),
+        this.__api('/api/watermark/runs'),
+      ]);
+      const models = (modelsRes.models || []).map(m => ({ id: m.id, name: this.__modelName(m.name), desc: m.description || '' }));
+      if (models.length) this.models = models;
+      const voices = (voicesRes.voices || []).map(v => this.__normalizeVoice(v));
+      const jobs = (jobsRes.jobs || []).map(j => this.__normalizeJob(j));
+      const statusMap = this.__defaultStatusMap(this.models, statusRes.models || {});
+      const selectedModelId = this.models.some(m => m.id === this.state.selectedModelId) ? this.state.selectedModelId : (this.models[0] && this.models[0].id) || this.state.selectedModelId;
+      const selectedVoiceId = voices.some(v => v.id === this.state.selectedVoiceId) ? this.state.selectedVoiceId : (voices[0] && voices[0].id) || '';
+      const outputJobId = jobs.some(j => j.id === this.state.outputJobId && j.status === 'completed') ? this.state.outputJobId : ((jobs.find(j => j.status === 'completed' && j.output) || {}).id || null);
+      const active = jobs.find(j => this.__activeStatus(j.status));
+      this.setState({
+        statusMap,
+        voices,
+        jobs,
+        selectedModelId,
+        selectedVoiceId,
+        outputJobId,
+        activeJobId: active ? active.id : this.state.activeJobId,
+        clock: this.__ms(infoRes.time),
+        ffmpegAvailable: !!(infoRes.ffmpeg && infoRes.ffmpeg.available),
+        wmRuns: runsRes.runs || [],
+        selectedRunId: this.state.selectedRunId && (runsRes.runs || []).some(r => r.id === this.state.selectedRunId) ? this.state.selectedRunId : (runsRes.default_run_id || ((runsRes.runs || [])[0] || {}).id || this.state.selectedRunId),
+        hydrated: true,
+      });
+      if (!quiet) this.flash('Live backend data loaded.', 'success');
+    } catch (e) {
+      if (!quiet) this.flash(e.message || 'Failed to load backend data.', 'error');
+    }
+  }
+
+  compatVoices() {
+    return this.state.voices.filter(v => !v.compatible_models || v.compatible_models.includes(this.state.selectedModelId));
+  }
+
+  refReady() {
+    const st = this.state;
+    if (st.refMode === 'saved') return !!st.selectedVoiceId && this.compatVoices().some(v => v.id === st.selectedVoiceId);
+    if (st.refMode === 'upload' || st.refMode === 'record') return !!st.refFileBlob || st.refFileReady;
+    return false;
+  }
+
+  async mockUpload() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const url = this.__setPreviewUrl('refPreviewUrl', file);
+      this.setState({ refMode: 'upload', refFileBlob: file, refFileReady: true, refFileName: file.name, refPreviewUrl: url });
+      this.flash('Reference audio loaded.', 'success');
+      input.remove();
+    };
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  async mockRecord() {
+    if (this.state.recording && this._recorder) { this._recorder.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      const rec = new MediaRecorder(stream);
+      this._recorder = rec;
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const url = this.__setPreviewUrl('refPreviewUrl', blob);
+        this.setState({ recording: false, refMode: 'record', refFileBlob: blob, refFileReady: true, refFileName: 'recorded-reference.webm', refPreviewUrl: url });
+        this.flash('Recording captured.', 'success');
+      };
+      rec.start();
+      this.setState({ recording: true });
+    } catch (e) { this.flash(e.message || 'Recording failed.', 'error'); }
+  }
+
+  __appendParams(form, id) {
+    const s = this.s();
+    if (id === 'index-tts2') {
+      const x = s.index; ['emoMode','emoAlpha','useRandom','fastMode','doSample','temperature','topP','topK','numBeams','repetitionPenalty','lengthPenalty'].forEach(k => form.append(k.replace(/[A-Z]/g, m => '_' + m.toLowerCase()), String(x[k])));
+      form.append('emo_mode', x.emoMode); form.append('emo_alpha', String(x.emoAlpha)); form.append('use_random', String(x.useRandom)); form.append('max_text_tokens_per_segment', String(x.maxTextTokens)); form.append('max_mel_tokens', String(x.maxMelTokens));
+      if (x.emoMode === 'emo_vector') form.append('emo_vector', x.emoVector || '');
+      if (x.emoMode === 'emo_text') form.append('emo_text', x.emoText || '');
+    } else if (id === 'chatterbox-multilingual') {
+      const x = s.chatterbox; form.append('language_id', x.language); form.append('use_prompt_audio', String(x.usePrompt)); form.append('cfg_weight', String(x.cfgWeight)); form.append('temperature', String(x.temperature)); form.append('exaggeration', String(x.exaggeration)); form.append('fast_mode', String(x.fastMode)); form.append('enable_chunking', String(x.enableChunking)); form.append('max_chunk_chars', String(x.maxChunkChars)); form.append('crossfade_ms', String(x.crossfadeMs)); form.append('enable_df', String(x.enableDf)); form.append('enable_novasr', String(x.enableNovasr));
+    } else if (id === 'f5-hindi-urdu') {
+      const x = s.f5; form.append('roman_mode', String(x.romanMode)); form.append('overrides_enabled', String(x.overridesEnabled)); form.append('overrides_text', x.overridesText || ''); form.append('cross_fade_duration', String(x.crossFade)); form.append('nfe_step', String(x.nfeStep)); form.append('speed', String(x.speed)); form.append('remove_silence', String(x.removeSilence)); form.append('seed', String(x.seed));
+    } else if (id === 'cosyvoice3-mlx') {
+      const x = s.cosy; form.append('cosy_model', x.model); form.append('mode', x.mode); form.append('language', x.language || 'auto'); form.append('speed', String(x.speed)); if (x.mode === 'instruct') form.append('instruct_text', this.state.instructText || x.instructText || '');
+    } else if (id === 'qwen3-tts-mlx') {
+      const x = s.qwen; form.append('qwen_model', x.model); form.append('auto_transcribe', x.autoTranscribe ? '1' : '0'); form.append('qwen_language', x.language || 'auto'); form.append('qwen_speed', String(x.speed)); form.append('qwen_temperature', String(x.temperature)); form.append('qwen_max_tokens', String(x.maxTokens));
+    } else if (id === 'pocket-tts') {
+      const x = s.pocket; form.append('voice', x.voice || ''); form.append('temperature', String(x.temperature)); form.append('lsd_decode_steps', String(x.lsdDecodeSteps)); form.append('eos_threshold', String(x.eosThreshold)); if (x.noiseClamp) form.append('noise_clamp', x.noiseClamp); form.append('truncate_prompt', String(x.truncatePrompt));
+    } else if (id === 'voxcpm-ane') {
+      const x = s.voxcpm; if (x.voice) form.append('voice', x.voice); form.append('cfg_value', String(x.cfgValue)); form.append('inference_timesteps', String(x.inferenceTimesteps)); form.append('max_length', String(x.maxLength));
+    }
+  }
+
+  validate() {
+    const id = this.state.selectedModelId, st = this.state, s = this.s();
+    if (!st.text.trim()) return 'Enter script text to generate.';
+    if (this.needsRef(id) && !this.refReady()) return 'This model needs a reference voice — pick, upload, or record one.';
+    if (id === 'index-tts2' && s.index.emoMode === 'emo_ref' && !st.emoFileBlob) return 'Emotion reference audio is required for emo_ref mode.';
+    if (this.needsTranscript(id) && !st.promptText.trim()) {
+      if (id === 'voxcpm-ane' && s.voxcpm.voice.trim()) {} else return 'A reference transcript is required for this model.';
+    }
+    if (id === 'cosyvoice3-mlx' && s.cosy.mode === 'instruct' && !st.instructText.trim()) return 'CosyVoice3 instruct mode needs instruction text.';
+    if (id === 'voxcpm-ane' && !s.voxcpm.voice.trim() && !this.refReady()) return 'VoxCPM needs a cached voice or prompt audio.';
+    return null;
+  }
+
+  async runGenerate() {
+    const reason = this.validate();
+    if (reason) { this.flash(reason, 'error'); return; }
+    const id = this.state.selectedModelId;
+    const form = new FormData();
+    form.append('model_id', id); form.append('text', this.state.text.trim()); form.append('output_format', this.state.outputFormat);
+    if (this.state.refMode === 'saved' && this.state.selectedVoiceId) form.append('voice_id', this.state.selectedVoiceId);
+    if ((this.state.refMode === 'upload' || this.state.refMode === 'record') && this.state.refFileBlob) form.append('prompt_audio', this.state.refFileBlob, this.state.refFileName || 'reference.wav');
+    if (id === 'index-tts2' && this.s().index.emoMode === 'emo_ref' && this.state.emoFileBlob) form.append('emo_audio', this.state.emoFileBlob, this.state.emoFileName || 'emotion-reference.wav');
+    if (this.state.promptText.trim()) form.append('prompt_text', this.state.promptText.trim());
+    if (this.state.watermarkEnabled && this.wmSupported(id)) { form.append('watermark', '1'); if (this.state.selectedRunId) form.append('watermark_run', this.state.selectedRunId); }
+    this.__appendParams(form, id);
+    form.append('request_snapshot', JSON.stringify({ modelId: id, text: this.state.text, promptText: this.state.promptText, voiceId: this.state.selectedVoiceId || null, outputFormat: this.state.outputFormat, watermarkEnabled: this.state.watermarkEnabled, watermarkRun: this.state.selectedRunId, settings: this.state.settings }));
+    try {
+      const job = this.__normalizeJob(await this.__api('/api/generation-jobs', { method: 'POST', body: form }));
+      this.setState(s => ({ jobs: [job, ...s.jobs.filter(j => j.id !== job.id)], activeJobId: job.id, isPlaying: false }));
+      this.flash('Generation queued.', 'success');
+      this.__startPolling(job.id);
+    } catch (e) { this.flash(e.message || 'Generation failed to start.', 'error'); }
+  }
+
+  __startPolling(jobId) {
+    if (this._pollTimer) clearInterval(this._pollTimer);
+    this._pollTimer = setInterval(async () => {
+      try {
+        const job = this.__normalizeJob(await this.__api('/api/generation-jobs/' + encodeURIComponent(jobId)));
+        this.setState(s => ({ jobs: [job, ...s.jobs.filter(j => j.id !== job.id)], activeJobId: this.__activeStatus(job.status) ? job.id : null, outputJobId: job.status === 'completed' ? job.id : s.outputJobId, isPlaying: job.status === 'completed' ? false : s.isPlaying }));
+        if (!this.__activeStatus(job.status)) { clearInterval(this._pollTimer); this._pollTimer = null; this.flash(job.status === 'completed' ? 'Generation complete.' : (job.error || this.statusPill(job.status).label), job.status === 'completed' ? 'success' : 'error'); await this.__refreshCore(true); }
+      } catch (e) { clearInterval(this._pollTimer); this._pollTimer = null; this.flash(e.message || 'Polling failed.', 'error'); }
+    }, 1200);
+  }
+
+  async cancelJob() { if (this.state.activeJobId) await this.cancelJobById(this.state.activeJobId); }
+  async cancelJobById(id) { try { const job = this.__normalizeJob(await this.__api('/api/generation-jobs/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })); this.setState(s => ({ jobs: [job, ...s.jobs.filter(j => j.id !== job.id)], activeJobId: null })); this.flash('Run cancelled.', 'warn'); } catch (e) { this.flash(e.message || 'Cancel failed.', 'error'); } }
+  async deleteJob(id) { try { await this.__api('/api/generation-jobs/' + encodeURIComponent(id), { method: 'DELETE' }); this.setState(s => ({ jobs: s.jobs.filter(j => j.id !== id), jobDetailId: s.jobDetailId === id ? null : s.jobDetailId, outputJobId: s.outputJobId === id ? null : s.outputJobId })); this.flash('Run deleted.', 'success'); } catch (e) { this.flash(e.message || 'Delete failed.', 'error'); } }
+  downloadOut() { const out = this.state.outputJobId ? this.state.jobs.find(j => j.id === this.state.outputJobId && j.output) : null; if (!out) return; const a = document.createElement('a'); a.href = this.__audioUrl(out.id); a.download = out.output.filename || 'output.' + out.output_format; document.body.appendChild(a); a.click(); a.remove(); }
+
+  async unloadModel(id) { try { const form = new FormData(); form.append('model_id', id); await this.__api('/api/unload', { method: 'POST', body: form }); await this.__refreshCore(true); this.flash(this.model(id).name + ' unloaded — memory freed.', 'success'); } catch (e) { this.flash(e.message || 'Unload failed.', 'error'); } }
+  loadModel(id) { this.selectModel(id); this.setSurface('generate'); this.flash('Model will load on generation.', 'success'); }
+  async deleteVoice(id) { if (!confirm('Delete this saved voice?')) return; try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'DELETE' }); await this.__refreshCore(true); this.flash('Voice deleted.', 'success'); } catch (e) { this.flash(e.message || 'Voice delete failed.', 'error'); } }
+  async commitRename() { const id = this.state.renamingId, name = this.state.renameValue.trim(); if (!id || !name) { this.setState({ renamingId: null }); return; } try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); await this.__refreshCore(true); this.setState({ renamingId: null }); this.flash('Voice renamed.', 'success'); } catch (e) { this.flash(e.message || 'Rename failed.', 'error'); } }
+
+  addVoice() { this.__chooseVoiceFile(); }
+  __chooseVoiceFile() { const name = this.state.newVoiceName.trim(); if (!name) { this.flash('Name the voice first.', 'error'); return; } const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none'; input.onchange = async () => { const file = input.files && input.files[0]; input.remove(); if (!file) return; const form = new FormData(); form.append('name', name); form.append('prompt_audio', file, file.name); if (this.state.promptText.trim()) form.append('prompt_text', this.state.promptText.trim()); try { await this.__api('/api/voices', { method: 'POST', body: form }); this.setState({ addingVoice: false, newVoiceName: '' }); await this.__refreshCore(true); this.flash('Voice saved to library.', 'success'); } catch (e) { this.flash(e.message || 'Voice save failed.', 'error'); } }; document.body.appendChild(input); input.click(); }
+
+  async saveReferenceVoice() {
+    if (!this.state.refFileBlob) { this.flash('Load or record reference audio first.', 'error'); return; }
+    const name = prompt('Voice name');
+    if (!name || !name.trim()) { this.flash('Name the voice first.', 'error'); return; }
+    const form = new FormData();
+    form.append('name', name.trim());
+    form.append('prompt_audio', this.state.refFileBlob, this.state.refFileName || 'reference.wav');
+    if (this.state.promptText.trim()) form.append('prompt_text', this.state.promptText.trim());
+    try {
+      await this.__api('/api/voices', { method: 'POST', body: form });
+      await this.__refreshCore(true);
+      this.flash('Reference saved to library.', 'success');
+    } catch (e) {
+      this.flash(e.message || 'Voice save failed.', 'error');
+    }
+  }
+
+  async renderWatermark(root) {
+    const runs = this.state.wmRuns || [];
+    const sig = 'wm-live' + runs.map(r => r.id + r.status).join(',') + this.state.selectedRunId + this.state.theme + this.state.wmThreshold + JSON.stringify(this.state.wmDetectResult || null);
+    if (root.__sig === sig) return; root.__sig = sig;
+    const __ss = this.__captureScroll(root);
+    root.innerHTML = '';
+    const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--line)');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Watermark Lab' }));
+    head.appendChild(this.el('div', 'margin-left:12px;font-size:12px;color:var(--tx-3)', { textContent: 'Inspect runs and verify audio for embedded payloads' }));
+    root.appendChild(head);
+    const wrap = this.el('div', 'flex:1;display:flex;min-height:0');
+    const list = this.el('div', 'width:280px;flex:0 0 280px;border-right:1px solid var(--line);background:var(--bg-1);overflow-y:auto;padding:12px');
+    list.setAttribute('data-scroll-keep', 'wm-runs');
+    list.appendChild(this.el('div', 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3);padding:6px 8px 10px', { textContent: 'Runs' }));
+    runs.forEach(r => { const sel = this.state.selectedRunId === r.id; const stCol = r.status === 'completed' ? 'var(--accent)' : r.status === 'stopped' ? 'var(--warn)' : 'var(--line-3)'; const b = this.el('button', 'display:block;width:100%;text-align:left;padding:11px 12px;margin-bottom:5px;border-radius:8px;border:1px solid ' + (sel ? 'var(--accent-line)' : 'var(--line)') + ';background:' + (sel ? 'var(--bg-3)' : 'transparent') + ';border-left:3px solid ' + (sel ? 'var(--accent)' : 'transparent')); const tr = this.el('div', 'display:flex;align-items:center;gap:8px;margin-bottom:4px'); tr.appendChild(this.el('span', 'width:7px;height:7px;border-radius:50%;background:' + stCol)); tr.appendChild(this.el('span', 'font-weight:600;font-size:12.5px', { textContent: r.label || r.id })); b.appendChild(tr); b.appendChild(this.el('div', 'font-family:var(--mono);font-size:10px;color:var(--tx-3);padding-left:15px', { textContent: (r.status || 'unknown') + ' · ' + this.fmtAgo(this.__ms(r.updated_at)) })); b.onclick = () => this.setState({ selectedRunId: r.id }); list.appendChild(b); });
+    wrap.appendChild(list);
+    const detail = this.el('div', 'flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:18px;min-width:0');
+    detail.setAttribute('data-scroll-keep', 'wm-detail');
+    const selected = runs.find(r => r.id === this.state.selectedRunId) || runs[0];
+    if (!selected) detail.appendChild(this.el('div', 'color:var(--tx-3);font-size:13px', { textContent: 'No watermark runs found.' }));
+    else {
+      const dh = this.el('div', 'display:flex;align-items:center;gap:12px'); dh.appendChild(this.el('div', 'font-weight:700;font-size:17px', { textContent: selected.label || selected.id })); dh.appendChild(this.el('span', 'font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:5px', { textContent: selected.status || 'unknown' })); detail.appendChild(dh);
+      const box = this.el('pre', 'margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg-1);padding:14px;color:var(--tx-2);font-family:var(--mono);font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:280px;overflow:auto', { textContent: 'Loading run details...' }); detail.appendChild(box);
+      this.__api('/api/watermark/run_details?run_id=' + encodeURIComponent(selected.id)).then(d => { box.textContent = JSON.stringify({ id: d.id, label: d.label, status: d.status, metrics: d.metrics, config: d.config, error: d.error, report_excerpt: d.report_excerpt }, null, 2); }).catch(e => { box.textContent = e.message || String(e); });
+    }
+    const verify = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px;display:flex;flex-direction:column;gap:12px');
+    verify.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'Verify audio' }));
+    verify.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3)', { textContent: 'Upload a clip to check for an embedded watermark payload.' }));
+    const vrow = this.el('div', 'display:flex;align-items:center;gap:12px');
+    const up = this.el('button', 'padding:12px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Choose audio' });
+    up.onclick = () => this.__detectWatermark(); vrow.appendChild(up);
+    const tl = this.el('div', 'display:flex;align-items:center;gap:9px'); tl.appendChild(this.el('span', 'font-size:12px;color:var(--tx-3)', { textContent: 'Threshold' })); const slider = this.el('input', 'width:130px;accent-color:var(--accent)', {}); slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = this.state.wmThreshold; slider.oninput = e => this.setState({ wmThreshold: parseFloat(e.target.value) }); tl.appendChild(slider); tl.appendChild(this.el('span', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);width:36px', { textContent: this.state.wmThreshold.toFixed(2) })); vrow.appendChild(tl); verify.appendChild(vrow); detail.appendChild(verify);
+    if (this.state.wmDetectResult) {
+      const r = this.state.wmDetectResult;
+      const result = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px;display:flex;flex-direction:column;gap:12px');
+      const tone = r.detected ? 'var(--accent)' : 'var(--warn)';
+      const top = this.el('div', 'display:flex;align-items:center;gap:10px');
+      top.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'Detection result' }));
+      top.appendChild(this.el('span', 'font-size:11px;font-weight:700;text-transform:uppercase;color:' + tone + ';background:' + (r.detected ? 'var(--accent-dim)' : 'var(--warn-dim)') + ';padding:3px 9px;border-radius:5px', { textContent: r.detected ? 'Detected' : 'Not detected' }));
+      result.appendChild(top);
+      const grid = this.el('div', 'display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px');
+      [
+        ['Probability', Number(r.wm_prob || 0).toFixed(3)],
+        ['Model', (r.model && (r.model.name || r.model.tts_model_id || r.model.id)) || 'Unknown'],
+        ['Run', (r.run && r.run.id) || this.state.selectedRunId || 'Auto'],
+        ['Threshold', String(this.state.wmThreshold.toFixed ? this.state.wmThreshold.toFixed(2) : this.state.wmThreshold)],
+      ].forEach(([k, val]) => { const cell = this.el('div', 'border:1px solid var(--line);border-radius:8px;background:var(--bg-2);padding:10px;min-width:0'); cell.appendChild(this.el('div', 'font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx-3);margin-bottom:4px', { textContent: k })); cell.appendChild(this.el('div', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: String(val) })); grid.appendChild(cell); });
+      result.appendChild(grid);
+      detail.appendChild(result);
+    }
+    wrap.appendChild(detail); root.appendChild(wrap);
+    this.__restoreScroll(root, __ss);
+  }
+
+  __detectWatermark() { const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none'; input.onchange = async () => { const file = input.files && input.files[0]; input.remove(); if (!file) return; this.setState({ wmDetectResult: null }); const form = new FormData(); form.append('audio', file, file.name); if (this.state.selectedRunId) form.append('watermark_run', this.state.selectedRunId); form.append('wm_threshold', String(this.state.wmThreshold)); try { const r = await this.__api('/api/watermark/detect', { method: 'POST', body: form }); this.setState({ wmDetectResult: r }); this.flash((r.detected ? 'Watermark detected' : 'No watermark detected') + ' · p=' + Number(r.wm_prob || 0).toFixed(3), r.detected ? 'success' : 'warn'); } catch (e) { this.flash(e.message || 'Detection failed.', 'error'); } }; document.body.appendChild(input); input.click(); }
+
+}
+</script>
+</body>
+</html>

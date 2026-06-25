@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "claude-ui-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "claude:dev"],
+      "port": 5174
+    },
+    {
+      "name": "claude-exact",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["claude_exact.py", "--port", "7898"],
+      "port": 7898
+    }
+  ]
+}
