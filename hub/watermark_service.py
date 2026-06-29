@@ -22,15 +22,17 @@ class WatermarkService:
 
     Notes:
     - Watermarking models operate at 16kHz (watermark.config.SAMPLE_RATE).
-    - For now, we only map 2 TTS models to attribution IDs:
+    - Maps 3 TTS models to attribution IDs (matches the n_models=3 watermark model):
         - index-tts2 -> pred_model_id 0 (class_id 1)
         - qwen3-tts-mlx -> pred_model_id 1 (class_id 2)
+        - chatterbox-multilingual -> pred_model_id 2 (class_id 3)
     """
 
     # Mapping: TTS model id -> pred_model_id (0..K-1). Encoder class_id is pred_model_id + 1.
     _TTS_TO_ATTR_ID: dict[str, int] = {
         "index-tts2": 0,
         "qwen3-tts-mlx": 1,
+        "chatterbox-multilingual": 2,
     }
 
     def __init__(self, *, hub_root: Path):
@@ -96,6 +98,17 @@ class WatermarkService:
         runs = self.list_runs()
         if not runs:
             return None
+        # Honour an explicit pin (outputs/watermark_default.txt holds a run id,
+        # e.g. "outputs/dashboard_runs/sweep3_B_static_12_2") if it resolves to a
+        # currently-available run; otherwise fall back to sort order.
+        pin_file = self.outputs_root / "watermark_default.txt"
+        try:
+            if pin_file.exists():
+                pinned = pin_file.read_text(encoding="utf-8").strip()
+                if pinned and any(r.id == pinned for r in runs):
+                    return pinned
+        except Exception:
+            pass
         # Prefer completed if present (list_runs sorts that way).
         return runs[0].id
 

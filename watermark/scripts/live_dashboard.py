@@ -1355,7 +1355,81 @@ def _make_controller_app(runs_dir: Path):
     procs: dict[str, subprocess.Popen] = {}
     proc_fhs: dict[str, Any] = {}
 
+    def _auto_run_status(run_dir: Path, mp: Path) -> str:
+        """Status from current reality (recomputed each scan, never frozen):
+        - exported weights present  -> 'completed'
+        - metrics.jsonl written recently -> 'running'
+        - otherwise (stale, no weights)  -> 'external'
+        """
+        try:
+            if (run_dir / "encoder.pt").exists() and (run_dir / "decoder.pt").exists():
+                return "completed"
+        except Exception:
+            pass
+        try:
+            # epochs log every ~100s for these runs; 300s window tolerates gaps.
+            if (time.time() - mp.stat().st_mtime) < 300:
+                return "running"
+        except Exception:
+            pass
+        return "external"
+
     def load_sessions() -> dict[str, dict[str, Any]]:
+        # Auto-discover terminal/CLI runs (e.g. quick_voice_smoke_train launched
+        # directly from a shell) so they appear in the dashboard without manual
+        # "Attach". For any run dir under runs_dir with a metrics.jsonl, ensure a
+        # session.json exists and keep its status in sync with reality. Only
+        # auto-discovered sessions are touched; controller-managed ones are left
+        # alone (their status is owned by the launching process).
+        try:
+            for mp in runs_dir.glob("*/metrics.jsonl"):
+                run_dir = mp.parent
+                sj = run_dir / "session.json"
+                if sj.exists():
+                    existing = _json_load(sj) or {}
+                    if existing.get("auto_discovered"):
+                        new_status = _auto_run_status(run_dir, mp)
+                        if existing.get("status") != new_status:
+                            existing["status"] = new_status
+                            try:
+                                _json_dump(sj, existing)
+                            except Exception:
+                                pass
+                    continue
+                meta = _read_first_meta(mp) or {}
+                # Identify a training run by the meta event's shape, NOT run_name
+                # (run_name is the run-dir name, e.g. "sweep3_A_static_8_3").
+                cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+                is_run = (meta.get("type") == "meta") and (
+                    ("epochs_s1" in cfg) or ("num_classes" in meta) or ("n_models" in meta)
+                )
+                if not is_run:
+                    continue  # meta not flushed yet, or not a recognised run; retry next poll
+                try:
+                    created = float(meta.get("ts") or mp.stat().st_mtime)
+                except Exception:
+                    created = time.time()
+                sess = {
+                    "id": run_dir.name,
+                    "kind": "quick_voice_smoke_train",
+                    "name": meta.get("run_name") or run_dir.name,
+                    "created_ts": created,
+                    "status": _auto_run_status(run_dir, mp),
+                    "run_dir": str(run_dir.resolve()),
+                    "metrics_path": str(mp.resolve()),
+                    "stdout_path": str((run_dir / "stdout.log").resolve()),
+                    "cmd": [],
+                    "pid": None,
+                    "returncode": None,
+                    "auto_discovered": True,
+                }
+                try:
+                    _json_dump(sj, sess)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         out: dict[str, dict[str, Any]] = {}
         for p in runs_dir.glob("*/session.json"):
             sess = _json_load(p)
