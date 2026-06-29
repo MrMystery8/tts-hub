@@ -32,7 +32,7 @@ def _json_safe(value):
 
 
 def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path | None = None) -> FastAPI:
-    ui_dir = ui_dir or (hub_root / "custom_ui")
+    ui_dir = ui_dir or (hub_root / "claude_exact")
     if static_dir is None:
         static_dir = ui_dir / "static" if (ui_dir / "static").exists() else ui_dir
 
@@ -58,6 +58,17 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
         if voice_id:
             voices.ensure_audio_meta(voice_id)
             prompt_audio_wav = voices.get_voice_audio_path(voice_id)
+            # Use the saved voice's transcript when the request didn't carry an
+            # explicit one, so models that rely on a reference transcript use it
+            # verbatim instead of re-transcribing (qwen auto-transcribe) or failing
+            # (f5 / cosyvoice zero-shot / voxcpm). An explicit prompt_text wins.
+            if not str(fields.get("prompt_text") or "").strip():
+                try:
+                    saved_text = str((voices.get_voice_meta(voice_id) or {}).get("prompt_text") or "").strip()
+                    if saved_text:
+                        fields["prompt_text"] = saved_text
+                except Exception:
+                    pass
         elif staged_files.get("prompt_audio"):
             prompt_audio_wav = job_dir / "prompt.wav"
             ffmpeg_convert_to_wav(input_path=Path(staged_files["prompt_audio"]), output_path=prompt_audio_wav)
@@ -212,12 +223,30 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
         return meta
 
     @app.patch("/api/voices/{voice_id}")
-    async def rename_voice(voice_id: str, request: Request):
+    async def update_voice(voice_id: str, request: Request):
+        content_type = request.headers.get("content-type", "")
         try:
-            data = await request.json()
+            if content_type.startswith("multipart/form-data"):
+                form = await request.form()
+                kwargs: dict[str, object] = {}
+                if "name" in form:
+                    kwargs["name"] = str(form.get("name") or "")
+                if "prompt_text" in form:
+                    kwargs["prompt_text"] = str(form.get("prompt_text") or "")
+                up = form.get("prompt_audio")
+                if up is not None and getattr(up, "filename", None):
+                    kwargs["input_bytes"] = up.file.read()
+                    kwargs["filename"] = up.filename
+                return voices.update_voice(voice_id, **kwargs)
+            body = await request.body()
+            if not body.strip():
+                return JSONResponse({"error": "empty request body"}, status_code=400)
+            data = json.loads(body)
             return voices.rename_voice(voice_id, str(data.get("name") or ""))
         except FileNotFoundError:
             return JSONResponse({"error": "voice not found"}, status_code=404)
+        except FfmpegNotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
@@ -609,7 +638,7 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=7891)
+    parser.add_argument("--port", type=int, default=7896)
     args = parser.parse_args()
 
     hub_root = Path(__file__).resolve().parent

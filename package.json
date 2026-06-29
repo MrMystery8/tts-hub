@@ -15,6 +15,7 @@
     "vite": "^6.2.5"
   },
   "scripts": {
+    "start": "./run.sh",
     "ui:dev": "vite --config frontend/vite.config.ts",
     "ui:build": "vite build --config frontend/vite.config.ts",
     "ui:preview": "vite preview --config frontend/vite.config.ts",

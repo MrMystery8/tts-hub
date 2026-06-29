@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}==> TTS Hub Launcher <==${NC}"
+echo -e "${GREEN}==> TTS Hub Launcher (claude_exact) <==${NC}"
 
 # 1. Check/Create Virtual Environment
 if [ ! -d ".venv" ]; then
@@ -21,9 +21,9 @@ else
 fi
 
 # 2. Run the Server
-echo -e "${GREEN}Starting TTS Hub on http://localhost:7891 ...${NC}"
+echo -e "${GREEN}Starting TTS Hub on http://localhost:7896 ...${NC}"
 echo "Press Ctrl+C to stop."
 echo ""
 
-# Run the React launcher using the venv python
-.venv/bin/python3 new_webui.py --port 7891
+# Run the default claude_exact launcher using the venv python
+.venv/bin/python3 claude_exact.py --port 7896

@@ -238,6 +238,7 @@
                         <span style="margin-left:auto;font-size:10.5px;color:var(--tx-3)">{{ transcriptHint }}</span>
                       </div>
                       <textarea onChange="{{ onPromptText }}" value="{{ promptText }}" placeholder="What the reference audio says, verbatim..." rows="2" style="width:100%;background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;line-height:1.5" style-focus="border-color:var(--accent)"></textarea>
+                      <sc-if value="{{ transcriptUsingSaved }}" hint-placeholder-val="{{ true }}"><div style="margin-top:6px;font-size:10.5px;color:var(--accent)">Using this saved voice's transcript — leave blank to keep it, or type to override.</div></sc-if>
                     </div>
                   </sc-if>
                 </div>
@@ -353,6 +354,26 @@
                             <span style="width:30px;height:17px;border-radius:9px;background:{{ f.track }};position:relative;flex:0 0 auto;transition:background .15s"><span style="position:absolute;top:2px;left:{{ f.knobX }};width:13px;height:13px;border-radius:50%;background:#fff;transition:left .15s"></span></span>
                             <span style="font-size:12px;color:var(--tx-2)">{{ f.toggleText }}</span>
                           </button>
+                        </sc-if>
+                        <sc-if value="{{ f.isEmoVector }}" hint-placeholder-val="{{ true }}">
+                          <div style="display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-1);padding:11px 12px">
+                            <sc-for list="{{ f.emoSliders }}" as="e" hint-placeholder-count="8">
+                              <div>
+                                <div style="display:flex;align-items:baseline;gap:7px;margin-bottom:4px">
+                                  <span style="font-size:11.5px;font-weight:600;color:var(--tx)">{{ e.name }}</span>
+                                  <span style="font-size:10px;color:var(--tx-3)">{{ e.tag }}</span>
+                                  <span style="margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:600;color:{{ e.valColor }}">{{ e.display }}</span>
+                                </div>
+                                <input type="range" min="0" max="1" step="0.05" value="{{ e.value }}" onChange="{{ e.onInput }}" style="width:100%;accent-color:{{ e.accent }}"/>
+                              </div>
+                            </sc-for>
+                            <div style="display:flex;align-items:center;gap:8px;padding-top:2px;border-top:1px solid var(--line)">
+                              <span style="font-size:10.5px;color:var(--tx-3)">Total blend <span style="font-family:var(--mono);font-weight:600;color:{{ f.emoSumColor }}">{{ f.emoSum }}</span></span>
+                              <span style="font-size:10.5px;color:var(--tx-3)">·</span>
+                              <span style="font-size:10.5px;color:var(--tx-3)">{{ f.emoDominant }}</span>
+                              <button onClick="{{ f.onResetEmo }}" style="margin-left:auto;font-size:11px;font-weight:600;color:var(--tx-2);border:1px solid var(--line-2);border-radius:6px;padding:5px 11px">Clear all</button>
+                            </div>
+                          </div>
                         </sc-if>
                       </div>
                     </sc-for>
@@ -494,6 +515,20 @@ class Component extends DCLogic {
     voiceMeta: {},
     voiceSearch: '',
     voiceSort: 'recent',
+    // add-voice staging (explicit save — no autosave on file pick)
+    newVoiceText: '',
+    newVoiceBlob: null,
+    newVoiceFileName: '',
+    newVoicePreviewUrl: '',
+    newRecording: false,
+    // voice editor popup
+    editVoiceId: null,
+    editName: '',
+    editText: '',
+    editBlob: null,
+    editFileName: '',
+    editPreviewUrl: '',
+    editLoading: false,
   };
 
   models = [
@@ -562,7 +597,23 @@ class Component extends DCLogic {
     if (id === 'voxcpm-ane') return true;
     return false;
   }
-  wmSupported(id) { return id === 'index-tts2' || id === 'qwen3-tts-mlx'; }
+  // The selected saved voice carries its own transcript, which the backend
+  // injects at generation time — so the transcript requirement is satisfied
+  // without re-typing it into the generate field.
+  savedVoiceHasTranscript() {
+    if (this.state.refMode !== 'saved' || !this.state.selectedVoiceId) return false;
+    const v = this.state.voices.find(x => x.id === this.state.selectedVoiceId);
+    return !!(v && v.has_transcript);
+  }
+  // Whether the transcript requirement is met for the current model/voice.
+  transcriptSatisfied(id) {
+    if (this.state.promptText.trim()) return true;
+    if (this.savedVoiceHasTranscript()) return true;
+    if (id === 'voxcpm-ane' && this.s().voxcpm.voice.trim()) return true;
+    return false;
+  }
+  // Mirror the backend watermark attribution map (WatermarkService._TTS_TO_ATTR_ID).
+  wmSupported(id) { return id === 'index-tts2' || id === 'qwen3-tts-mlx' || id === 'chatterbox-multilingual'; }
   refReady() {
     const st = this.state;
     if (st.refMode === 'saved') return !!st.selectedVoiceId && this.compatVoices().some(v => v.id === st.selectedVoiceId);
@@ -895,6 +946,53 @@ class Component extends DCLogic {
     else { f.isText = true; f.placeholder = o.placeholder || ''; f.onInput = e => this.setSetting(group, key, e.target.value); }
     return f;
   }
+
+  // IndexTTS2 emotion vector: 8 dimensions in the model's canonical order.
+  // Labels mirror the official IndexTTS2 emotion controls.
+  __emoLabels() {
+    return [
+      ['Happy', 'cheerful, bright'],
+      ['Angry', 'tense, intense'],
+      ['Sad', 'sorrowful, downcast'],
+      ['Afraid', 'fearful, anxious'],
+      ['Disgust', 'repulsed, scornful'],
+      ['Melancholic', 'wistful, subdued'],
+      ['Surprised', 'startled, animated'],
+      ['Calm', 'neutral, steady'],
+    ];
+  }
+  __emoVec() {
+    let v; try { v = JSON.parse(this.s().index.emoVector); } catch { v = null; }
+    if (!Array.isArray(v)) v = [];
+    const out = [];
+    for (let i = 0; i < 8; i++) { const n = parseFloat(v[i]); out.push(Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0); }
+    return out;
+  }
+  __setEmo(i, val) {
+    const vec = this.__emoVec();
+    vec[i] = Math.max(0, Math.min(1, Number.isFinite(val) ? val : 0));
+    this.setSetting('index', 'emoVector', JSON.stringify(vec.map(x => Math.round(x * 100) / 100)));
+  }
+  emoVectorField() {
+    const labels = this.__emoLabels();
+    const vec = this.__emoVec();
+    const sum = vec.reduce((a, b) => a + b, 0);
+    const maxV = Math.max(...vec);
+    const f = { key: 'emoVector', label: 'Emotion vector', isEmoVector: true, help: 'Blend the eight IndexTTS2 emotions (0–1 each). The model normalizes the mix; emotion strength scales the overall intensity.' };
+    f.emoSliders = labels.map(([name, tag], i) => ({
+      name, tag,
+      value: vec[i],
+      display: vec[i].toFixed(2),
+      valColor: vec[i] > 0 ? 'var(--accent)' : 'var(--tx-3)',
+      accent: 'var(--accent)',
+      onInput: e => this.__setEmo(i, parseFloat(e.target.value)),
+    }));
+    f.emoSum = sum.toFixed(2);
+    f.emoSumColor = sum > 1.5 ? 'var(--warn)' : (sum === 0 ? 'var(--tx-3)' : 'var(--tx-2)');
+    f.emoDominant = sum === 0 ? 'Neutral (no emotion set)' : ('Lead: ' + labels[vec.indexOf(maxV)][0]);
+    f.onResetEmo = () => this.setSetting('index', 'emoVector', '[0,0,0,0,0,0,0,0]');
+    return f;
+  }
   groupObj(modelKey, title, fields) {
     const open = !!this.state.openGroups[modelKey + ':' + title];
     return { title, count: fields.length + ' params', open, caret: open ? 'rotate(0deg)' : 'rotate(-90deg)', fields, onToggle: () => this.toggleGroup(modelKey, title) };
@@ -905,7 +1003,7 @@ class Component extends DCLogic {
       G('Basics', [
         this.fld('index', 'emoMode', 'Emotion mode', { type: 'select', options: [{ value: 'speaker', label: 'From speaker' }, { value: 'emo_ref', label: 'Emotion reference audio' }, { value: 'emo_vector', label: 'Emotion vector' }, { value: 'emo_text', label: 'Emotion text prompt' }] }),
         this.fld('index', 'emoAlpha', 'Emotion strength', { type: 'slider', min: 0, max: 1, step: 0.05, fmt: v => v.toFixed(2) }),
-        ...(this.s().index.emoMode === 'emo_vector' ? [this.fld('index', 'emoVector', 'Emotion vector', { type: 'text', placeholder: '[0,0,...]' })] : []),
+        ...(this.s().index.emoMode === 'emo_vector' ? [this.emoVectorField()] : []),
         ...(this.s().index.emoMode === 'emo_text' ? [this.fld('index', 'emoText', 'Emotion text', { type: 'text', placeholder: 'happy and bright' })] : []),
       ]),
       G('Sampling', [
@@ -1091,7 +1189,7 @@ class Component extends DCLogic {
     reqs.push({ key: 'text', label: 'Script', ok: !!st.text.trim() });
     if (this.needsRef(id)) reqs.push({ key: 'ref', label: 'Reference', ok: this.refReady() });
     if (id === 'index-tts2' && this.s().index.emoMode === 'emo_ref') reqs.push({ key: 'emo', label: 'Emotion', ok: !!st.emoFileBlob });
-    if (this.needsTranscript(id)) reqs.push({ key: 'tr', label: 'Transcript', ok: !!st.promptText.trim() || (id === 'voxcpm-ane' && !!this.s().voxcpm.voice.trim()) });
+    if (this.needsTranscript(id)) reqs.push({ key: 'tr', label: 'Transcript', ok: this.transcriptSatisfied(id) });
     if (id === 'cosyvoice3-mlx' && this.s().cosy.mode === 'instruct') reqs.push({ key: 'in', label: 'Instruction', ok: !!st.instructText.trim() });
     v.reqBadges = reqs.map(r => ({ label: r.label, mark: r.ok ? '✓' : '○', bg: r.ok ? 'var(--accent-dim)' : 'var(--bg-3)', color: r.ok ? 'var(--accent)' : 'var(--tx-3)' }));
 
@@ -1136,8 +1234,10 @@ class Component extends DCLogic {
     v.recBtnBg = st.recording ? 'var(--err)' : 'var(--bg-3)'; v.recBtnTx = st.recording ? '#fff' : 'var(--tx-2)';
     v.recBtnLabel = st.recording ? 'Stop recording' : 'Start recording'; v.recDotRadius = st.recording ? '2px' : '50%';
     v.showTranscript = (this.needsTranscript(id) || id === 'qwen3-tts-mlx') && st.refMode !== 'none';
-    v.transcriptRequired = this.needsTranscript(id);
-    v.transcriptHint = id === 'qwen3-tts-mlx' ? (this.s().qwen.autoTranscribe ? 'optional — auto-transcribe on' : 'optional') : 'verbatim';
+    const usingSavedTranscript = this.savedVoiceHasTranscript() && !st.promptText.trim();
+    v.transcriptUsingSaved = usingSavedTranscript;
+    v.transcriptRequired = this.needsTranscript(id) && !this.transcriptSatisfied(id);
+    v.transcriptHint = usingSavedTranscript ? 'using saved voice transcript' : (id === 'qwen3-tts-mlx' ? (this.s().qwen.autoTranscribe ? 'optional — auto-transcribe on' : 'optional') : 'verbatim');
     v.promptText = st.promptText; v.onPromptText = e => this.setState({ promptText: e.target.value });
 
     v.showInstruct = id === 'cosyvoice3-mlx' && this.s().cosy.mode === 'instruct';
@@ -1220,13 +1320,28 @@ class Component extends DCLogic {
   // ============ surface renderers (imperative) ============
   el(tag, style, props) { const e = document.createElement(tag); if (style) e.style.cssText = style; if (props) Object.assign(e, props); return e; }
 
+  // Focus-preserving field. These surfaces fully rebuild on every keystroke
+  // (setState -> innerHTML=''), which drops focus. We tag each managed input
+  // with a stable key, remember the caret on input, and restore both after the
+  // rebuild so the user can keep typing uninterrupted.
+  __mkField(key, tag, style, props, onInput) {
+    const f = this.el(tag, style, props);
+    f.setAttribute('data-fk', key);
+    f.oninput = e => { this.__fk = { key, pos: e.target.selectionStart }; onInput(e); };
+    if (this.__fk && this.__fk.key === key) {
+      const pos = this.__fk.pos;
+      setTimeout(() => { if (!f.isConnected) return; try { f.focus(); if (pos != null) f.setSelectionRange(pos, pos); } catch (err) {} }, 0);
+    }
+    return f;
+  }
+
   renderVoices(root) {
     const q = (this.state.voiceSearch || '').trim().toLowerCase();
     const sort = this.state.voiceSort || 'recent';
     let list = this.state.voices.slice();
     if (q) list = list.filter(v => (v.name || '').toLowerCase().includes(q));
     list.sort((a, b) => sort === 'name' ? (a.name || '').localeCompare(b.name || '') : sort === 'duration' ? (b.duration_s || 0) - (a.duration_s || 0) : (this.__ms(b.created_at) - this.__ms(a.created_at)));
-    const sig = 'voices2|' + this.state.voices.length + '|' + this.state.renamingId + '|' + this.state.addingVoice + '|' + this.state.theme + '|' + this.state.renameValue + '|' + this.state.newVoiceName + '|' + this.state.activeAudioUrl + '|' + this.state.isPlaying + '|' + this.state.expandedVoiceId + '|' + q + '|' + sort + '|' + JSON.stringify(this.state.voiceMeta || {});
+    const sig = 'voices3|' + this.state.voices.length + '|' + this.state.renamingId + '|' + this.state.addingVoice + '|' + this.state.theme + '|' + this.state.renameValue + '|' + this.state.newVoiceName + '|' + this.state.newVoiceText + '|' + this.state.newVoiceFileName + '|' + (!!this.state.newVoiceBlob) + '|' + this.state.newRecording + '|' + this.state.editVoiceId + '|' + this.state.editName + '|' + this.state.editText + '|' + this.state.editFileName + '|' + (!!this.state.editBlob) + '|' + this.state.editLoading + '|' + this.state.activeAudioUrl + '|' + this.state.isPlaying + '|' + this.state.expandedVoiceId + '|' + q + '|' + sort + '|' + JSON.stringify(this.state.voiceMeta || {});
     if (root.__sig === sig) return; root.__sig = sig;
     const __ss = this.__captureScroll(root);
     root.innerHTML = '';
@@ -1234,7 +1349,7 @@ class Component extends DCLogic {
     head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Voice Library' }));
     head.appendChild(this.el('div', 'margin-left:12px;font-family:var(--mono);font-size:11px;color:var(--tx-3)', { textContent: this.state.voices.length + ' saved' }));
     const addBtn = this.el('button', 'margin-left:auto;padding:9px 16px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12.5px', { textContent: '＋ Add voice' });
-    addBtn.onclick = () => this.setState({ addingVoice: !this.state.addingVoice });
+    addBtn.onclick = () => { if (this.state.addingVoice) this.cancelAddVoice(); else { this.__fk = null; this.setState({ addingVoice: true }); } };
     head.appendChild(addBtn);
     root.appendChild(head);
 
@@ -1242,9 +1357,7 @@ class Component extends DCLogic {
     body.setAttribute('data-scroll-keep', 'voices-body');
 
     const tb = this.el('div', 'display:flex;gap:10px;align-items:center;margin-bottom:16px');
-    const search = this.el('input', 'flex:1;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--tx)', { placeholder: 'Search voices…', value: this.state.voiceSearch });
-    search.oninput = e => this.setState({ voiceSearch: e.target.value });
-    setTimeout(() => { if (document.activeElement !== search && this.state.voiceSearch) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch (err) {} } }, 0);
+    const search = this.__mkField('voice-search', 'input', 'flex:1;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--tx)', { placeholder: 'Search voices…', value: this.state.voiceSearch }, e => this.setState({ voiceSearch: e.target.value }));
     tb.appendChild(search);
     const sortSel = this.el('select', 'background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:12.5px;color:var(--tx-2);cursor:pointer');
     [['recent', 'Recent'], ['name', 'Name A–Z'], ['duration', 'Duration']].forEach(([val, label]) => { const o = this.el('option', '', { value: val, textContent: label }); if (sort === val) o.selected = true; sortSel.appendChild(o); });
@@ -1253,25 +1366,27 @@ class Component extends DCLogic {
     body.appendChild(tb);
 
     if (this.state.addingVoice) {
+      const staged = !!this.state.newVoiceBlob;
       const card = this.el('div', 'border:1px solid var(--accent-line);border-radius:10px;background:var(--bg-1);padding:16px;margin-bottom:18px;display:flex;flex-direction:column;gap:12px');
       card.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'New reference voice' }));
-      const row = this.el('div', 'display:flex;gap:10px;align-items:center');
-      const up = this.el('button', 'padding:14px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Upload audio' });
-      up.onclick = () => this.addVoice();
-      const rec = this.el('button', 'padding:14px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '● Record' });
-      rec.onclick = () => { this.setSurface('generate'); this.setRefMode('record'); this.mockRecord(); };
-      row.appendChild(up); row.appendChild(rec); card.appendChild(row);
-      const name = this.el('input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px', { placeholder: 'Voice name', value: this.state.newVoiceName });
-      name.oninput = e => this.setState({ newVoiceName: e.target.value });
-      card.appendChild(name);
-      const tr = this.el('input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px', { placeholder: 'Reference transcript (optional)', value: this.state.promptText });
-      tr.oninput = e => this.setState({ promptText: e.target.value });
-      card.appendChild(tr);
-      const acts = this.el('div', 'display:flex;gap:8px;justify-content:flex-end');
+      card.appendChild(this.__voiceAudioPicker({
+        staged,
+        previewUrl: this.state.newVoicePreviewUrl,
+        fileName: this.state.newVoiceFileName,
+        recording: this.state.newRecording,
+        onChoose: () => this.__chooseNewVoiceFile(),
+        onRecord: () => this.recordNewVoice(),
+        replaceLabel: 'Replace',
+      }));
+      card.appendChild(this.__mkField('new-name', 'input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;color:var(--tx)', { placeholder: 'Voice name', value: this.state.newVoiceName }, e => this.setState({ newVoiceName: e.target.value })));
+      card.appendChild(this.__mkField('new-text', 'textarea', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;color:var(--tx);min-height:64px;resize:vertical;font-family:inherit;line-height:1.5', { placeholder: 'Reference transcript (optional — improves cloning for some models)', value: this.state.newVoiceText }, e => this.setState({ newVoiceText: e.target.value })));
+      const acts = this.el('div', 'display:flex;gap:8px;align-items:center;justify-content:flex-end');
+      if (!staged) acts.appendChild(this.el('div', 'margin-right:auto;font-size:11px;color:var(--tx-3)', { textContent: 'Choose or record audio to enable saving.' }));
       const cancel = this.el('button', 'padding:8px 16px;border:1px solid var(--line-2);border-radius:7px;color:var(--tx-2);font-weight:600;font-size:12px', { textContent: 'Cancel' });
-      cancel.onclick = () => this.setState({ addingVoice: false });
-      const save = this.el('button', 'padding:8px 18px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12px', { textContent: 'Save voice' });
-      save.onclick = () => this.addVoice();
+      cancel.onclick = () => this.cancelAddVoice();
+      const canSave = staged && !!this.state.newVoiceName.trim();
+      const save = this.el('button', 'padding:8px 18px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12px;' + (canSave ? '' : 'opacity:.5;cursor:not-allowed'), { textContent: 'Save voice' });
+      if (canSave) save.onclick = () => this.commitNewVoice();
       acts.appendChild(cancel); acts.appendChild(save); card.appendChild(acts);
       body.appendChild(card);
     }
@@ -1327,7 +1442,7 @@ class Component extends DCLogic {
       const mk = (label, fn, primary) => { const b = this.el('button', 'padding:7px 11px;border-radius:6px;font-size:11px;font-weight:600;' + (primary ? 'background:var(--accent);color:var(--accent-tx)' : 'border:1px solid var(--line-2);color:var(--tx-2)'), { textContent: label }); b.onclick = fn; return b; };
       acts.appendChild(mk('Use', () => this.useVoice(vo), true));
       if (vo.has_transcript) acts.appendChild(mk(this.state.expandedVoiceId === vo.id ? 'Hide' : 'Text', () => this.toggleVoiceTranscript(vo.id)));
-      acts.appendChild(mk('Rename', () => this.startRename(vo)));
+      acts.appendChild(mk('Edit', () => this.openVoiceEditor(vo)));
       acts.appendChild(mk('Delete', () => this.deleteVoice(vo.id)));
       row.appendChild(acts);
       card.appendChild(row);
@@ -1350,8 +1465,95 @@ class Component extends DCLogic {
     });
     body.appendChild(rows);
     root.appendChild(body);
+    if (this.state.editVoiceId) root.appendChild(this.__voiceEditorModal());
     this.__restoreScroll(root, __ss);
     this.drawWaves();
+  }
+
+  // Shared audio picker block used by the add card and the edit popup. Shows a
+  // dashed "choose / record" control before a clip is staged, and a compact
+  // preview row (waveform + filename + replace) once one is.
+  __voiceAudioPicker(o) {
+    if (!o.staged) {
+      const row = this.el('div', 'display:flex;gap:10px;align-items:center');
+      const up = this.el('button', 'flex:1;padding:14px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Upload .wav / .mp3' });
+      up.onclick = o.onChoose;
+      row.appendChild(up);
+      if (o.onRecord) {
+        const rec = this.el('button', 'padding:14px 18px;border:1.5px dashed ' + (o.recording ? 'var(--accent)' : 'var(--line-3)') + ';border-radius:8px;background:var(--bg-3);color:' + (o.recording ? 'var(--accent)' : 'var(--tx-2)') + ';font-weight:600;font-size:12px', { textContent: o.recording ? '■ Stop' : '● Record' });
+        rec.onclick = o.onRecord;
+        row.appendChild(rec);
+      }
+      return row;
+    }
+    const row = this.el('div', 'display:flex;align-items:center;gap:10px;border:1px solid var(--line-2);border-radius:8px;background:var(--bg-2);padding:8px 10px');
+    const abs = o.previewUrl ? new URL(o.previewUrl, window.location.href).href : '';
+    const playing = abs && this.state.activeAudioUrl === abs && this.state.isPlaying;
+    const play = this.el('button', 'flex:0 0 auto;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;background:' + (playing ? 'var(--accent)' : 'var(--bg-3)') + ';color:' + (playing ? 'var(--accent-tx)' : 'var(--tx-2)') + ';border:1px solid var(--line-2)', { textContent: playing ? '❚❚' : '▶' });
+    play.onclick = () => this.playUrl(o.previewUrl);
+    row.appendChild(play);
+    const wave = this.el('div', 'flex:1;min-width:90px;height:32px');
+    wave.setAttribute('data-wave', 'mini'); wave.setAttribute('data-wave-url', o.previewUrl); wave.setAttribute('data-wave-seek', '');
+    row.appendChild(wave);
+    row.appendChild(this.el('span', 'flex:0 1 auto;max-width:150px;font-family:var(--mono);font-size:11px;color:var(--tx-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: o.fileName || 'reference.wav' }));
+    const replace = this.el('button', 'flex:0 0 auto;padding:6px 11px;border:1px solid var(--line-2);border-radius:6px;color:var(--tx-2);font-weight:600;font-size:11px', { textContent: o.replaceLabel || 'Replace' });
+    replace.onclick = o.onChoose;
+    row.appendChild(replace);
+    return row;
+  }
+
+  // Modal for editing a saved voice: swap the clip, rename, and edit the
+  // transcript, all committed together on Save (no autosave).
+  __voiceEditorModal() {
+    const st = this.state;
+    const overlay = this.el('div', 'position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);padding:24px');
+    overlay.onclick = e => { if (e.target === overlay) this.closeVoiceEditor(); };
+    const card = this.el('div', 'width:100%;max-width:480px;max-height:88vh;overflow-y:auto;background:var(--bg-1);border:1px solid var(--line-2);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.45);padding:20px;display:flex;flex-direction:column;gap:14px');
+    const head = this.el('div', 'display:flex;align-items:center;gap:10px');
+    head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Edit voice' }));
+    const close = this.el('button', 'margin-left:auto;width:28px;height:28px;border-radius:6px;border:1px solid var(--line-2);color:var(--tx-2);font-size:14px;display:flex;align-items:center;justify-content:center', { textContent: '✕' });
+    close.onclick = () => this.closeVoiceEditor();
+    head.appendChild(close);
+    card.appendChild(head);
+
+    const staged = !!st.editBlob;
+    card.appendChild(this.el('label', 'font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--tx-3);text-transform:uppercase', { textContent: 'Reference audio' }));
+    if (!staged) {
+      const cur = this.el('div', 'display:flex;align-items:center;gap:10px;border:1px solid var(--line-2);border-radius:8px;background:var(--bg-2);padding:8px 10px');
+      const url = this.__voiceAudioUrl(st.editVoiceId);
+      const abs = new URL(url, window.location.href).href;
+      const playing = this.state.activeAudioUrl === abs && this.state.isPlaying;
+      const play = this.el('button', 'flex:0 0 auto;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;background:' + (playing ? 'var(--accent)' : 'var(--bg-3)') + ';color:' + (playing ? 'var(--accent-tx)' : 'var(--tx-2)') + ';border:1px solid var(--line-2)', { textContent: playing ? '❚❚' : '▶' });
+      play.onclick = () => this.playUrl(url);
+      cur.appendChild(play);
+      const wave = this.el('div', 'flex:1;min-width:90px;height:32px');
+      wave.setAttribute('data-wave', 'mini'); wave.setAttribute('data-wave-url', url); wave.setAttribute('data-wave-seek', '');
+      cur.appendChild(wave);
+      const replace = this.el('button', 'flex:0 0 auto;padding:6px 11px;border:1px solid var(--line-2);border-radius:6px;color:var(--tx-2);font-weight:600;font-size:11px', { textContent: 'Replace' });
+      replace.onclick = () => this.__chooseEditVoiceFile();
+      cur.appendChild(replace);
+      card.appendChild(cur);
+    } else {
+      card.appendChild(this.__voiceAudioPicker({ staged: true, previewUrl: st.editPreviewUrl, fileName: st.editFileName, onChoose: () => this.__chooseEditVoiceFile(), replaceLabel: 'Change' }));
+      card.appendChild(this.el('div', 'font-size:11px;color:var(--warn)', { textContent: 'New clip will replace the current audio when you save.' }));
+    }
+
+    card.appendChild(this.el('label', 'font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--tx-3);text-transform:uppercase', { textContent: 'Name' }));
+    card.appendChild(this.__mkField('edit-name', 'input', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;color:var(--tx)', { placeholder: 'Voice name', value: st.editName }, e => this.setState({ editName: e.target.value })));
+
+    card.appendChild(this.el('label', 'font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--tx-3);text-transform:uppercase', { textContent: 'Transcript' }));
+    if (st.editLoading) card.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3)', { textContent: 'Loading transcript…' }));
+    else card.appendChild(this.__mkField('edit-text', 'textarea', 'background:var(--bg-2);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px;font-size:13px;color:var(--tx);min-height:88px;resize:vertical;font-family:inherit;line-height:1.5', { placeholder: 'Reference transcript (leave blank to clear)', value: st.editText }, e => this.setState({ editText: e.target.value })));
+
+    const acts = this.el('div', 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px');
+    const cancel = this.el('button', 'padding:8px 16px;border:1px solid var(--line-2);border-radius:7px;color:var(--tx-2);font-weight:600;font-size:12px', { textContent: 'Cancel' });
+    cancel.onclick = () => this.closeVoiceEditor();
+    const canSave = !!st.editName.trim() && !st.editLoading;
+    const save = this.el('button', 'padding:8px 18px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12px;' + (canSave ? '' : 'opacity:.5;cursor:not-allowed'), { textContent: 'Save voice' });
+    if (canSave) save.onclick = () => this.saveVoiceEdit();
+    acts.appendChild(cancel); acts.appendChild(save); card.appendChild(acts);
+    overlay.appendChild(card);
+    return overlay;
   }
 
   renderJobs(root) {
@@ -1885,8 +2087,8 @@ class Component extends DCLogic {
     if (!st.text.trim()) return 'Enter script text to generate.';
     if (this.needsRef(id) && !this.refReady()) return 'This model needs a reference voice — pick, upload, or record one.';
     if (id === 'index-tts2' && s.index.emoMode === 'emo_ref' && !st.emoFileBlob) return 'Emotion reference audio is required for emo_ref mode.';
-    if (this.needsTranscript(id) && !st.promptText.trim()) {
-      if (id === 'voxcpm-ane' && s.voxcpm.voice.trim()) {} else return 'A reference transcript is required for this model.';
+    if (this.needsTranscript(id) && !this.transcriptSatisfied(id)) {
+      return 'A reference transcript is required — type one or pick a saved voice that has one.';
     }
     if (id === 'cosyvoice3-mlx' && s.cosy.mode === 'instruct' && !st.instructText.trim()) return 'CosyVoice3 instruct mode needs instruction text.';
     if (id === 'voxcpm-ane' && !s.voxcpm.voice.trim() && !this.refReady()) return 'VoxCPM needs a cached voice or prompt audio.';
@@ -1935,8 +2137,123 @@ class Component extends DCLogic {
   async deleteVoice(id) { if (!confirm('Delete this saved voice?')) return; try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'DELETE' }); await this.__refreshCore(true); this.flash('Voice deleted.', 'success'); } catch (e) { this.flash(e.message || 'Voice delete failed.', 'error'); } }
   async commitRename() { const id = this.state.renamingId, name = this.state.renameValue.trim(); if (!id || !name) { this.setState({ renamingId: null }); return; } try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); await this.__refreshCore(true); this.setState({ renamingId: null }); this.flash('Voice renamed.', 'success'); } catch (e) { this.flash(e.message || 'Rename failed.', 'error'); } }
 
-  addVoice() { this.__chooseVoiceFile(); }
-  __chooseVoiceFile() { const name = this.state.newVoiceName.trim(); if (!name) { this.flash('Name the voice first.', 'error'); return; } const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none'; input.onchange = async () => { const file = input.files && input.files[0]; input.remove(); if (!file) return; const form = new FormData(); form.append('name', name); form.append('prompt_audio', file, file.name); if (this.state.promptText.trim()) form.append('prompt_text', this.state.promptText.trim()); try { await this.__api('/api/voices', { method: 'POST', body: form }); this.setState({ addingVoice: false, newVoiceName: '' }); await this.__refreshCore(true); this.flash('Voice saved to library.', 'success'); } catch (e) { this.flash(e.message || 'Voice save failed.', 'error'); } }; document.body.appendChild(input); input.click(); }
+  // ---- Add voice: stage the clip, keep editing, save explicitly ----
+  addVoice() { this.__fk = null; this.setState({ addingVoice: true }); }
+
+  __chooseNewVoiceFile() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      input.remove();
+      if (!file) return;
+      const url = this.__setPreviewUrl('newVoicePreviewUrl', file);
+      this.setState({ newVoiceBlob: file, newVoiceFileName: file.name, newVoicePreviewUrl: url });
+      this.flash('Reference audio staged — add a name, then save.', 'success');
+    };
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  async recordNewVoice() {
+    if (this.state.newRecording && this._newRecorder) { this._newRecorder.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      const rec = new MediaRecorder(stream);
+      this._newRecorder = rec;
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const url = this.__setPreviewUrl('newVoicePreviewUrl', blob);
+        this.setState({ newRecording: false, newVoiceBlob: blob, newVoiceFileName: 'recorded-reference.webm', newVoicePreviewUrl: url });
+        this.flash('Recording staged — add a name, then save.', 'success');
+      };
+      rec.start();
+      this.setState({ newRecording: true });
+    } catch (e) { this.flash(e.message || 'Recording failed.', 'error'); }
+  }
+
+  cancelAddVoice() {
+    if (this.state.newRecording && this._newRecorder) { try { this._newRecorder.stop(); } catch {} }
+    this.__revokeObjectUrl('newVoicePreviewUrl');
+    this.__fk = null;
+    this.setState({ addingVoice: false, newVoiceName: '', newVoiceText: '', newVoiceBlob: null, newVoiceFileName: '', newVoicePreviewUrl: '', newRecording: false });
+  }
+
+  async commitNewVoice() {
+    const name = this.state.newVoiceName.trim();
+    if (!name) { this.flash('Name the voice first.', 'error'); return; }
+    if (!this.state.newVoiceBlob) { this.flash('Choose or record reference audio first.', 'error'); return; }
+    const form = new FormData();
+    form.append('name', name);
+    form.append('prompt_audio', this.state.newVoiceBlob, this.state.newVoiceFileName || 'reference.wav');
+    if (this.state.newVoiceText.trim()) form.append('prompt_text', this.state.newVoiceText.trim());
+    try {
+      await this.__api('/api/voices', { method: 'POST', body: form });
+      this.__revokeObjectUrl('newVoicePreviewUrl');
+      this.__fk = null;
+      this.setState({ addingVoice: false, newVoiceName: '', newVoiceText: '', newVoiceBlob: null, newVoiceFileName: '', newVoicePreviewUrl: '' });
+      await this.__refreshCore(true);
+      this.flash('Voice saved to library.', 'success');
+    } catch (e) { this.flash(e.message || 'Voice save failed.', 'error'); }
+  }
+
+  // ---- Edit voice: popup that edits name, transcript, and audio together ----
+  async openVoiceEditor(vo) {
+    this.__revokeObjectUrl('editPreviewUrl');
+    this.__fk = null;
+    const cached = (this.state.voiceMeta || {})[vo.id];
+    this.setState({ editVoiceId: vo.id, editName: vo.name || '', editText: cached ? (cached.prompt_text || '') : '', editBlob: null, editFileName: '', editPreviewUrl: '', editLoading: !cached });
+    if (cached) return;
+    try {
+      const meta = await this.__api('/api/voices/' + encodeURIComponent(vo.id));
+      this.setState(s => (s.editVoiceId === vo.id ? { editText: meta.prompt_text || '', editLoading: false, voiceMeta: { ...(s.voiceMeta || {}), [vo.id]: meta } } : {}));
+    } catch (e) {
+      this.setState(s => (s.editVoiceId === vo.id ? { editLoading: false } : {}));
+      this.flash(e.message || 'Could not load voice details.', 'error');
+    }
+  }
+
+  __chooseEditVoiceFile() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      input.remove();
+      if (!file) return;
+      const url = this.__setPreviewUrl('editPreviewUrl', file);
+      this.setState({ editBlob: file, editFileName: file.name, editPreviewUrl: url });
+    };
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  closeVoiceEditor() {
+    this.__revokeObjectUrl('editPreviewUrl');
+    this.__fk = null;
+    this.setState({ editVoiceId: null, editName: '', editText: '', editBlob: null, editFileName: '', editPreviewUrl: '', editLoading: false });
+  }
+
+  async saveVoiceEdit() {
+    const id = this.state.editVoiceId;
+    const name = this.state.editName.trim();
+    if (!id) return;
+    if (!name) { this.flash('Name the voice first.', 'error'); return; }
+    const form = new FormData();
+    form.append('name', name);
+    form.append('prompt_text', this.state.editText.trim());
+    if (this.state.editBlob) form.append('prompt_audio', this.state.editBlob, this.state.editFileName || 'reference.wav');
+    try {
+      await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'PATCH', body: form });
+      this.__revokeObjectUrl('editPreviewUrl');
+      this.__fk = null;
+      this.setState(s => { const vm = { ...(s.voiceMeta || {}) }; delete vm[id]; return { editVoiceId: null, editName: '', editText: '', editBlob: null, editFileName: '', editPreviewUrl: '', editLoading: false, voiceMeta: vm }; });
+      await this.__refreshCore(true);
+      this.flash('Voice updated.', 'success');
+    } catch (e) { this.flash(e.message || 'Voice update failed.', 'error'); }
+  }
 
   async saveReferenceVoice() {
     if (!this.state.refFileBlob) { this.flash('Load or record reference audio first.', 'error'); return; }

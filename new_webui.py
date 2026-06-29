@@ -28,7 +28,7 @@ def ensure_frontend_build(hub_root: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="TTS Hub React UI launcher",
+        description="Legacy TTS Hub React UI launcher",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")

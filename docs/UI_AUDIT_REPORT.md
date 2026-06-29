@@ -1,7 +1,7 @@
-# `new_webui` UI + Feature Audit
+# `claude_exact` UI + Feature Audit
 
 Date: 2026-04-21  
-Scope: React `new_webui` frontend and the FastAPI-backed local workflows exposed on `http://127.0.0.1:7891`
+Scope: `claude_exact` frontend and the FastAPI-backed local workflows exposed on `http://127.0.0.1:7896`
 
 ## Method
 

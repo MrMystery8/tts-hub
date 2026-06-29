@@ -16,6 +16,9 @@ from .audio_utils import FfmpegNotFoundError, ffmpeg_convert_to_wav
 
 _VOICE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# Sentinel so update_voice can tell "field omitted" apart from "field set to empty".
+_UNSET: Any = object()
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -249,6 +252,76 @@ class VoiceLibrary:
             return meta
 
         return self.update_voice_meta(voice_id, _rename)
+
+    def update_voice(
+        self,
+        voice_id: str,
+        *,
+        name: Any = _UNSET,
+        prompt_text: Any = _UNSET,
+        input_bytes: bytes | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Edit an existing voice in place. Any combination of name, transcript, and
+        a replacement audio clip may be supplied; omitted fields are left as-is.
+        Replacing the audio re-runs the ffmpeg conversion, recomputes the audio
+        stats, and invalidates any model caches (they were built from the old clip).
+        """
+        # Validate the voice exists up front.
+        voice_dir = self._voice_dir(voice_id)
+        meta_path = self._meta_path(voice_id)
+        if not meta_path.exists():
+            raise FileNotFoundError("voice not found")
+
+        if name is not _UNSET:
+            name = (name or "").strip()
+            if not name:
+                raise ValueError("name is required")
+            if len(name) > 120:
+                raise ValueError("name must be 120 characters or fewer")
+
+        new_audio: dict[str, Any] | None = None
+        if input_bytes is not None:
+            suffix = Path(filename or "").suffix or ".bin"
+            raw_path = voice_dir / f"input{suffix}"
+            raw_path.write_bytes(input_bytes)
+            prompt_wav = voice_dir / "prompt.wav"
+            try:
+                ffmpeg_convert_to_wav(input_path=raw_path, output_path=prompt_wav, channels=1)
+            except FfmpegNotFoundError:
+                if suffix.lower() == ".wav" and raw_path.exists():
+                    shutil.copyfile(raw_path, prompt_wav)
+                else:
+                    raise
+            finally:
+                try:
+                    raw_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            sr, duration_s = _wav_info(prompt_wav)
+            new_audio = {
+                "path": "prompt.wav",
+                "sha256": _sha256_file(prompt_wav),
+                "sr": sr,
+                "duration_s": round(duration_s, 3),
+                "profile": _wav_profile(prompt_wav),
+            }
+
+        def _apply(meta: dict[str, Any]) -> dict[str, Any]:
+            if name is not _UNSET:
+                meta["name"] = name
+            if prompt_text is not _UNSET:
+                cleaned = (prompt_text or "").strip() or None
+                meta["prompt_text"] = cleaned
+                meta["prompt_text_source"] = "user" if cleaned else None
+            if new_audio is not None:
+                meta["audio"] = new_audio
+                # The reference clip changed; previously-built model caches are stale.
+                meta["caches"] = {}
+            return meta
+
+        return self.update_voice_meta(voice_id, _apply)
 
     def ensure_audio_meta(self, voice_id: str) -> dict[str, Any]:
         """

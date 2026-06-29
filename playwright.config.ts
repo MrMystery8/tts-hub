@@ -5,7 +5,7 @@ export default defineConfig({
   timeout: 10 * 60 * 1000,
   expect: { timeout: 60 * 1000 },
   use: {
-    baseURL: 'http://localhost:7891',
+    baseURL: 'http://localhost:7896',
     browserName: 'chromium',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
@@ -13,9 +13,8 @@ export default defineConfig({
   reporter: [['list']],
   webServer: {
     command: 'bash -lc "./run.sh"',
-    url: 'http://localhost:7891/api/info',
+    url: 'http://localhost:7896/api/info',
     reuseExistingServer: true,
     timeout: 180 * 1000,
   },
 });
-

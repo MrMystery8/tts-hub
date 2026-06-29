@@ -10,7 +10,7 @@ from webui import create_app
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="TTS Hub Claude exact-design UI launcher",
+        description="Default TTS Hub launcher (claude_exact UI)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")

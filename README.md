@@ -4,31 +4,32 @@ TTS Hub is a local Apple Silicon-focused audio generation hub that runs multiple
 
 ## Current Runtime Layout
 
-- Active frontend source: `frontend/`
-- Active frontend launcher: `new_webui.py`
+- Active frontend source: `claude_exact/`
+- Active frontend launcher: `claude_exact.py`
 - Active backend/API app: `webui.py`
 - Default launcher script: `run.sh`
-- Legacy static UI kept in repo: `custom_ui/`
+- Legacy React UI source and launcher: `frontend/` and `new_webui.py`
 
 What is actually used today:
-- `run.sh` starts `.venv/bin/python3 new_webui.py --port 7891`
-- `new_webui.py` builds or serves the React app from `frontend/dist`
-- `new_webui.py` then calls `webui.create_app(...)`
-- `webui.py` exposes the API routes and serves the built frontend
+- `run.sh` starts `.venv/bin/python3 claude_exact.py --port 7896`
+- `claude_exact.py` serves the static UI from `claude_exact/`
+- `claude_exact.py` then calls `webui.create_app(...)`
+- `webui.py` exposes the API routes and serves the UI assets
 
-So yes: the active UI is the React frontend in `frontend/`, served through `new_webui.py`. `custom_ui/` is legacy and is not the default path anymore.
+So yes: the active UI is the static `claude_exact/` frontend, served through `claude_exact.py`. The React path in `frontend/` is retained as a legacy/alternate UI and is not the default path anymore.
 
 ## Project Structure
 
 ```text
 tts-hub/
-├── frontend/          # Active React UI source
-├── custom_ui/         # Legacy static UI
+├── claude_exact/      # Active static UI source
+├── claude_exact.py    # Default TTS Hub launcher
+├── frontend/          # Legacy React UI source
 ├── hub/               # Core services and model/runtime management
 ├── workers/           # Model worker entrypoints
 ├── watermark/         # Watermarking and provenance tooling
 ├── docs/              # Project documentation
-├── new_webui.py       # React UI launcher
+├── new_webui.py       # Legacy React UI launcher
 ├── webui.py           # FastAPI app and API routes
 └── run.sh             # Default local launcher
 ```
@@ -68,26 +69,26 @@ Preferred:
 That starts the app on:
 
 ```text
-http://localhost:7891
+http://localhost:7896
 ```
 
 Manual equivalent:
 
 ```bash
-.venv/bin/python3 new_webui.py --port 7891
+.venv/bin/python3 claude_exact.py --port 7896
 ```
 
 Notes:
-- `new_webui.py` will build the React frontend if `frontend/dist/index.html` is missing.
+- `claude_exact.py` serves the `claude_exact/` UI bundle directly.
 - The FastAPI app is mounted from `webui.py`.
 - The UI talks to the backend on the same origin in production.
 
-## Frontend Development
+## Legacy React Frontend Development
 
-Run the backend:
+Run the hub backend:
 
 ```bash
-.venv/bin/python3 webui.py --port 7891
+.venv/bin/python3 claude_exact.py --port 7896
 ```
 
 In another terminal, run the React dev server:
@@ -102,7 +103,7 @@ Vite runs on:
 http://localhost:5173
 ```
 
-The Vite config proxies `/api` to `http://127.0.0.1:7891`.
+The Vite config proxies `/api` to `http://127.0.0.1:7896`.
 
 ## Tests And Checks
 
@@ -125,9 +126,9 @@ npx playwright install chromium
 npx playwright test tests/e2e/ui_render_smoke.spec.ts
 ```
 
-## Current UI Behavior
+## Legacy React UI Behavior
 
-The current React UI uses async generation jobs in addition to the legacy direct generate route:
+The legacy React UI uses async generation jobs in addition to the legacy direct generate route:
 
 - New async flow: `/api/generation-jobs`
 - Backward-compatible direct route: `/api/generate`
