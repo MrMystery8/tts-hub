@@ -98,17 +98,22 @@ class WatermarkService:
         runs = self.list_runs()
         if not runs:
             return None
-        # Honour an explicit pin (outputs/watermark_default.txt holds a run id,
-        # e.g. "outputs/dashboard_runs/sweep3_B_static_12_2") if it resolves to a
-        # currently-available run; otherwise fall back to sort order.
-        pin_file = self.outputs_root / "watermark_default.txt"
-        try:
-            if pin_file.exists():
-                pinned = pin_file.read_text(encoding="utf-8").strip()
-                if pinned and any(r.id == pinned for r in runs):
-                    return pinned
-        except Exception:
-            pass
+        # Honour an explicit pin holding a run id, e.g.
+        # "outputs/dashboard_runs/sweep3_B_static_12_2", if it resolves to a
+        # currently-available run; otherwise fall back to sort order. The pin may
+        # be tracked in the repo (hub/watermark_default.txt) or local runtime
+        # state (outputs/watermark_default.txt); the tracked file takes priority.
+        for pin_file in (
+            self.hub_root / "hub" / "watermark_default.txt",
+            self.outputs_root / "watermark_default.txt",
+        ):
+            try:
+                if pin_file.exists():
+                    pinned = pin_file.read_text(encoding="utf-8").strip()
+                    if pinned and any(r.id == pinned for r in runs):
+                        return pinned
+            except Exception:
+                pass
         # Prefer completed if present (list_runs sorts that way).
         return runs[0].id
 
