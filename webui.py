@@ -53,22 +53,22 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
         fields = dict(job_request.get("fields") or {})
         staged_files = dict(job_request.get("staged_files") or {})
 
+        def _hydrate_saved_voice_transcript() -> None:
+            # Use the saved voice's transcript when the request didn't carry an
+            # explicit one, so models that rely on a reference transcript use it
+            # verbatim instead of re-transcribing (qwen auto-transcribe) or failing
+            # (f5 / cosyvoice zero-shot / voxcpm). An explicit prompt_text wins.
+            if voice_id and not str(fields.get("prompt_text") or "").strip():
+                saved_text = str((voices.get_voice_meta(voice_id) or {}).get("prompt_text") or "").strip()
+                if saved_text:
+                    fields["prompt_text"] = saved_text
+
         prompt_audio_wav = None
         emo_audio_wav = None
         if voice_id:
             voices.ensure_audio_meta(voice_id)
             prompt_audio_wav = voices.get_voice_audio_path(voice_id)
-            # Use the saved voice's transcript when the request didn't carry an
-            # explicit one, so models that rely on a reference transcript use it
-            # verbatim instead of re-transcribing (qwen auto-transcribe) or failing
-            # (f5 / cosyvoice zero-shot / voxcpm). An explicit prompt_text wins.
-            if not str(fields.get("prompt_text") or "").strip():
-                try:
-                    saved_text = str((voices.get_voice_meta(voice_id) or {}).get("prompt_text") or "").strip()
-                    if saved_text:
-                        fields["prompt_text"] = saved_text
-                except Exception:
-                    pass
+            _hydrate_saved_voice_transcript()
         elif staged_files.get("prompt_audio"):
             prompt_audio_wav = job_dir / "prompt.wav"
             ffmpeg_convert_to_wav(input_path=Path(staged_files["prompt_audio"]), output_path=prompt_audio_wav)
@@ -545,6 +545,13 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
             "fields": {k: str(v) for k, v in form.items() if k not in {"prompt_audio", "emo_audio"}},
             "hub_root": str(manager.hub_root),
         }
+        if voice_id and not str(model_request["fields"].get("prompt_text") or "").strip():
+            try:
+                saved_text = str((voices.get_voice_meta(voice_id) or {}).get("prompt_text") or "").strip()
+                if saved_text:
+                    model_request["fields"]["prompt_text"] = saved_text
+            except FileNotFoundError:
+                return JSONResponse({"error": "voice_id not found"}, status_code=404)
 
         if model_id in {"index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx", "qwen3-tts-mlx"} and not prompt_audio_wav:
             return JSONResponse({"error": "prompt_audio or voice_id is required for this model"}, status_code=400)
