@@ -25,6 +25,10 @@ def main() -> None:
     def support_js() -> FileResponse:
         return FileResponse(ui_dir / "support.js", media_type="text/javascript")
 
+    @app.get("/tour.js", include_in_schema=False)
+    def tour_js() -> FileResponse:
+        return FileResponse(ui_dir / "tour.js", media_type="text/javascript")
+
     @app.get("/thumbnail.webp", include_in_schema=False)
     def thumbnail() -> FileResponse:
         return FileResponse(ui_dir / "thumbnail.webp", media_type="image/webp")

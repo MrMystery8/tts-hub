@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="./support.js"></script>
+<script src="./tour.js?v=8" defer></script>
 </head>
 <body>
 <x-dc>
@@ -59,7 +60,7 @@
 <div data-theme="{{ theme }}" style="display:flex;height:100vh;width:100vw;background:var(--bg);color:var(--tx);overflow:hidden">
 
   <!-- ============ NAV RAIL ============ -->
-  <nav style="width:212px;flex:0 0 212px;background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column">
+  <nav data-tour="nav" style="width:212px;flex:0 0 212px;background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column">
     <div style="height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line)">
       <div style="width:22px;height:22px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto">
         <svg width="13" height="13" viewBox="0 0 13 13"><g fill="var(--accent-tx)"><rect x="0" y="5" width="2" height="3" rx="1"/><rect x="3" y="2" width="2" height="9" rx="1"/><rect x="6" y="0" width="2" height="13" rx="1"/><rect x="9" y="3" width="2" height="7" rx="1"/></g></svg>
@@ -86,9 +87,12 @@
         <span>ffmpeg {{ ffmpegLabel }}</span>
         <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--tx-3)">{{ serverClock }}</span>
       </div>
-      <div style="display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px">
-        <button onClick="{{ setDark }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ darkTxt }};background:{{ darkBg }}">Dark</button>
-        <button onClick="{{ setLight }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ lightTxt }};background:{{ lightBg }}">Light</button>
+      <div style="display:flex;gap:8px">
+        <div style="flex:1;display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px">
+          <button onClick="{{ setDark }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ darkTxt }};background:{{ darkBg }}">Dark</button>
+          <button onClick="{{ setLight }}" style="flex:1;padding:5px;border-radius:5px;font-size:11px;font-weight:600;color:{{ lightTxt }};background:{{ lightBg }}">Light</button>
+        </div>
+        <button data-tour="help" data-tour-launch title="Replay the tour (Shift+/)" style="flex:0 0 auto;width:29px;border:1px solid var(--line);border-radius:7px;background:var(--bg-3);color:var(--tx-2);font-size:12px;font-weight:700;transition:color .12s" style-hover="color:var(--accent);border-color:var(--accent-line)">?</button>
       </div>
     </div>
   </nav>
@@ -101,7 +105,7 @@
       <div style="flex:1;display:flex;min-height:0">
 
         <!-- model rail -->
-        <section style="width:{{ railW }};flex:0 0 {{ railW }};border-right:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
+        <section data-tour="models" style="width:{{ railW }};flex:0 0 {{ railW }};border-right:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
           <sc-if value="{{ railClosed }}" hint-placeholder-val="{{ true }}">
             <button onClick="{{ toggleRail }}" title="Expand models" style="height:52px;border-bottom:1px solid var(--line);color:var(--tx-3);font-size:13px" style-hover="color:var(--accent)">⟩</button>
             <div style="flex:1;overflow-y:auto;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:7px">
@@ -156,7 +160,7 @@
           <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px">
 
             <!-- script editor -->
-            <div>
+            <div data-tour="script">
               <div style="display:flex;align-items:baseline;margin-bottom:7px">
                 <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Script</label>
                 <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:{{ charColor }}">{{ charCount }} chars</span>
@@ -166,7 +170,7 @@
 
             <!-- reference voice -->
             <sc-if value="{{ showReference }}" hint-placeholder-val="{{ true }}">
-              <div style="border:1px solid var(--line);border-radius:10px;background:var(--bg-1);overflow:hidden">
+              <div data-tour="reference" style="border:1px solid var(--line);border-radius:10px;background:var(--bg-1);overflow:hidden">
                 <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)">
                   <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Reference Voice</label>
                   <sc-if value="{{ refRequired }}" hint-placeholder-val="{{ true }}">
@@ -274,7 +278,7 @@
           </div>
 
           <!-- action bar -->
-          <div style="flex:0 0 auto;border-top:1px solid var(--line);padding:13px 20px;display:flex;align-items:center;gap:16px;background:var(--bg-1)">
+          <div data-tour="actions" style="flex:0 0 auto;border-top:1px solid var(--line);padding:13px 20px;display:flex;align-items:center;gap:16px;background:var(--bg-1)">
             <div>
               <div style="font-size:10px;font-weight:600;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Format</div>
               <div style="display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px;gap:2px">
@@ -306,7 +310,7 @@
         </section>
 
         <!-- settings panel -->
-        <section style="width:{{ setW }};flex:0 0 {{ setW }};border-left:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
+        <section data-tour="settings" style="width:{{ setW }};flex:0 0 {{ setW }};border-left:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;min-height:0;transition:width .16s">
           <sc-if value="{{ setClosed }}" hint-placeholder-val="{{ true }}">
             <button onClick="{{ toggleSet }}" title="Expand settings" style="height:52px;border-bottom:1px solid var(--line);color:var(--tx-3);font-size:13px" style-hover="color:var(--accent)">⟨</button>
             <div style="flex:1;display:flex;align-items:flex-start;justify-content:center;padding-top:18px"><span style="writing-mode:vertical-rl;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)">Model Settings</span></div>
@@ -388,7 +392,7 @@
       </div>
 
       <!-- transport dock -->
-      <div style="flex:0 0 auto;border-top:1px solid var(--line);background:var(--bg-2);min-height:88px;display:flex;align-items:stretch">
+      <div data-tour="transport" style="flex:0 0 auto;border-top:1px solid var(--line);background:var(--bg-2);min-height:88px;display:flex;align-items:stretch">
         <!-- idle -->
         <sc-if value="{{ transportIdle }}" hint-placeholder-val="{{ true }}">
           <div style="flex:1;display:flex;align-items:center;gap:12px;padding:0 24px;color:var(--tx-3);font-size:12.5px">
@@ -1233,8 +1237,8 @@ class Component extends DCLogic {
     v.refPreviewLabel = st.refPreviewUrl && st.activeAudioUrl === st.refPreviewUrl && st.isPlaying ? 'Stop' : 'Listen';
     v.recBtnBg = st.recording ? 'var(--err)' : 'var(--bg-3)'; v.recBtnTx = st.recording ? '#fff' : 'var(--tx-2)';
     v.recBtnLabel = st.recording ? 'Stop recording' : 'Start recording'; v.recDotRadius = st.recording ? '2px' : '50%';
-    v.showTranscript = (this.needsTranscript(id) || id === 'qwen3-tts-mlx') && st.refMode !== 'none';
     const usingSavedTranscript = this.savedVoiceHasTranscript() && !st.promptText.trim();
+    v.showTranscript = (this.needsTranscript(id) || id === 'qwen3-tts-mlx') && st.refMode !== 'none' && !usingSavedTranscript;
     v.transcriptUsingSaved = usingSavedTranscript;
     v.transcriptRequired = this.needsTranscript(id) && !this.transcriptSatisfied(id);
     v.transcriptHint = usingSavedTranscript ? 'using saved voice transcript' : (id === 'qwen3-tts-mlx' ? (this.s().qwen.autoTranscribe ? 'optional — auto-transcribe on' : 'optional') : 'verbatim');
