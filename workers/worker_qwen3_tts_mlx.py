@@ -154,13 +154,14 @@ def _prepare_ref_prompt(
     """
     Returns: (ref_audio_wav_path, audio_sha256_or_none, ref_audio_cache_status)
     """
+    cap_seconds = round(float(max_seconds), 3) if max_seconds > 0 else None
     audio_sha = None
     try:
         audio_sha = _sha256_file(prompt_audio_path)
     except Exception:
         audio_sha = None
 
-    cache_key = (voice_id or "", audio_sha or "", model_id)
+    cache_key = (voice_id or "", audio_sha or "", model_id, str(cap_seconds))
     if audio_sha and model_id and cache_key in _ref_cache:
         ref_path = Path(str(_ref_cache[cache_key].get("ref_audio_path") or ""))
         if ref_path.exists():
@@ -184,6 +185,7 @@ def _prepare_ref_prompt(
                 ref_path.exists()
                 and cached.get("source_sha256") == audio_sha
                 and cached.get("model_id") == model_id
+                and cached.get("max_seconds") == cap_seconds
                 and cached.get("prompt_trim_path") == "caches/qwen3-tts-mlx/prompt_24k_trim.wav"
             ):
                 _ref_cache[cache_key] = {"ref_audio_path": str(ref_path)}
@@ -285,7 +287,7 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
     repetition_penalty = _float(fields.get("qwen_repetition_penalty"), 1.05)
     speed = _float(fields.get("qwen_speed"), 1.0)
 
-    max_seconds = _float(os.getenv("QWEN3_PROMPT_MAX_SECONDS"), 8.0)
+    max_seconds = _float(os.getenv("QWEN3_PROMPT_MAX_SECONDS"), 0.0)
 
     # Ensure model loaded early so we know its SR for preprocessing.
     model = _load_model(qwen_model)
@@ -325,6 +327,7 @@ def _handle_gen(req: dict[str, Any]) -> dict[str, Any]:
                     "prompt_trim_path": "caches/qwen3-tts-mlx/prompt_24k_trim.wav",
                     "source_sha256": audio_sha,
                     "model_id": qwen_model,
+                    "max_seconds": round(float(max_seconds), 3) if max_seconds > 0 else None,
                     "prepared_at": int(time.time()),
                 }
                 meta["caches"] = caches

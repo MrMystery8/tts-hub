@@ -14,7 +14,7 @@ from typing import Any
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault(
     "PYTORCH_MPS_HIGH_WATERMARK_RATIO",
-    os.getenv("INDEXTTS2_MPS_HIGH_WATERMARK_RATIO", "1.1"),
+    os.getenv("INDEXTTS2_MPS_HIGH_WATERMARK_RATIO", "1.3"),
 )
 os.environ.setdefault(
     "PYTORCH_MPS_LOW_WATERMARK_RATIO",
