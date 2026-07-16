@@ -24,6 +24,36 @@ def _wav_bytes() -> bytes:
 
 
 class TestGenerationJobApi(unittest.TestCase):
+    def test_mobile_assets_and_model_ui_metadata_are_served(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ui = root / "ui"
+            static = root / "static"
+            mobile = root / "mobile"
+            ui.mkdir()
+            static.mkdir()
+            mobile.mkdir()
+            (ui / "index.html").write_text("<div>test</div>", encoding="utf-8")
+            (mobile / "index.html").write_text("<div>mobile</div>", encoding="utf-8")
+            (mobile / "manifest.webmanifest").write_text('{"name":"TTS Hub"}', encoding="utf-8")
+
+            client = TestClient(create_app(hub_root=root, ui_dir=ui, static_dir=static))
+            self.assertEqual(client.get("/mobile/").status_code, 200)
+            self.assertIn("mobile", client.get("/mobile/").text)
+            self.assertEqual(client.get("/mobile/manifest.webmanifest").status_code, 200)
+
+            models = client.get("/api/models").json()["models"]
+            self.assertEqual(len(models), 7)
+            for model in models:
+                self.assertIn("id", model)
+                self.assertIn("name", model)
+                self.assertIn("description", model)
+                self.assertIsInstance(model["capabilities"], dict)
+                self.assertIsInstance(model["defaults"], dict)
+            qwen = next(model for model in models if model["id"] == "qwen3-tts-mlx")
+            self.assertTrue(qwen["defaults"]["autoTranscribe"])
+            self.assertEqual(qwen["capabilities"]["reference"], "required")
+
     def test_job_lifecycle_and_persistent_audio(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -56,6 +86,8 @@ class TestGenerationJobApi(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 202)
                 job_id = response.json()["id"]
+                self.assertEqual(response.json()["request"]["modelId"], "pocket-tts")
+                self.assertEqual(response.json()["request"]["text"], "hello")
 
                 deadline = time.time() + 3
                 job = response.json()

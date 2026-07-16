@@ -21,6 +21,38 @@ from hub.voice_library import VoiceLibrary
 from hub.watermark_service import WatermarkService
 
 
+MODEL_UI_DEFAULTS = {
+    "index-tts2": {
+        "capabilities": {"reference": "required", "transcript": "optional", "watermark": True, "emotion": True},
+        "defaults": {"emoMode": "speaker", "emoAlpha": 0.65, "useRandom": False, "emoVector": "[0,0,0,0,0,0,0.45,0]", "emoText": "", "maxTextTokens": 120, "maxMelTokens": 1500, "fastMode": False, "doSample": True, "temperature": 0.8, "topP": 0.8, "topK": 30, "numBeams": 3, "repetitionPenalty": 10, "lengthPenalty": 0},
+    },
+    "qwen3-tts-mlx": {
+        "capabilities": {"reference": "required", "transcript": "auto", "watermark": True},
+        "defaults": {"model": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "autoTranscribe": True, "language": "auto", "speed": 1, "temperature": 0.7, "maxTokens": 1200},
+    },
+    "chatterbox-multilingual": {
+        "capabilities": {"reference": "optional", "transcript": "optional", "watermark": True},
+        "defaults": {"language": "hi", "usePrompt": True, "cfgWeight": 0.5, "temperature": 0.8, "exaggeration": 0.5, "fastMode": False, "enableChunking": True, "maxChunkChars": 150, "crossfadeMs": 50, "enableDf": False, "enableNovasr": False},
+    },
+    "f5-hindi-urdu": {
+        "capabilities": {"reference": "required", "transcript": "required", "watermark": False},
+        "defaults": {"romanMode": True, "overridesEnabled": True, "overridesText": "", "crossFade": 0.15, "nfeStep": 32, "speed": 1, "removeSilence": False, "seed": -1},
+    },
+    "cosyvoice3-mlx": {
+        "capabilities": {"reference": "required", "transcript": "mode-dependent", "watermark": False},
+        "defaults": {"model": "8bit", "mode": "zero_shot", "language": "auto", "speed": 1, "instructText": ""},
+    },
+    "pocket-tts": {
+        "capabilities": {"reference": "optional", "transcript": "optional", "watermark": False},
+        "defaults": {"voice": "hf://kyutai/tts-voices/alba-mackenna/casual.wav", "temperature": 0.8, "lsdDecodeSteps": 8, "eosThreshold": 0.4, "noiseClamp": "", "truncatePrompt": False},
+    },
+    "voxcpm-ane": {
+        "capabilities": {"reference": "conditional", "transcript": "required-with-reference", "watermark": False},
+        "defaults": {"voice": "", "cfgValue": 2, "inferenceTimesteps": 10, "maxLength": 2048},
+    },
+}
+
+
 def _json_safe(value):
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -149,6 +181,10 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    mobile_dir = hub_root / "mobile"
+    if mobile_dir.exists():
+        app.mount("/mobile", StaticFiles(directory=str(mobile_dir), html=True), name="mobile")
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return (ui_dir / "index.html").read_text(encoding="utf-8")
@@ -157,7 +193,12 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
     def models():
         return {
             "models": [
-                {"id": m.id, "name": m.name, "description": m.description}
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "description": m.description,
+                    **MODEL_UI_DEFAULTS.get(m.id, {"capabilities": {}, "defaults": {}}),
+                }
                 for m in manager.list_models()
             ]
         }

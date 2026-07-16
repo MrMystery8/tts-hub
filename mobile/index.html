@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0d10" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TTS Hub" />
+  <title>TTS Hub</title>
+  <link rel="manifest" href="/mobile/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/mobile/apple-touch-icon.png" />
+  <link rel="icon" href="/mobile/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/mobile/app.css" />
+</head>
+<body>
+<div id="app" class="app" data-theme="dark">
+
+  <!-- header -->
+  <header class="topbar">
+    <div class="logo">
+      <svg width="13" height="13" viewBox="0 0 13 13"><g fill="var(--accent-tx)"><rect x="0" y="5" width="2" height="3" rx="1"/><rect x="3" y="2" width="2" height="9" rx="1"/><rect x="6" y="0" width="2" height="13" rx="1"/><rect x="9" y="3" width="2" height="7" rx="1"/></g></svg>
+    </div>
+    <div class="wordmark">TTS&nbsp;HUB</div>
+    <div class="ver">v2</div>
+    <span class="clock" id="clock"></span>
+    <button class="icon-btn" id="theme-toggle" title="Toggle theme">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7.5" cy="7.5" r="3.2"/><path d="M7.5 1v1.6M7.5 12.4V14M1 7.5h1.6M12.4 7.5H14M2.9 2.9l1.1 1.1M11 11l1.1 1.1M12.1 2.9L11 4M4 11l-1.1 1.1"/></svg>
+    </button>
+  </header>
+
+  <!-- ============ GENERATE (stack layout) ============ -->
+  <main class="surface" id="surface-generate">
+    <div class="stack-scroll">
+      <button class="model-row" id="model-row">
+        <span class="dot" id="model-dot"></span>
+        <span class="model-row-txt">
+          <span class="model-row-name" id="model-name">—</span>
+          <span class="model-row-meta" id="model-meta">—</span>
+        </span>
+        <span class="caret">▾</span>
+      </button>
+
+      <div id="voice-section">
+        <div class="sec-head">
+          <label class="sec-label">Reference</label>
+          <span class="req-badge hidden" id="voice-required">Required</span>
+          <button class="link-btn" id="manage-voices">Manage ›</button>
+        </div>
+        <div class="ref-tabs" id="ref-tabs"></div>
+        <div id="ref-saved">
+          <div class="voice-carousel" id="voice-carousel"></div>
+          <div class="voice-none hidden" id="voice-none">No compatible voices. <button class="link-under" id="voice-none-create">Create one</button></div>
+        </div>
+        <div class="ref-file hidden" id="ref-file">
+          <button class="ref-file-btn" id="choose-ref-file">＋ Choose audio</button>
+          <button class="ref-file-btn" id="record-ref-file">● Record</button>
+          <div class="staged-row hidden" id="ref-file-staged">
+            <button class="preview-btn" id="preview-ref-file">▶</button>
+            <span class="staged-name" id="ref-file-name"></span>
+            <button class="staged-replace" id="replace-ref-file">Replace</button>
+          </div>
+          <button class="save-ref-btn hidden" id="save-ref-voice">Save to library</button>
+        </div>
+        <div class="field-block hidden" id="prompt-text-wrap">
+          <label class="field-label" id="prompt-text-label">Reference transcript</label>
+          <textarea id="prompt-text" class="compact-input" rows="3" placeholder="Type the reference audio transcript verbatim"></textarea>
+          <div class="field-hint" id="prompt-text-hint"></div>
+        </div>
+        <div class="field-block hidden" id="instruct-text-wrap">
+          <label class="field-label">Instruction</label>
+          <textarea id="instruct-text" class="compact-input" rows="2" placeholder="Describe the speaking style"></textarea>
+        </div>
+        <div class="field-block hidden" id="emotion-ref-wrap">
+          <label class="field-label">Emotion reference</label>
+          <button class="ref-file-btn" id="choose-emo-file">＋ Choose emotion audio</button>
+          <div class="staged-row hidden" id="emo-file-staged">
+            <button class="preview-btn" id="preview-emo-file">▶</button>
+            <span class="staged-name" id="emo-file-name"></span>
+            <button class="staged-replace" id="replace-emo-file">Replace</button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="sec-head">
+          <label class="sec-label">Script</label>
+          <span class="char-count" id="char-count">0 chars</span>
+        </div>
+        <textarea id="script" class="script-input" placeholder="Type or paste the text to synthesize..." rows="5"></textarea>
+      </div>
+
+      <button class="options-row" id="options-row">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--tx-3)" stroke-width="1.4" stroke-linecap="round"><path d="M2 4.5h8M12.5 4.5H14M2 11.5h3M7.5 11.5H14"/><circle cx="11" cy="4.5" r="1.6"/><circle cx="6" cy="11.5" r="1.6"/></svg>
+        <span class="options-label">Options</span>
+        <span class="options-summary" id="options-summary"></span>
+        <span class="caret sm">▾</span>
+      </button>
+    </div>
+
+    <!-- transport: running -->
+    <div class="transport hidden" id="transport-running">
+      <div class="transport-top">
+        <span class="spinner-ring"></span>
+        <div class="transport-txt">
+          <div class="transport-phase" id="active-phase">Working</div>
+          <div class="transport-meta" id="active-meta"></div>
+        </div>
+        <button class="cancel-btn" id="cancel-job">Cancel</button>
+      </div>
+      <div class="phase-track" id="phase-track"></div>
+    </div>
+
+    <!-- run bar -->
+    <div class="runbar" id="runbar">
+      <div class="block-reason hidden" id="block-reason"></div>
+      <button class="run-btn" id="run-btn">
+        <svg width="12" height="13" viewBox="0 0 12 13"><path d="M1 1.5 L11 6.5 L1 11.5 Z" fill="currentColor"/></svg>
+        <span id="run-label">Run generation</span>
+      </button>
+    </div>
+  </main>
+
+  <!-- ============ VOICES ============ -->
+  <main class="surface hidden" id="surface-voices">
+    <div class="page-head">
+      <div class="page-title">Voice Library</div>
+      <div class="page-count" id="voice-count">0 saved</div>
+      <button class="add-btn" id="add-voice-btn">＋ Add voice</button>
+    </div>
+    <div class="page-scroll" id="voice-list"></div>
+  </main>
+
+  <!-- ============ JOBS ============ -->
+  <main class="surface hidden" id="surface-jobs">
+    <div class="page-head">
+      <div class="page-title">Jobs</div>
+      <div class="filter-group" id="job-filters"></div>
+    </div>
+    <div class="page-scroll jobs-scroll" id="job-list"></div>
+  </main>
+
+  <!-- ============ mini player ============ -->
+  <div class="miniplayer hidden" id="miniplayer">
+    <button class="play-btn" id="mp-toggle"></button>
+    <div class="mp-mid">
+      <div class="mp-title-row">
+        <span class="mp-name" id="mp-name"></span>
+        <span class="mp-done">DONE</span>
+      </div>
+      <div class="mp-wave" id="mp-wave"></div>
+    </div>
+    <div class="mp-right">
+      <button class="dl-btn" id="mp-download">
+        <svg width="14" height="14" viewBox="0 0 12 12"><path d="M6 1 V8 M3 5.5 L6 8.5 L9 5.5 M2 10.5 H10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="mp-meta" id="mp-meta"></div>
+    </div>
+  </div>
+
+  <!-- ============ tab bar ============ -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab" data-tab="generate">
+      <span class="tab-ic">
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 8h2l1.5-4 3 9 2-6 1 3h2.5"/></svg>
+      </span>
+      <span class="tab-label">Generate</span>
+    </button>
+    <button class="tab" data-tab="voices">
+      <span class="tab-ic">
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="5.5" y="1.5" width="5" height="8.5" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V14.5"/></svg>
+        <span class="tab-badge muted hidden" id="badge-voices"></span>
+      </span>
+      <span class="tab-label">Voices</span>
+    </button>
+    <button class="tab" data-tab="jobs">
+      <span class="tab-ic">
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+        <span class="tab-badge hidden" id="badge-jobs"></span>
+      </span>
+      <span class="tab-label">Jobs</span>
+    </button>
+  </nav>
+
+  <!-- ============ bottom sheet ============ -->
+  <div class="sheet-backdrop hidden" id="sheet-backdrop">
+    <div class="sheet" id="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title" id="sheet-title"></span>
+        <button class="sheet-close" id="sheet-close">✕</button>
+      </div>
+      <div class="sheet-body" id="sheet-body"></div>
+    </div>
+  </div>
+
+  <!-- toast -->
+  <div class="toast hidden" id="toast"><span class="toast-dot" id="toast-dot"></span><span id="toast-msg"></span></div>
+
+  <input type="file" id="file-input" accept="audio/*" hidden />
+  <input type="file" id="ref-file-input" accept="audio/*" hidden />
+  <input type="file" id="emo-file-input" accept="audio/*" hidden />
+</div>
+<script src="/mobile/app.js"></script>
+</body>
+</html>
