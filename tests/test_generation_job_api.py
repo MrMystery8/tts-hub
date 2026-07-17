@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from hub.hub_manager import GenerateResult
 from hub.voice_library import VoiceLibrary
+from hub.watermark_service import WatermarkService
 from webui import create_app
 
 
@@ -53,6 +54,99 @@ class TestGenerationJobApi(unittest.TestCase):
             qwen = next(model for model in models if model["id"] == "qwen3-tts-mlx")
             self.assertTrue(qwen["defaults"]["autoTranscribe"])
             self.assertEqual(qwen["capabilities"]["reference"], "required")
+
+    def test_mobile_voice_editor_can_update_name_transcript_and_audio(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ui = root / "ui"
+            static = root / "static"
+            ui.mkdir()
+            static.mkdir()
+            (ui / "index.html").write_text("<div>test</div>", encoding="utf-8")
+            voice = VoiceLibrary(hub_root=root).create_voice(
+                name="Original",
+                input_bytes=_wav_bytes(),
+                filename="original.wav",
+                prompt_text="old transcript",
+            )
+            client = TestClient(create_app(hub_root=root, ui_dir=ui, static_dir=static))
+
+            response = client.patch(
+                f"/api/voices/{voice['id']}",
+                data={"name": "Edited", "prompt_text": "new transcript"},
+                files={"prompt_audio": ("replacement.wav", _wav_bytes(), "audio/wav")},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["name"], "Edited")
+            self.assertEqual(response.json()["prompt_text"], "new transcript")
+            listed = client.get("/api/voices").json()["voices"][0]
+            self.assertEqual(listed["name"], "Edited")
+            self.assertTrue(listed["has_transcript"])
+            self.assertEqual(client.get(f"/api/voices/{voice['id']}/audio").status_code, 200)
+
+    def test_watermark_detect_forwards_controls_normalizes_result_and_cleans_uploads(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ui = root / "ui"
+            static = root / "static"
+            ui.mkdir()
+            static.mkdir()
+            (ui / "index.html").write_text("<div>test</div>", encoding="utf-8")
+            seen = {}
+
+            def fake_detect(_service, *, audio_path, run_id, wm_threshold):
+                seen.update(audio_path=audio_path, run_id=run_id, wm_threshold=wm_threshold)
+                self.assertTrue(audio_path.exists())
+                return {
+                    "detected": True,
+                    "wm_prob": 0.91,
+                    "pred_attr_id": 0,
+                    "tts_model_id": "index-tts2",
+                    "run_id": "run-mobile",
+                }
+
+            with patch("webui.has_ffmpeg", return_value=False), patch.object(WatermarkService, "detect_from_audio_file", fake_detect):
+                client = TestClient(create_app(hub_root=root, ui_dir=ui, static_dir=static))
+                response = client.post(
+                    "/api/watermark/detect",
+                    data={"watermark_run": "run-mobile", "wm_threshold": "0.42"},
+                    files={"audio": ("sample.wav", _wav_bytes(), "audio/wav")},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["detected"])
+            self.assertEqual(response.json()["wm_prob"], 0.91)
+            self.assertEqual(response.json()["model"]["tts_model_id"], "index-tts2")
+            self.assertEqual(response.json()["model"]["name"], "IndexTTS2 (index-tts)")
+            self.assertEqual(response.json()["run"]["id"], "run-mobile")
+            self.assertEqual(seen["run_id"], "run-mobile")
+            self.assertEqual(seen["wm_threshold"], 0.42)
+            self.assertEqual(list(root.rglob("wm_detect_*")), [])
+
+    def test_watermark_detect_cleans_uploads_after_invalid_audio_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ui = root / "ui"
+            static = root / "static"
+            ui.mkdir()
+            static.mkdir()
+            (ui / "index.html").write_text("<div>test</div>", encoding="utf-8")
+
+            with patch("webui.has_ffmpeg", return_value=False), patch.object(
+                WatermarkService,
+                "detect_from_audio_file",
+                side_effect=ValueError("invalid audio"),
+            ):
+                client = TestClient(create_app(hub_root=root, ui_dir=ui, static_dir=static))
+                response = client.post(
+                    "/api/watermark/detect",
+                    files={"audio": ("broken.wav", b"not audio", "audio/wav")},
+                )
+
+            self.assertEqual(response.status_code, 500)
+            self.assertEqual(response.json()["error"], "invalid audio")
+            self.assertEqual(list(root.rglob("wm_detect_*")), [])
 
     def test_job_lifecycle_and_persistent_audio(self):
         with tempfile.TemporaryDirectory() as td:

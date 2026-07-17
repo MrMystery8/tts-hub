@@ -338,56 +338,57 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
     @app.post("/api/watermark/detect")
     async def watermark_detect(request: Request):
         form = await request.form()
-
         task_id = uuid.uuid4().hex
         uploads_root = manager.uploads_root / f"wm_detect_{task_id}"
         uploads_root.mkdir(parents=True, exist_ok=True)
-
-        up = form.get("audio")
-        if up is None:
-            return JSONResponse({"error": "audio is required"}, status_code=400)
-
-        filename = getattr(up, "filename", None) or "audio.bin"
-        suffix = Path(filename).suffix or ".bin"
-        input_path = uploads_root / f"input{suffix}"
-        input_path.write_bytes(up.file.read())
-
-        run_id = str(form.get("watermark_run") or "").strip() or None
         try:
-            wm_threshold = float(form.get("wm_threshold") or 0.35)
-        except Exception:
-            wm_threshold = 0.35
+            up = form.get("audio")
+            if up is None:
+                return JSONResponse({"error": "audio is required"}, status_code=400)
 
-        # Prefer ffmpeg conversion so we can handle mp3/m4a consistently.
-        detect_path = input_path
-        if has_ffmpeg():
+            filename = getattr(up, "filename", None) or "audio.bin"
+            suffix = Path(filename).suffix or ".bin"
+            input_path = uploads_root / f"input{suffix}"
+            input_path.write_bytes(up.file.read())
+
+            run_id = str(form.get("watermark_run") or "").strip() or None
             try:
-                wav_path = uploads_root / "input_16k.wav"
-                ffmpeg_convert_to_wav(input_path=input_path, output_path=wav_path, sample_rate=16000, channels=1)
-                detect_path = wav_path
+                wm_threshold = float(form.get("wm_threshold") or 0.35)
+            except Exception:
+                wm_threshold = 0.35
+
+            # Prefer ffmpeg conversion so we can handle mp3/m4a consistently.
+            detect_path = input_path
+            if has_ffmpeg():
+                try:
+                    wav_path = uploads_root / "input_16k.wav"
+                    ffmpeg_convert_to_wav(input_path=input_path, output_path=wav_path, sample_rate=16000, channels=1)
+                    detect_path = wav_path
+                except Exception as e:
+                    return JSONResponse({"error": f"ffmpeg conversion failed: {e}"}, status_code=500)
+
+            try:
+                result = watermark.detect_from_audio_file(audio_path=detect_path, run_id=run_id, wm_threshold=wm_threshold)
             except Exception as e:
-                return JSONResponse({"error": f"ffmpeg conversion failed: {e}"}, status_code=500)
+                return JSONResponse({"error": str(e)}, status_code=500)
 
-        try:
-            result = watermark.detect_from_audio_file(audio_path=detect_path, run_id=run_id, wm_threshold=wm_threshold)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
+            model_name = None
+            if result.get("tts_model_id"):
+                spec = next((m for m in manager.list_models() if m.id == result["tts_model_id"]), None)
+                model_name = spec.name if spec else result["tts_model_id"]
 
-        model_name = None
-        if result.get("tts_model_id"):
-            spec = next((m for m in manager.list_models() if m.id == result["tts_model_id"]), None)
-            model_name = spec.name if spec else result["tts_model_id"]
-
-        return {
-            "detected": bool(result.get("detected")),
-            "wm_prob": float(result.get("wm_prob", 0.0)),
-            "model": {
-                "id": result.get("pred_attr_id"),
-                "name": model_name,
-                "tts_model_id": result.get("tts_model_id"),
-            },
-            "run": {"id": result.get("run_id")},
-        }
+            return {
+                "detected": bool(result.get("detected")),
+                "wm_prob": float(result.get("wm_prob", 0.0)),
+                "model": {
+                    "id": result.get("pred_attr_id"),
+                    "name": model_name,
+                    "tts_model_id": result.get("tts_model_id"),
+                },
+                "run": {"id": result.get("run_id")},
+            }
+        finally:
+            shutil.rmtree(uploads_root, ignore_errors=True)
 
     @app.get("/api/status")
     def status(model_id: str = None):

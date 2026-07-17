@@ -57,6 +57,27 @@
     addFile: null,       // File or Blob staged for the new voice
     addFileName: "",
     addRecording: false,
+    editVoiceId: null,
+    editOriginal: null,
+    editName: "",
+    editText: "",
+    editFile: null,
+    editFileName: "",
+    editPreviewUrl: "",
+    editRecording: false,
+    verifyMode: "upload",
+    verifyFile: null,
+    verifyFileName: "",
+    verifyPreviewUrl: "",
+    verifyRecording: false,
+    verifyRuns: [],
+    verifyDefaultRunId: "",
+    verifyRunId: "",
+    verifyThreshold: 0.35,
+    verifyAdvancedOpen: false,
+    verifyLoading: false,
+    verifyResult: null,
+    verifyError: "",
     connected: false,
   };
 
@@ -90,7 +111,7 @@
   function fmtDur(ms) { return ms == null ? "—" : (ms / 1000).toFixed(1) + "s"; }
   function fmtSec(s) {
     if (s == null) return "—";
-    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
     return m + ":" + String(sec).padStart(2, "0");
   }
   function hash(str) {
@@ -106,6 +127,43 @@
       out.push(Math.max(0.1, v * env));
     }
     return out;
+  }
+  const waveformCache = new Map();
+  const waveformLoading = new Map();
+  async function audioPeaks(url, n) {
+    const cacheKey = `${url}:${n}`;
+    if (waveformCache.has(cacheKey)) return waveformCache.get(cacheKey);
+    if (waveformLoading.has(cacheKey)) return waveformLoading.get(cacheKey);
+    const loading = (async () => {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.arrayBuffer();
+      const context = new (window.AudioContext || window.webkitAudioContext)();
+      try {
+        const decoded = await context.decodeAudioData(data.slice(0));
+        const channel = decoded.getChannelData(0);
+        const step = Math.max(1, Math.floor(channel.length / n));
+        const result = Array.from({ length: n }, (_, i) => {
+          const start = i * step;
+          const end = Math.min(channel.length, start + step);
+          let sum = 0;
+          for (let j = start; j < end; j++) sum += channel[j] * channel[j];
+          return Math.max(0.06, Math.sqrt(sum / Math.max(1, end - start)));
+        });
+        const max = Math.max(...result, 0.01);
+        const normalized = result.map((value) => value / max);
+        waveformCache.set(cacheKey, normalized);
+        return normalized;
+      } finally {
+        context.close().catch(() => {});
+      }
+    })();
+    waveformLoading.set(cacheKey, loading);
+    try {
+      return await loading;
+    } finally {
+      waveformLoading.delete(cacheKey);
+    }
   }
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -149,7 +207,7 @@
     return false;
   }
   function transcriptReady(id) {
-    if (state.promptText.trim()) return true;
+    if (["upload", "record"].includes(state.refMode) && state.promptText.trim()) return true;
     if (state.refMode === "saved" && selectedVoice() && selectedVoice().has_transcript) return true;
     if (id === "voxcpm-ane" && state.settings.voxcpm.voice.trim()) return true;
     return false;
@@ -174,7 +232,11 @@
     const id = state.selectedModelId;
     if (NEEDS_REF.has(id) && !refReady()) return "Choose, upload, or record a reference voice.";
     if (id === "voxcpm-ane" && !state.settings.voxcpm.voice.trim() && !refReady()) return "VoxCPM needs a cached voice or reference audio.";
-    if (needsTranscript(id) && !transcriptReady(id)) return "A reference transcript is required.";
+    if (needsTranscript(id) && !transcriptReady(id)) {
+      return state.refMode === "saved"
+        ? "This saved voice needs a transcript. Edit it in Voices before generating."
+        : "A reference transcript is required.";
+    }
     if (id === "cosyvoice3-mlx" && state.settings.cosy.mode === "instruct" && !state.instructText.trim()) return "CosyVoice instruct mode needs instruction text.";
     if (id === "index-tts2" && state.settings.index.emoMode === "emo_ref" && !state.emoFile) return "Choose emotion reference audio.";
     if (id === "index-tts2" && state.settings.index.emoMode === "emo_vector") {
@@ -212,8 +274,16 @@
   outAudio.addEventListener("ended", () => { outPlaying = false; renderMiniplayer(); });
   outAudio.addEventListener("pause", () => { outPlaying = false; renderMiniplayer(); });
   outAudio.addEventListener("play", () => { outPlaying = true; renderMiniplayer(); });
+  outAudio.addEventListener("timeupdate", renderMiniplayer);
+  outAudio.addEventListener("loadedmetadata", renderMiniplayer);
   outAudio.addEventListener("error", () => {
-    if (state.outputJobId) { outPlaying = false; flash("Could not play output audio.", "error"); renderMiniplayer(); }
+    if (state.outputJobId) {
+      outPlaying = false;
+      state.outputJobId = null;
+      outAudio.removeAttribute("src");
+      flash("This run's audio is no longer available.", "error");
+      renderMiniplayer();
+    }
   });
 
   function playOutput(jobId, autoplay) {
@@ -226,6 +296,14 @@
   function toggleOutput() {
     if (outPlaying) outAudio.pause();
     else outAudio.play().catch(() => {});
+  }
+  function seekOutput(clientX) {
+    const wave = $("mp-wave");
+    const rect = wave.getBoundingClientRect();
+    const duration = outAudio.duration || Number(($("mp-duration").dataset || {}).seconds) || 0;
+    if (!duration || !rect.width) return;
+    outAudio.currentTime = Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
+    renderMiniplayer();
   }
   function downloadOutput(jobId) {
     const job = state.jobs.find((j) => j.id === jobId);
@@ -263,6 +341,24 @@
     state.emoFile = null;
     state.emoFileName = "";
   }
+  function clearEditAudio() {
+    localAudio.pause();
+    replaceObjectUrl("editPreviewUrl", null);
+    state.editFile = null;
+    state.editFileName = "";
+  }
+  function clearVerifyAudio() {
+    localAudio.pause();
+    replaceObjectUrl("verifyPreviewUrl", null);
+    state.verifyFile = null;
+    state.verifyFileName = "";
+    state.verifyResult = null;
+    state.verifyError = "";
+  }
+  function invalidateVerifyResult() {
+    state.verifyResult = null;
+    state.verifyError = "";
+  }
 
   /* ================= data loading / polling ================= */
 
@@ -280,6 +376,17 @@
       const data = await api("/api/status");
       state.statusMap = data.models || {};
     } catch { /* status is cosmetic; ignore */ }
+  }
+  async function loadWatermarkRuns() {
+    try {
+      const data = await api("/api/watermark/runs");
+      state.verifyRuns = data.runs || [];
+      state.verifyDefaultRunId = data.default_run_id || "";
+      if (state.verifyRunId && !state.verifyRuns.some((run) => run.id === state.verifyRunId)) state.verifyRunId = "";
+    } catch {
+      state.verifyRuns = [];
+      state.verifyDefaultRunId = "";
+    }
   }
   async function loadVoices() {
     const data = await api("/api/voices");
@@ -306,11 +413,6 @@
       const persistedActive = state.jobs.find((j) => ACTIVE_STATES.includes(j.status));
       if (persistedActive) state.activeJobId = persistedActive.id;
     }
-    if (!state.outputJobId) {
-      const latestCompleted = state.jobs.find((j) => j.status === "completed" && j.output);
-      if (latestCompleted) state.outputJobId = latestCompleted.id;
-    }
-
     if (state.activeJobId) {
       const active = state.jobs.find((j) => j.id === state.activeJobId);
       if (active && !ACTIVE_STATES.includes(active.status)) {
@@ -373,7 +475,8 @@
     fd.append("text", state.text);
     if (useVoice) fd.append("voice_id", state.selectedVoiceId);
     if ((state.refMode === "upload" || state.refMode === "record") && state.refFile) fd.append("prompt_audio", state.refFile, state.refFileName || "reference.webm");
-    if (state.promptText.trim()) fd.append("prompt_text", state.promptText.trim());
+    const submittedPromptText = ["upload", "record"].includes(state.refMode) ? state.promptText.trim() : "";
+    if (submittedPromptText) fd.append("prompt_text", submittedPromptText);
     if (id === "index-tts2" && state.settings.index.emoMode === "emo_ref" && state.emoFile) fd.append("emo_audio", state.emoFile, state.emoFileName || "emotion.wav");
     fd.append("output_format", state.outputFormat);
     if (wm) fd.append("watermark", "1");
@@ -385,7 +488,7 @@
       modelId: id,
       voiceId: useVoice ? state.selectedVoiceId : null,
       text: state.text,
-      promptText: state.promptText,
+      promptText: submittedPromptText,
       outputFormat: state.outputFormat,
       watermarkEnabled: wm,
       watermarkRun: state.watermarkRun,
@@ -427,6 +530,51 @@
       if (state.selectedVoiceId === v.id) state.selectedVoiceId = "";
       await loadVoices();
       flash("Voice deleted.", "success");
+      render();
+    } catch (e) {
+      flash(e.message, "error");
+    }
+  }
+
+  async function openEditVoice(v) {
+    try {
+      const meta = await api(`/api/voices/${encodeURIComponent(v.id)}`);
+      state.editVoiceId = v.id;
+      state.editOriginal = {
+        name: meta.name || v.name || "",
+        promptText: meta.prompt_text || "",
+      };
+      state.editName = state.editOriginal.name;
+      state.editText = state.editOriginal.promptText;
+      clearEditAudio();
+      state.editRecording = false;
+      openSheet("edit");
+    } catch (e) {
+      flash(e.message, "error");
+    }
+  }
+
+  function editVoiceDirty() {
+    if (!state.editOriginal) return false;
+    return !!state.editFile ||
+      state.editName !== state.editOriginal.name ||
+      state.editText !== state.editOriginal.promptText;
+  }
+
+  async function saveEditedVoice() {
+    if (!state.editVoiceId || !state.editName.trim()) return;
+    const fd = new FormData();
+    fd.append("name", state.editName.trim());
+    fd.append("prompt_text", state.editText.trim());
+    if (state.editFile) fd.append("prompt_audio", state.editFile, state.editFileName || "replacement.webm");
+    try {
+      await api(`/api/voices/${encodeURIComponent(state.editVoiceId)}`, { method: "PATCH", body: fd });
+      const editedId = state.editVoiceId;
+      state.editOriginal = null;
+      closeSheet(true);
+      await loadVoices();
+      state.selectedVoiceId = state.selectedVoiceId || editedId;
+      flash("Voice updated.", "success");
       render();
     } catch (e) {
       flash(e.message, "error");
@@ -476,10 +624,32 @@
       await loadVoices();
       state.selectedVoiceId = saved.id;
       state.refMode = "saved";
+      state.promptText = "";
       clearReference();
       flash("Reference saved to the voice library.", "success");
       render();
     } catch (e) { flash(e.message, "error"); }
+  }
+
+  async function verifyWatermark() {
+    if (state.verifyLoading || !state.verifyFile || !state.verifyRuns.length || !state.connected) return;
+    const fd = new FormData();
+    fd.append("audio", state.verifyFile, state.verifyFileName || "verification.webm");
+    fd.append("wm_threshold", String(state.verifyThreshold));
+    if (state.verifyRunId) fd.append("watermark_run", state.verifyRunId);
+    state.verifyLoading = true;
+    state.verifyResult = null;
+    state.verifyError = "";
+    renderVerify();
+    try {
+      state.verifyResult = await api("/api/watermark/detect", { method: "POST", body: fd });
+      flash(state.verifyResult.detected ? "Watermark detected." : "No watermark detected.", state.verifyResult.detected ? "success" : "warn");
+    } catch (e) {
+      state.verifyError = e.message || "Watermark verification failed.";
+    } finally {
+      state.verifyLoading = false;
+      renderVerify();
+    }
   }
 
   /* --- recording (real MediaRecorder) --- */
@@ -487,8 +657,28 @@
   let recorderStream = null;
   let recChunks = [];
   let recordingTarget = null;
+  function discardRecording() {
+    if (recorder && recorder.state === "recording") {
+      recorder.ondataavailable = null;
+      recorder.onstop = () => {
+        if (recorderStream) recorderStream.getTracks().forEach((track) => track.stop());
+        recorder = null;
+        recorderStream = null;
+        recordingTarget = null;
+      };
+      recorder.stop();
+    } else if (recorderStream) {
+      recorderStream.getTracks().forEach((track) => track.stop());
+      recorderStream = null;
+    }
+    state.addRecording = false;
+    state.refRecording = false;
+    state.editRecording = false;
+    state.verifyRecording = false;
+  }
   async function toggleRecord(target = "add") {
-    const active = target === "add" ? state.addRecording : state.refRecording;
+    const recordingState = { add: "addRecording", ref: "refRecording", edit: "editRecording", verify: "verifyRecording" }[target] || "refRecording";
+    const active = state[recordingState];
     if (active) {
       recorder && recorder.stop();
       return;
@@ -513,6 +703,18 @@
           state.addFile = file;
           state.addFileName = file.name;
           state.addRecording = false;
+        } else if (recordingTarget === "edit") {
+          clearEditAudio();
+          state.editFile = file;
+          state.editFileName = file.name;
+          replaceObjectUrl("editPreviewUrl", file);
+          state.editRecording = false;
+        } else if (recordingTarget === "verify") {
+          clearVerifyAudio();
+          state.verifyFile = file;
+          state.verifyFileName = file.name;
+          replaceObjectUrl("verifyPreviewUrl", file);
+          state.verifyRecording = false;
         } else {
           clearReference();
           state.refFile = file;
@@ -528,6 +730,8 @@
       };
       recorder.start();
       if (target === "add") state.addRecording = true;
+      else if (target === "edit") state.editRecording = true;
+      else if (target === "verify") state.verifyRecording = true;
       else state.refRecording = true;
       render();
       renderSheet(true);
@@ -544,6 +748,7 @@
     renderGenerate();
     renderVoicesPage();
     renderJobsPage();
+    renderVerify();
     renderTransport();
     renderMiniplayer();
     renderSheet();
@@ -558,7 +763,7 @@
 
   function renderTabs() {
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === state.surface));
-    ["generate", "voices", "jobs"].forEach((s) => $(`surface-${s}`).classList.toggle("hidden", s !== state.surface));
+    ["generate", "voices", "jobs", "verify"].forEach((s) => $(`surface-${s}`).classList.toggle("hidden", s !== state.surface));
 
     const vb = $("badge-voices");
     vb.textContent = String(state.voices.length);
@@ -572,6 +777,7 @@
   function renderGenerate() {
     const id = state.selectedModelId;
     const ms = state.statusMap[id] || {};
+    const active = state.activeJobId ? state.jobs.find((j) => j.id === state.activeJobId && ACTIVE_STATES.includes(j.status)) : null;
     $("model-name").textContent = modelName(id);
     $("model-meta").textContent = `${ms.loaded ? "loaded" : "idle"} · ${ms.device || "—"} · ${ms.total_generations || 0} runs`;
     $("model-dot").style.background = ms.loaded ? "var(--accent)" : "var(--line-3)";
@@ -591,8 +797,19 @@
         b.addEventListener("click", () => { state.refMode = k; render(); });
         tabs.appendChild(b);
       });
-      $("ref-saved").classList.toggle("hidden", state.refMode !== "saved");
-      $("ref-file").classList.toggle("hidden", !["upload", "record"].includes(state.refMode));
+      const locked = !!active;
+      const lockedRef = $("ref-locked");
+      lockedRef.classList.toggle("hidden", !locked);
+      if (locked) {
+        const submitted = jobReq(active);
+        const voice = submitted.voice_id && state.voices.find((v) => v.id === submitted.voice_id);
+        lockedRef.textContent = voice
+          ? `Using saved voice: ${voice.name || voice.id}`
+          : submitted.prompt_text ? "Using the submitted reference audio and transcript." : "Reference settings are locked for this run.";
+      }
+      tabs.classList.toggle("hidden", locked);
+      $("ref-saved").classList.toggle("hidden", locked || state.refMode !== "saved");
+      $("ref-file").classList.toggle("hidden", locked || !["upload", "record"].includes(state.refMode));
       const cv = compatVoices();
       const carousel = $("voice-carousel");
       carousel.innerHTML = "";
@@ -626,19 +843,16 @@
       $("ref-file-name").textContent = state.refFileName;
       $("save-ref-voice").classList.toggle("hidden", !staged);
 
-      const usingSavedTranscript = state.refMode === "saved" && selectedVoice() && selectedVoice().has_transcript && !state.promptText.trim();
-      const showTranscript = state.refMode !== "none" && (needsTranscript(id) || id === "qwen3-tts-mlx");
-      $("prompt-text-wrap").classList.toggle("hidden", !showTranscript || usingSavedTranscript);
+      const showTranscript = !locked && ["upload", "record"].includes(state.refMode) && (needsTranscript(id) || id === "qwen3-tts-mlx");
+      $("prompt-text-wrap").classList.toggle("hidden", !showTranscript);
       $("prompt-text").value = state.promptText;
-      $("prompt-text-hint").textContent = usingSavedTranscript
-        ? "Using the saved voice transcript."
-        : id === "qwen3-tts-mlx" && state.settings.qwen.autoTranscribe
+      $("prompt-text-hint").textContent = id === "qwen3-tts-mlx" && state.settings.qwen.autoTranscribe
           ? "Optional — Qwen will auto-transcribe when left blank."
           : needsTranscript(id) ? "Required for this model and mode." : "Optional.";
-      $("instruct-text-wrap").classList.toggle("hidden", !(id === "cosyvoice3-mlx" && state.settings.cosy.mode === "instruct"));
+      $("instruct-text-wrap").classList.toggle("hidden", locked || !(id === "cosyvoice3-mlx" && state.settings.cosy.mode === "instruct"));
       $("instruct-text").value = state.instructText;
       const emotionRef = id === "index-tts2" && state.settings.index.emoMode === "emo_ref";
-      $("emotion-ref-wrap").classList.toggle("hidden", !emotionRef);
+      $("emotion-ref-wrap").classList.toggle("hidden", locked || !emotionRef);
       $("emo-file-staged").classList.toggle("hidden", !state.emoFile);
       $("choose-emo-file").classList.toggle("hidden", !!state.emoFile);
       $("emo-file-name").textContent = state.emoFileName;
@@ -675,10 +889,24 @@
     $("runbar").classList.toggle("hidden", running || state.surface !== "generate");
     if (!running) return;
 
-    const labels = { queued: "Queued", preparing: "Preparing", generating: "Generating", watermarking: "Watermark", converting: "Convert" };
+    const labels = { queued: "Waiting in queue", preparing: "Preparing model", generating: "Synthesizing speech", watermarking: "Applying watermark", converting: "Converting output" };
+    const details = {
+      queued: "The run will begin when earlier jobs finish.",
+      preparing: "Loading the model and preparing reference audio.",
+      generating: "The model is producing audio. It does not report a reliable percentage.",
+      watermarking: "Embedding the selected watermark into the generated audio.",
+      converting: "Encoding the final download format.",
+    };
     $("active-phase").textContent = labels[active.status] || "Working";
-    const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - (active.created_at || Date.now() / 1000)));
-    $("active-meta").textContent = `${modelName(jobReq(active).model_id)} · ${elapsed}s elapsed`;
+    const elapsedFrom = active.started_at || active.created_at || Date.now() / 1000;
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - elapsedFrom));
+    const queued = state.jobs
+      .filter((job) => ACTIVE_STATES.includes(job.status))
+      .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    const queueIndex = queued.findIndex((job) => job.id === active.id);
+    const queueText = active.status === "queued" && queueIndex >= 0 ? ` · position ${queueIndex + 1} of ${queued.length}` : "";
+    $("active-meta").textContent = `${modelName(jobReq(active).model_id)} · ${elapsed}s elapsed${queueText}`;
+    $("active-detail").textContent = details[active.status] || "";
 
     const wm = !!jobReq(active).watermark_enabled;
     const shown = ["queued", "preparing", "generating", "watermarking", "converting"].filter((p) => p !== "watermarking" || wm);
@@ -694,30 +922,46 @@
 
   function renderMiniplayer() {
     const out = state.outputJobId ? state.jobs.find((j) => j.id === state.outputJobId && j.status === "completed") : null;
-    const showMp = !!out && !state.activeJobId && state.surface !== "jobs";
+    const showMp = !!out && !state.activeJobId && state.surface === "generate";
     $("miniplayer").classList.toggle("hidden", !showMp);
     if (!showMp) return;
 
     const o = out.output || {};
+    const duration = Number(outAudio.duration || o.duration_s || 0);
+    const current = Math.min(Number(outAudio.currentTime || 0), duration || Infinity);
     $("mp-name").textContent = o.filename || out.id;
-    $("mp-meta").textContent = `${fmtSec(o.duration_s)} · ${(o.format || "").toUpperCase()}`;
+    $("mp-meta").textContent = `${(o.format || "").toUpperCase()} · tap waveform to seek`;
+    $("mp-current").textContent = fmtSec(current);
+    $("mp-duration").textContent = fmtSec(duration);
+    $("mp-duration").dataset.seconds = String(duration);
     $("mp-toggle").innerHTML = outPlaying
       ? '<svg width="13" height="13" viewBox="0 0 13 13"><rect x="2" y="1" width="3.5" height="11" rx="1" fill="currentColor"/><rect x="7.5" y="1" width="3.5" height="11" rx="1" fill="currentColor"/></svg>'
       : '<svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 1.5 L12.5 7 L2 12.5 Z" fill="currentColor"/></svg>';
 
-    const n = 30, pk = peaks(out.id, n);
-    const dur = o.duration_s || 0;
-    const frac = outPlaying && dur ? Math.min(1, outAudio.currentTime / dur) : -1;
+    const n = 30;
+    const url = `/api/generation-jobs/${encodeURIComponent(out.id)}/audio`;
+    const cacheKey = `${url}:${n}`;
+    const pk = waveformCache.get(cacheKey) || peaks(out.id, n);
+    const frac = duration ? Math.min(1, current / duration) : 0;
     const cut = Math.round(frac * n);
     const wave = $("mp-wave");
     wave.innerHTML = "";
     pk.forEach((p, i) => {
       const bar = el("span");
       bar.style.height = Math.round(15 + p * 85) + "%";
-      bar.style.background = frac >= 0 && i < cut ? "var(--accent)" : frac >= 0 ? "var(--tx-3)" : "var(--accent)";
-      bar.style.opacity = frac < 0 ? "0.4" : i < cut ? "1" : "0.32";
+      bar.style.background = i < cut ? "var(--accent)" : "var(--tx-3)";
+      bar.style.opacity = i < cut ? "1" : "0.32";
       wave.appendChild(bar);
     });
+    if (!waveformCache.has(cacheKey) && !wave.dataset.loading) {
+      wave.dataset.loading = "1";
+      audioPeaks(url, n)
+        .then(() => {
+          delete wave.dataset.loading;
+          if (state.outputJobId === out.id) renderMiniplayer();
+        })
+        .catch(() => { delete wave.dataset.loading; });
+    }
   }
 
   function renderVoicesPage() {
@@ -762,6 +1006,10 @@
         render();
       });
       top.appendChild(use);
+
+      const edit = el("button", "edit-btn", "Edit");
+      edit.addEventListener("click", () => openEditVoice(vo));
+      top.appendChild(edit);
 
       const del = el("button", "del-btn");
       del.title = "Delete voice";
@@ -835,16 +1083,115 @@
     }
   }
 
+  function renderVerify() {
+    const hasRuns = state.verifyRuns.length > 0;
+    const selectedRun = state.verifyRuns.find((run) => run.id === state.verifyRunId);
+    const defaultRun = state.verifyRuns.find((run) => run.id === state.verifyDefaultRunId) || state.verifyRuns[0];
+    const status = $("verify-run-status");
+    status.textContent = hasRuns ? "Detector ready" : "Detector unavailable";
+    status.classList.toggle("unavailable", !hasRuns);
+
+    document.querySelectorAll("[data-verify-mode]").forEach((button) => {
+      button.classList.toggle("sel", button.dataset.verifyMode === state.verifyMode);
+    });
+    const staged = !!state.verifyFile;
+    $("choose-verify-file").classList.toggle("hidden", staged || state.verifyMode !== "upload");
+    $("record-verify-file").classList.toggle("hidden", staged || state.verifyMode !== "record");
+    $("record-verify-file").classList.toggle("recording", state.verifyRecording);
+    $("record-verify-file").textContent = state.verifyRecording ? "■ Stop recording" : "● Start recording";
+    $("verify-file-staged").classList.toggle("hidden", !staged);
+    $("verify-file-name").textContent = state.verifyFileName;
+
+    const advanced = $("verify-advanced-body");
+    advanced.classList.toggle("hidden", !state.verifyAdvancedOpen);
+    $("verify-advanced-toggle").setAttribute("aria-expanded", String(state.verifyAdvancedOpen));
+    $("verify-advanced-caret").textContent = state.verifyAdvancedOpen ? "▴" : "▾";
+    const runSummary = selectedRun ? (selectedRun.label || selectedRun.id) : "Automatic";
+    $("verify-advanced-summary").textContent = `${runSummary} · ${state.verifyThreshold.toFixed(2)}`;
+
+    const runSelect = $("verify-run-select");
+    runSelect.innerHTML = "";
+    const automatic = document.createElement("option");
+    automatic.value = "";
+    automatic.textContent = defaultRun ? `Automatic (${defaultRun.label || defaultRun.id})` : "Automatic";
+    runSelect.appendChild(automatic);
+    state.verifyRuns.forEach((run) => {
+      const option = document.createElement("option");
+      option.value = run.id;
+      option.textContent = `${run.label || run.id}${run.status ? ` · ${run.status}` : ""}`;
+      runSelect.appendChild(option);
+    });
+    runSelect.value = state.verifyRunId;
+    runSelect.disabled = !hasRuns || state.verifyLoading;
+    $("verify-threshold").value = String(state.verifyThreshold);
+    $("verify-threshold").disabled = state.verifyLoading;
+    $("verify-threshold-value").textContent = state.verifyThreshold.toFixed(2);
+    $("verify-reset").disabled = state.verifyLoading;
+
+    let reason = "";
+    if (!state.connected) reason = "The hub is offline. Reconnect to verify audio.";
+    else if (!hasRuns) reason = "No trained detector is available. Create or select a watermark run from the desktop app.";
+    else if (!state.verifyFile) reason = "Choose or record an audio clip first.";
+    const blocked = !!reason || state.verifyLoading;
+    $("verify-block-reason").textContent = reason;
+    $("verify-block-reason").classList.toggle("hidden", !reason);
+    $("verify-btn").disabled = blocked;
+    $("verify-btn").classList.toggle("blocked", !!reason);
+    $("verify-btn").classList.toggle("loading", state.verifyLoading);
+    $("verify-btn-label").textContent = state.verifyLoading ? "Checking audio…" : "Check watermark";
+
+    const error = $("verify-error");
+    error.textContent = state.verifyError;
+    error.classList.toggle("hidden", !state.verifyError);
+
+    const result = $("verify-result");
+    result.innerHTML = "";
+    result.classList.toggle("hidden", !state.verifyResult);
+    result.classList.remove("detected", "clean");
+    if (!state.verifyResult) return;
+    const detected = !!state.verifyResult.detected;
+    const probability = Math.max(0, Math.min(1, Number(state.verifyResult.wm_prob || 0)));
+    result.classList.add(detected ? "detected" : "clean");
+    const top = el("div", "verify-result-top");
+    top.appendChild(el("span", "verify-result-icon", detected ? "✓" : "—"));
+    const title = el("div");
+    title.appendChild(el("div", "verify-result-title", detected ? "Watermark detected" : "No watermark detected"));
+    title.appendChild(el("div", "verify-subtitle", detected ? "Embedded provenance evidence was found." : "The score did not meet the selected threshold."));
+    top.appendChild(title);
+    top.appendChild(el("span", "verify-result-confidence", `${(probability * 100).toFixed(1)}%`));
+    result.appendChild(top);
+    const model = state.verifyResult.model || {};
+    const resultRunId = (state.verifyResult.run || {}).id || state.verifyRunId || state.verifyDefaultRunId || "automatic";
+    const resultRun = state.verifyRuns.find((run) => run.id === resultRunId);
+    const facts = el("div", "verify-result-facts");
+    [
+      ["Raw score", probability.toFixed(3)],
+      ["Source model", model.name || model.tts_model_id || "Source model unavailable"],
+      ["Detector run", (resultRun && (resultRun.label || resultRun.id)) || resultRunId],
+      ["Threshold", state.verifyThreshold.toFixed(2)],
+    ].forEach(([key, value]) => {
+      facts.appendChild(el("span", "k", key));
+      facts.appendChild(el("span", "v", value));
+    });
+    result.appendChild(facts);
+  }
+
   /* ================= sheets ================= */
 
   function openSheet(name) {
     state.sheet = name;
     render();
   }
-  function closeSheet() {
+  function closeSheet(force = false) {
+    if (!force && state.sheet === "edit" && editVoiceDirty()) {
+      if (!window.confirm("Discard unsaved voice changes?")) return;
+    }
     state.sheet = null;
     state.jobDetailId = null;
-    if (state.addRecording && recorder) recorder.stop();
+    if ((state.addRecording || state.editRecording) && recorder) discardRecording();
+    clearEditAudio();
+    state.editVoiceId = null;
+    state.editOriginal = null;
     render();
   }
 
@@ -858,7 +1205,7 @@
     if (!force && renderedSheet === state.sheet) return;
     renderedSheet = state.sheet;
     $("sheet-title").textContent =
-      { model: "Choose model", voice: "Choose voice", settings: "Options", job: "Run detail", add: "New reference voice" }[state.sheet] || "";
+      { model: "Choose model", voice: "Choose voice", settings: "Options", job: "Run detail", add: "New reference voice", edit: "Edit voice" }[state.sheet] || "";
     const body = $("sheet-body");
     body.innerHTML = "";
     if (state.sheet === "model") renderModelSheet(body);
@@ -866,6 +1213,7 @@
     else if (state.sheet === "settings") renderSettingsSheet(body);
     else if (state.sheet === "job") renderJobSheet(body);
     else if (state.sheet === "add") renderAddSheet(body);
+    else if (state.sheet === "edit") renderEditVoiceSheet(body);
   }
 
   function renderModelSheet(body) {
@@ -943,37 +1291,37 @@
       index: {
         basics: [
           ["select", "Emotion mode", "emoMode", [["speaker", "Speaker"], ["emo_ref", "Reference audio"], ["emo_vector", "Vector"], ["emo_text", "Emotion text"]]],
-          ["number", "Emotion strength", "emoAlpha", 0, 1, 0.05],
-          ["toggle", "Random emotion", "useRandom"],
-          ["number", "Text tokens / segment", "maxTextTokens", 20, 500, 1],
-          ["number", "Maximum mel tokens", "maxMelTokens", 100, 3000, 10],
-          ["toggle", "Fast mode", "fastMode"],
+          ["slider", "Emotion strength", "emoAlpha", 0, 1, 0.05, "Scales the selected emotion without changing the speaker identity."],
+          ["emotionVector", "Emotion vector", "emoVector", null, null, null, "Blend the eight canonical IndexTTS2 emotions.", () => x.emoMode === "emo_vector"],
+          ["textarea", "Emotion text", "emoText", null, null, null, "Describe the intended delivery in natural language.", () => x.emoMode === "emo_text"],
         ],
         advanced: [
-          ["toggle", "Sampling", "doSample"],
-          ["number", "Temperature", "temperature", 0.1, 2, 0.05],
-          ["number", "Top P", "topP", 0, 1, 0.05],
+          ["toggle", "Sampling", "doSample", null, null, null, "Stochastic sampling adds variation; disable it for greedy decoding."],
+          ["slider", "Temperature", "temperature", 0.1, 1.5, 0.05],
+          ["slider", "Top P", "topP", 0.1, 1, 0.05],
           ["number", "Top K", "topK", 0, 200, 1],
           ["number", "Beams", "numBeams", 1, 10, 1],
-          ["number", "Repetition penalty", "repetitionPenalty", 0, 20, 0.1],
-          ["number", "Length penalty", "lengthPenalty", -5, 5, 0.1],
-          ["textarea", "Emotion vector (8 values)", "emoVector", () => x.emoMode === "emo_vector"],
-          ["textarea", "Emotion text", "emoText", () => x.emoMode === "emo_text"],
+          ["slider", "Repetition penalty", "repetitionPenalty", 1, 15, 0.5],
+          ["slider", "Length penalty", "lengthPenalty", -2, 2, 0.1],
+          ["toggle", "Random emotion", "useRandom"],
+          ["toggle", "Fast mode", "fastMode", null, null, null, "Trades some quality for faster inference."],
+          ["number", "Text tokens / segment", "maxTextTokens", 20, 500, 1],
+          ["number", "Maximum mel tokens", "maxMelTokens", 100, 4000, 50],
         ],
       },
       chatterbox: {
         basics: [
-          ["text", "Language code", "language"],
-          ["toggle", "Use reference voice", "usePrompt"],
-          ["number", "CFG weight", "cfgWeight", 0, 1, 0.05],
-          ["number", "Temperature", "temperature", 0.1, 2, 0.05],
-          ["number", "Exaggeration", "exaggeration", 0, 2, 0.05],
+          ["select", "Language", "language", [["hi", "Hindi"], ["en", "English"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["zh", "Chinese"]]],
+          ["toggle", "Use reference voice", "usePrompt", null, null, null, "Use the selected or uploaded prompt audio for voice cloning."],
+          ["slider", "Exaggeration", "exaggeration", 0, 1, 0.05, "Raises or softens expressive delivery."],
+          ["slider", "CFG weight", "cfgWeight", 0, 1, 0.05, "Controls adherence to the reference voice."],
+          ["slider", "Temperature", "temperature", 0.1, 1.5, 0.05],
           ["toggle", "Fast mode", "fastMode"],
         ],
         advanced: [
           ["toggle", "Long-form chunking", "enableChunking"],
-          ["number", "Maximum chunk characters", "maxChunkChars", 30, 1000, 1],
-          ["number", "Crossfade (ms)", "crossfadeMs", 0, 500, 1],
+          ["number", "Maximum chunk characters", "maxChunkChars", 30, 1000, 1, "Maximum text length per generated segment.", () => x.enableChunking],
+          ["slider", "Crossfade (ms)", "crossfadeMs", 0, 500, 5, "Blends adjacent long-form chunks.", () => x.enableChunking],
           ["toggle", "DeepFilter denoise", "enableDf"],
           ["toggle", "NovaSR upscale", "enableNovasr"],
         ],
@@ -1004,12 +1352,12 @@
       qwen: {
         basics: [
           ["select", "Model", "model", [["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "1.7B 8-bit"], ["mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "0.6B 8-bit"]]],
-          ["toggle", "Auto-transcribe reference", "autoTranscribe"],
-          ["text", "Language", "language"],
-          ["number", "Speed", "speed", 0.5, 2, 0.05],
-          ["number", "Temperature", "temperature", 0.1, 2, 0.05],
+          ["toggle", "Auto-transcribe reference", "autoTranscribe", null, null, null, "When enabled, Qwen derives the transcript from uploaded reference audio."],
+          ["select", "Language", "language", [["auto", "Auto detect"], ["en", "English"], ["zh", "Chinese"], ["ja", "Japanese"], ["ko", "Korean"], ["de", "German"], ["fr", "French"], ["es", "Spanish"], ["ru", "Russian"]]],
+          ["slider", "Speed", "speed", 0.5, 2, 0.05],
+          ["slider", "Temperature", "temperature", 0.1, 1.5, 0.05],
         ],
-        advanced: [["number", "Maximum tokens", "maxTokens", 100, 4000, 10]],
+        advanced: [["number", "Maximum tokens", "maxTokens", 100, 4000, 10, "Caps the generated acoustic token sequence."]],
       },
       pocket: {
         basics: [
@@ -1032,11 +1380,59 @@
       },
     };
 
+    function emotionVectorRow(label, key, help) {
+      const wrap = el("div", "emotion-vector");
+      const top = el("div", "emotion-vector-head");
+      top.appendChild(el("label", null, label));
+      const resetVector = el("button", "emotion-reset", "Reset vector");
+      resetVector.addEventListener("click", () => {
+        x[key] = "[0,0,0,0,0,0,0,0]";
+        renderGenerate();
+        renderSheet(true);
+      });
+      top.appendChild(resetVector);
+      wrap.appendChild(top);
+      if (help) wrap.appendChild(el("div", "setting-help", help));
+      let vector;
+      try { vector = JSON.parse(x[key]); } catch { vector = []; }
+      if (!Array.isArray(vector)) vector = [];
+      vector = Array.from({ length: 8 }, (_, i) => Math.max(0, Math.min(1, Number(vector[i]) || 0)));
+      const labels = [
+        ["Happy", "cheerful, bright"], ["Angry", "tense, intense"], ["Sad", "sorrowful, downcast"],
+        ["Afraid", "fearful, anxious"], ["Disgust", "repulsed, scornful"], ["Melancholic", "wistful, subdued"],
+        ["Surprised", "startled, animated"], ["Calm", "neutral, steady"],
+      ];
+      labels.forEach(([name, tag], index) => {
+        const item = el("div", "emotion-item");
+        const head = el("div", "slider-head");
+        const copy = el("div");
+        copy.appendChild(el("div", "emotion-name", name));
+        copy.appendChild(el("div", "emotion-tag", tag));
+        head.appendChild(copy);
+        head.appendChild(el("span", "slider-val", vector[index].toFixed(2)));
+        item.appendChild(head);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "0"; slider.max = "1"; slider.step = "0.05"; slider.value = String(vector[index]);
+        slider.addEventListener("input", () => {
+          vector[index] = Number(slider.value);
+          x[key] = JSON.stringify(vector.map((value) => Math.round(value * 100) / 100));
+          head.querySelector(".slider-val").textContent = vector[index].toFixed(2);
+          renderGenerate();
+        });
+        item.appendChild(slider);
+        wrap.appendChild(item);
+      });
+      return wrap;
+    }
+
     function settingRow(spec) {
-      const [type, label, key, a, b, c] = spec;
-      if (typeof a === "function" && !a()) return null;
-      const row = el("div", "setting-row");
-      row.appendChild(el("label", null, label));
+      const [type, label, key, a, b, c, help, condition] = spec;
+      if (typeof condition === "function" && !condition()) return null;
+      if (type === "emotionVector") return emotionVectorRow(label, key, help);
+      const row = el("div", "setting-row" + (type === "slider" || help ? " stacked" : ""));
+      const labelNode = el("label", null, label);
+      row.appendChild(labelNode);
       let control;
       if (type === "toggle") {
         control = el("button", "setting-toggle" + (x[key] ? " on" : ""));
@@ -1054,6 +1450,20 @@
         control = document.createElement("textarea");
         control.rows = 3; control.value = x[key] == null ? "" : x[key];
         control.addEventListener("input", () => { x[key] = control.value; renderGenerate(); });
+      } else if (type === "slider") {
+        const head = el("div", "slider-head");
+        head.appendChild(labelNode);
+        const value = el("span", "slider-val", Number(x[key]).toFixed(c < 1 ? (c < 0.1 ? 2 : 1) : 0));
+        head.appendChild(value);
+        row.replaceChildren(head);
+        control = document.createElement("input");
+        control.type = "range";
+        control.min = a; control.max = b; control.step = c; control.value = x[key];
+        control.addEventListener("input", () => {
+          x[key] = Number(control.value);
+          value.textContent = Number(x[key]).toFixed(c < 1 ? (c < 0.1 ? 2 : 1) : 0);
+          renderGenerate();
+        });
       } else {
         control = document.createElement("input");
         control.type = type;
@@ -1063,6 +1473,7 @@
       }
       control.classList.add("setting-control");
       row.appendChild(control);
+      if (help) row.appendChild(el("div", "setting-help", help));
       return row;
     }
 
@@ -1257,6 +1668,65 @@
     body.appendChild(col);
   }
 
+  function renderEditVoiceSheet(body) {
+    const col = el("div", "add-col edit-voice-col");
+    const audio = el("div", "edit-audio");
+    const preview = el("button", "edit-preview", "▶ Preview");
+    preview.addEventListener("click", () => {
+      if (state.editPreviewUrl) previewLocal(state.editPreviewUrl);
+      else if (state.editVoiceId) previewVoice(state.editVoiceId);
+    });
+    audio.appendChild(preview);
+    audio.appendChild(el("div", "edit-audio-copy", state.editFile ? `Replacement: ${state.editFileName}` : "Current saved reference audio"));
+    col.appendChild(audio);
+
+    const sources = el("div", "add-src-row");
+    const upload = el("button", "add-src", state.editFile ? "＋ Replace upload" : "＋ Upload replacement");
+    upload.addEventListener("click", () => $("edit-file-input").click());
+    const record = el("button", "add-src" + (state.editRecording ? " recording" : ""), state.editRecording ? "■ Stop" : "● Record replacement");
+    record.addEventListener("click", () => toggleRecord("edit"));
+    sources.appendChild(upload);
+    sources.appendChild(record);
+    col.appendChild(sources);
+
+    if (state.editFile) {
+      const remove = el("button", "edit-remove-audio", "Keep current saved audio");
+      remove.addEventListener("click", () => { clearEditAudio(); renderSheet(true); });
+      col.appendChild(remove);
+    }
+
+    const name = document.createElement("input");
+    name.className = "add-input";
+    name.placeholder = "Voice name";
+    name.value = state.editName;
+    name.addEventListener("input", () => { state.editName = name.value; syncSave(); });
+    col.appendChild(name);
+
+    const text = document.createElement("textarea");
+    text.className = "add-input add-textarea";
+    text.placeholder = "Reference transcript";
+    text.rows = 4;
+    text.value = state.editText;
+    text.addEventListener("input", () => { state.editText = text.value; syncSave(); });
+    col.appendChild(text);
+
+    const hint = el("div", "add-hint");
+    col.appendChild(hint);
+    const save = el("button", "add-save", "Save changes");
+    save.addEventListener("click", saveEditedVoice);
+    col.appendChild(save);
+
+    function syncSave() {
+      const can = !!state.editName.trim() && editVoiceDirty();
+      save.disabled = !can;
+      save.classList.toggle("ready", can);
+      hint.textContent = !state.editName.trim() ? "Voice name is required." : !editVoiceDirty() ? "No changes yet." : "";
+      hint.classList.toggle("hidden", !hint.textContent);
+    }
+    syncSave();
+    body.appendChild(col);
+  }
+
   /* ================= static wiring ================= */
 
   $("model-row").addEventListener("click", () => openSheet("model"));
@@ -1281,13 +1751,57 @@
     openSheet("add");
   });
   $("mp-toggle").addEventListener("click", toggleOutput);
+  $("mp-wave").addEventListener("pointerdown", (event) => seekOutput(event.clientX));
   $("mp-download").addEventListener("click", () => state.outputJobId && downloadOutput(state.outputJobId));
+  document.querySelectorAll("[data-verify-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.verifyMode === button.dataset.verifyMode) return;
+      if (state.verifyRecording && recorder) discardRecording();
+      state.verifyMode = button.dataset.verifyMode;
+      clearVerifyAudio();
+      renderVerify();
+    });
+  });
+  $("choose-verify-file").addEventListener("click", () => $("verify-file-input").click());
+  $("record-verify-file").addEventListener("click", () => toggleRecord("verify"));
+  $("preview-verify-file").addEventListener("click", () => previewLocal(state.verifyPreviewUrl));
+  $("replace-verify-file").addEventListener("click", () => {
+    if (state.verifyMode === "record") {
+      clearVerifyAudio();
+      renderVerify();
+    } else {
+      $("verify-file-input").click();
+    }
+  });
+  $("remove-verify-file").addEventListener("click", () => { clearVerifyAudio(); renderVerify(); });
+  $("verify-btn").addEventListener("click", verifyWatermark);
+  $("verify-advanced-toggle").addEventListener("click", () => {
+    state.verifyAdvancedOpen = !state.verifyAdvancedOpen;
+    renderVerify();
+  });
+  $("verify-run-select").addEventListener("change", () => {
+    state.verifyRunId = $("verify-run-select").value;
+    invalidateVerifyResult();
+    renderVerify();
+  });
+  $("verify-threshold").addEventListener("input", () => {
+    state.verifyThreshold = Number($("verify-threshold").value);
+    invalidateVerifyResult();
+    renderVerify();
+  });
+  $("verify-reset").addEventListener("click", () => {
+    state.verifyRunId = "";
+    state.verifyThreshold = 0.35;
+    invalidateVerifyResult();
+    renderVerify();
+  });
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", (e) => { if (e.target === $("sheet-backdrop")) closeSheet(); });
   $("sheet").addEventListener("click", (e) => e.stopPropagation());
   document.querySelectorAll(".tab").forEach((t) =>
     t.addEventListener("click", () => {
       if (state.refRecording && t.dataset.tab !== "generate" && recorder) recorder.stop();
+      if (state.verifyRecording && t.dataset.tab !== "verify" && recorder) discardRecording();
       state.surface = t.dataset.tab;
       render();
     })
@@ -1342,6 +1856,28 @@
       render();
     }
   });
+  $("edit-file-input").addEventListener("change", () => {
+    const f = $("edit-file-input").files[0];
+    if (f) {
+      clearEditAudio();
+      state.editFile = f;
+      state.editFileName = f.name;
+      replaceObjectUrl("editPreviewUrl", f);
+      $("edit-file-input").value = "";
+      renderSheet(true);
+    }
+  });
+  $("verify-file-input").addEventListener("change", () => {
+    const f = $("verify-file-input").files[0];
+    if (f) {
+      clearVerifyAudio();
+      state.verifyFile = f;
+      state.verifyFileName = f.name;
+      replaceObjectUrl("verifyPreviewUrl", f);
+      $("verify-file-input").value = "";
+      renderVerify();
+    }
+  });
 
   // theme
   const savedTheme = localStorage.getItem("ttshub-theme");
@@ -1361,9 +1897,8 @@
 
   document.addEventListener("visibilitychange", () => { if (!document.hidden) loadJobs(); });
   window.addEventListener("beforeunload", () => {
-    if (recorder && recorder.state === "recording") recorder.stop();
-    if (recorderStream) recorderStream.getTracks().forEach((track) => track.stop());
-    ["refPreviewUrl", "emoPreviewUrl"].forEach((key) => { if (state[key]) URL.revokeObjectURL(state[key]); });
+    discardRecording();
+    ["refPreviewUrl", "emoPreviewUrl", "editPreviewUrl", "verifyPreviewUrl"].forEach((key) => { if (state[key]) URL.revokeObjectURL(state[key]); });
   });
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js").catch(() => {});
@@ -1372,7 +1907,7 @@
 
   (async () => {
     try {
-      await Promise.all([loadModels(), loadVoices(), loadStatus()]);
+      await Promise.all([loadModels(), loadVoices(), loadStatus(), loadWatermarkRuns()]);
       state.connected = true;
       if (!state.selectedVoiceId) {
         const cv = compatVoices();

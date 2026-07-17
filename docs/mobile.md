@@ -10,10 +10,15 @@ later and the finished audio is waiting.
 - **Generate** — pick model + saved voice, type text, choose wav/mp3/flac,
   optional watermark, submit. Jobs run asynchronously on the laptop. Reference
   audio can come from a saved voice, phone upload, or an in-browser recording.
-- **Jobs** — live status (queued → generating → completed) with auto-refresh,
-  inline playback, download, cancel, delete. Active-job count badge on the tab.
+- **Jobs** — live status with queue position, named processing phases, elapsed
+  time, inline playback, download, cancel, and delete. Active jobs survive a
+  page reload, while old completed audio is not opened automatically.
 - **Voices** — browse and preview the voice library, set a voice for
-  generation, add a new voice (your phone's mic works via the file picker).
+  generation, add a new voice, or edit its name, transcript, and reference
+  audio (your phone's mic works via the file picker).
+- **Verify** — upload or record an audio clip, check it for an embedded TTS Hub
+  watermark, and view confidence plus source-model attribution. Detector run
+  and threshold controls are available under the collapsed Advanced section.
 - **Model options** — the Options sheet exposes the same worker parameters as
   the desktop Generate screen, grouped into Basics and Advanced sections.
 
@@ -81,8 +86,9 @@ Before committing mobile changes:
 1. Run `node --check mobile/app.js` and `node --check mobile/sw.js`.
 2. Run `.venv/bin/python -m pytest -q`.
 3. Run `npx playwright test tests/e2e/mobile_app.spec.ts`.
-4. Queue a short Pocket TTS run from `/mobile/`, wait for completion, play it,
-   download it, reload the page, and confirm the completed run is restored.
+4. Queue a short Pocket TTS run from `/mobile/`, wait for completion, seek and
+   play it, and download it. Reload and confirm the old result player stays
+   closed while the completed run remains available under Jobs.
 5. On a phone over Tailscale HTTPS, verify Add to Home Screen, microphone
-   permission, recording preview/upload, reopening after backgrounding, and
-   safe-area spacing around the header and bottom tabs.
+   permission, recording preview/upload, watermark verification, reopening
+   after backgrounding, and safe-area spacing around the four bottom tabs.

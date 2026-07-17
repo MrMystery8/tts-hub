@@ -51,6 +51,7 @@
           <button class="link-btn" id="manage-voices">Manage ›</button>
         </div>
         <div class="ref-tabs" id="ref-tabs"></div>
+        <div class="ref-locked hidden" id="ref-locked"></div>
         <div id="ref-saved">
           <div class="voice-carousel" id="voice-carousel"></div>
           <div class="voice-none hidden" id="voice-none">No compatible voices. <button class="link-under" id="voice-none-create">Create one</button></div>
@@ -108,6 +109,7 @@
         <div class="transport-txt">
           <div class="transport-phase" id="active-phase">Working</div>
           <div class="transport-meta" id="active-meta"></div>
+          <div class="transport-detail" id="active-detail"></div>
         </div>
         <button class="cancel-btn" id="cancel-job">Cancel</button>
       </div>
@@ -143,6 +145,74 @@
     <div class="page-scroll jobs-scroll" id="job-list"></div>
   </main>
 
+  <!-- ============ VERIFY WATERMARK ============ -->
+  <main class="surface hidden" id="surface-verify">
+    <div class="page-head">
+      <div class="page-title">Verify</div>
+      <div class="page-count" id="verify-run-status">Detector unavailable</div>
+    </div>
+    <div class="page-scroll verify-scroll">
+      <div>
+        <div class="sec-head">
+          <label class="sec-label">Audio</label>
+        </div>
+        <div class="ref-tabs" id="verify-tabs">
+          <button class="ref-tab sel" data-verify-mode="upload">Upload</button>
+          <button class="ref-tab" data-verify-mode="record">Record</button>
+        </div>
+        <div class="ref-file">
+          <button class="ref-file-btn" id="choose-verify-file">＋ Choose audio</button>
+          <button class="ref-file-btn hidden" id="record-verify-file">● Start recording</button>
+          <div class="staged-row hidden" id="verify-file-staged">
+            <button class="preview-btn" id="preview-verify-file" aria-label="Preview verification audio">▶</button>
+            <span class="staged-name" id="verify-file-name"></span>
+            <button class="staged-replace" id="replace-verify-file">Replace</button>
+            <button class="staged-replace" id="remove-verify-file" aria-label="Remove verification audio">✕</button>
+          </div>
+        </div>
+        <div class="field-hint">Checks an audio clip for an embedded TTS Hub watermark and its source model.</div>
+      </div>
+
+      <div class="verify-result hidden" id="verify-result" aria-live="polite"></div>
+
+      <div class="dj-error hidden" id="verify-error" role="alert"></div>
+
+      <div>
+        <div class="sec-head">
+          <label class="sec-label">Detector</label>
+        </div>
+        <button class="options-row" id="verify-advanced-toggle" aria-expanded="false">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--tx-3)" stroke-width="1.4" stroke-linecap="round"><path d="M2 4.5h8M12.5 4.5H14M2 11.5h3M7.5 11.5H14"/><circle cx="11" cy="4.5" r="1.6"/><circle cx="6" cy="11.5" r="1.6"/></svg>
+          <span class="options-label">Advanced</span>
+          <span class="options-summary" id="verify-advanced-summary">Automatic · 0.35</span>
+          <span class="caret sm" id="verify-advanced-caret">▾</span>
+        </button>
+        <div class="verify-advanced-body hidden" id="verify-advanced-body">
+          <div>
+            <label class="field-label" for="verify-run-select">Detector run</label>
+            <select class="compact-input" id="verify-run-select"></select>
+          </div>
+          <div>
+            <div class="slider-head">
+              <label for="verify-threshold">Detection threshold</label>
+              <span class="slider-val" id="verify-threshold-value">0.35</span>
+            </div>
+            <input type="range" id="verify-threshold" min="0" max="1" step="0.01" value="0.35" />
+            <div class="field-hint">Higher values require stronger evidence before marking a clip as watermarked.</div>
+          </div>
+          <button class="reset-btn" id="verify-reset">Reset defaults</button>
+        </div>
+      </div>
+    </div>
+    <div class="runbar">
+      <div class="block-reason hidden" id="verify-block-reason"></div>
+      <button class="run-btn blocked" id="verify-btn">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 13 3.4v3.5c0 3.2-1.9 5.5-5 7-3.1-1.5-5-3.8-5-7V3.4L8 1.5Z"/><path d="m5.8 7.8 1.4 1.4 3-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="verify-btn-label">Check watermark</span>
+      </button>
+    </div>
+  </main>
+
   <!-- ============ mini player ============ -->
   <div class="miniplayer hidden" id="miniplayer">
     <button class="play-btn" id="mp-toggle"></button>
@@ -152,6 +222,7 @@
         <span class="mp-done">DONE</span>
       </div>
       <div class="mp-wave" id="mp-wave"></div>
+      <div class="mp-time"><span id="mp-current">0:00</span><span id="mp-duration">0:00</span></div>
     </div>
     <div class="mp-right">
       <button class="dl-btn" id="mp-download">
@@ -183,6 +254,12 @@
       </span>
       <span class="tab-label">Jobs</span>
     </button>
+    <button class="tab" data-tab="verify">
+      <span class="tab-ic">
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5 13 3.4v3.5c0 3.2-1.9 5.5-5 7-3.1-1.5-5-3.8-5-7V3.4L8 1.5Z"/><path d="M4.8 8h1.3l.8-2.2 1.5 4.3 1-3 1 1.8h.9"/></svg>
+      </span>
+      <span class="tab-label">Verify</span>
+    </button>
   </nav>
 
   <!-- ============ bottom sheet ============ -->
@@ -202,6 +279,8 @@
   <input type="file" id="file-input" accept="audio/*" hidden />
   <input type="file" id="ref-file-input" accept="audio/*" hidden />
   <input type="file" id="emo-file-input" accept="audio/*" hidden />
+  <input type="file" id="edit-file-input" accept="audio/*" hidden />
+  <input type="file" id="verify-file-input" accept="audio/*" hidden />
 </div>
 <script src="/mobile/app.js"></script>
 </body>

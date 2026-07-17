@@ -20,6 +20,26 @@ const requiredKeys: Record<string, string[]> = {
   'voxcpm-ane': ['voice', 'cfg_value', 'inference_timesteps', 'max_length'],
 };
 
+function silentWav(): Buffer {
+  const sampleRate = 8000;
+  const samples = 2000;
+  const dataSize = samples * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
+
 async function mockMobileApi(page: import('@playwright/test').Page, jobs: unknown[] = []) {
   await page.route('**/api/models', route => route.fulfill({
     contentType: 'application/json',
@@ -28,6 +48,16 @@ async function mockMobileApi(page: import('@playwright/test').Page, jobs: unknow
   await page.route('**/api/status', route => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ models: Object.fromEntries(models.map(([id]) => [id, { loaded: false, device: 'test', total_generations: 0 }])) }),
+  }));
+  await page.route('**/api/watermark/runs', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      default_run_id: 'run-a',
+      runs: [
+        { id: 'run-a', label: 'Primary detector', status: 'completed', updated_at: 1 },
+        { id: 'run-b', label: 'Robustness detector', status: 'completed', updated_at: 2 },
+      ],
+    }),
   }));
   await page.route('**/api/voices', route => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -40,6 +70,14 @@ async function mockMobileApi(page: import('@playwright/test').Page, jobs: unknow
     if (route.request().method() !== 'GET') return route.continue();
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ jobs }) });
   });
+  await page.route('**/api/generation-jobs/*/audio', route => route.fulfill({
+    contentType: 'audio/wav',
+    body: silentWav(),
+  }));
+  await page.route('**/api/voices/*/audio', route => route.fulfill({
+    contentType: 'audio/wav',
+    body: silentWav(),
+  }));
 }
 
 test.describe('mobile app', () => {
@@ -57,7 +95,8 @@ test.describe('mobile app', () => {
       request: { modelId: 'qwen3-tts-mlx', voiceId: 'a'.repeat(32), text: 'Desktop snapshot text', outputFormat: 'mp3', settings: { qwen: { speed: 1.25 } } },
     }]);
     await page.goto('/mobile/');
-    await expect(page.locator('.tab')).toHaveCount(3);
+    await expect(page.locator('.tab')).toHaveCount(4);
+    await expect(page.locator('#miniplayer')).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
     await page.locator('.tab[data-tab="jobs"]').click();
     await expect(page.locator('.job-card').first()).toContainText('Qwen3-TTS MLX');
@@ -70,6 +109,12 @@ test.describe('mobile app', () => {
     expect(confirmText).toContain('cannot be undone');
     await page.getByRole('button', { name: 'Restore settings' }).click();
     await expect(page.locator('#script')).toHaveValue('Desktop snapshot text');
+    await page.locator('.tab[data-tab="jobs"]').click();
+    await page.locator('.job-card').first().click();
+    await page.getByRole('button', { name: 'Play' }).click();
+    await expect(page.locator('#miniplayer')).toBeVisible();
+    await page.locator('.tab[data-tab="voices"]').click();
+    await expect(page.locator('#miniplayer')).toBeHidden();
     await expect.poll(async () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   });
@@ -133,8 +178,188 @@ test.describe('mobile app', () => {
     await page.locator('#model-row').click();
     await page.locator('.model-opt').filter({ hasText: 'F5 Hindi/Urdu' }).click();
     await page.locator('#script').fill('Transcript requirement');
-    await expect(page.locator('#block-reason')).toContainText('transcript is required');
+    await expect(page.locator('#block-reason')).toContainText('Edit it in Voices');
+    await expect(page.locator('#prompt-text-wrap')).toBeHidden();
+    await page.getByRole('button', { name: 'Upload' }).click();
+    await page.locator('#ref-file-input').setInputFiles({
+      name: 'reference.wav',
+      mimeType: 'audio/wav',
+      buffer: Buffer.from('RIFF-test-audio'),
+    });
+    await expect(page.locator('#prompt-text-wrap')).toBeVisible();
     await page.locator('#prompt-text').fill('This is the reference transcript.');
     await expect(page.locator('#block-reason')).toBeHidden();
+  });
+
+  test('edits a saved voice with name, transcript, and replacement audio', async ({ page }) => {
+    await mockMobileApi(page);
+    let patchBody = '';
+    await page.route(`**/api/voices/${'a'.repeat(32)}`, async route => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ id: 'a'.repeat(32), name: 'Test voice', prompt_text: 'Old transcript' }),
+        });
+      }
+      patchBody = route.request().postDataBuffer()?.toString('utf8') || '';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'a'.repeat(32), name: 'Edited voice' }),
+      });
+    });
+    await page.goto('/mobile/');
+    await page.locator('.tab[data-tab="voices"]').click();
+    await page.getByRole('button', { name: 'Edit' }).click();
+    await page.locator('#sheet-body input[placeholder="Voice name"]').fill('Edited voice');
+    await page.locator('#sheet-body textarea').fill('Updated transcript');
+    await page.locator('#edit-file-input').setInputFiles({
+      name: 'replacement.wav',
+      mimeType: 'audio/wav',
+      buffer: Buffer.from('RIFF-replacement'),
+    });
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect.poll(() => patchBody).toContain('Edited voice');
+    expect(patchBody).toContain('Updated transcript');
+    expect(patchBody).toContain('replacement.wav');
+  });
+
+  test('shows honest queue progress and polished priority settings', async ({ page }) => {
+    const now = Date.now() / 1000;
+    await mockMobileApi(page, [
+      { id: 'c'.repeat(32), status: 'queued', phase: 'queued', created_at: now - 3, model_id: 'index-tts2', text: 'Queued run', request: {} },
+      { id: 'd'.repeat(32), status: 'queued', phase: 'queued', created_at: now - 1, model_id: 'qwen3-tts-mlx', text: 'Second run', request: {} },
+    ]);
+    await page.goto('/mobile/');
+    await expect(page.locator('#active-phase')).toHaveText('Waiting in queue');
+    await expect(page.locator('#active-meta')).toContainText('position 1 of 2');
+    await expect(page.locator('#active-detail')).toContainText('earlier jobs');
+
+    await page.locator('#options-row').click();
+    await page.locator('#sheet-body select').first().selectOption('emo_vector');
+    await expect(page.locator('.emotion-item')).toHaveCount(8);
+    const happy = page.locator('.emotion-item').filter({ hasText: 'Happy' });
+    await expect(happy.locator('input[type="range"]')).toHaveValue('0');
+    await happy.locator('input[type="range"]').fill('0.75');
+    await expect(happy).toContainText('0.75');
+
+    await page.locator('#sheet-close').click();
+    await page.locator('#model-row').click();
+    await page.locator('.model-opt').filter({ hasText: 'Qwen3-TTS MLX' }).click();
+    await page.locator('#options-row').click();
+    await expect(page.locator('#sheet-body input[type="range"]')).toHaveCount(2);
+    await expect(page.locator('#sheet-body')).toContainText('Auto-transcribe reference');
+    await expect(page.locator('#sheet-body')).toContainText('Qwen derives the transcript');
+
+    await page.locator('#sheet-close').click();
+    await page.locator('#model-row').click();
+    await page.locator('.model-opt').filter({ hasText: 'Chatterbox Multilingual' }).click();
+    await page.locator('#options-row').click();
+    await expect(page.locator('#sheet-body select').first()).toHaveValue('hi');
+    await expect(page.locator('#sheet-body input[type="range"]')).toHaveCount(3);
+    await expect(page.locator('#sheet-body')).toContainText('Exaggeration');
+  });
+
+  test('verifies uploaded audio with advanced controls and invalidates stale results', async ({ page }) => {
+    await mockMobileApi(page);
+    let detectBody = '';
+    await page.route('**/api/watermark/detect', async route => {
+      detectBody = route.request().postDataBuffer()?.toString('utf8') || '';
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          detected: true,
+          wm_prob: 0.913,
+          model: { id: 0, name: 'IndexTTS2', tts_model_id: 'index-tts2' },
+          run: { id: 'run-b' },
+        }),
+      });
+    });
+    await page.goto('/mobile/');
+    await page.locator('.tab[data-tab="verify"]').click();
+    await expect(page.locator('#surface-verify')).toBeVisible();
+    await expect(page.locator('#miniplayer')).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+    await expect(page.locator('#verify-advanced-body')).toBeHidden();
+    await page.locator('#verify-file-input').setInputFiles({ name: 'external.wav', mimeType: 'audio/wav', buffer: silentWav() });
+    await expect(page.locator('#verify-file-staged')).toBeVisible();
+    await page.locator('#verify-advanced-toggle').click();
+    await page.locator('#verify-run-select').selectOption('run-b');
+    await page.locator('#verify-threshold').fill('0.42');
+    await page.locator('#verify-btn').click();
+    await expect(page.locator('#verify-btn-label')).toHaveText('Checking audio…');
+    await expect(page.locator('#verify-result')).toContainText('Watermark detected');
+    await expect(page.locator('#verify-result')).toContainText('91.3%');
+    await expect(page.locator('#verify-result')).toContainText('IndexTTS2');
+    expect(detectBody).toContain('name="audio"');
+    expect(detectBody).toContain('external.wav');
+    expect(detectBody).toContain('name="watermark_run"');
+    expect(detectBody).toContain('run-b');
+    expect(detectBody).toContain('name="wm_threshold"');
+    expect(detectBody).toContain('0.42');
+
+    await page.locator('#verify-threshold').fill('0.5');
+    await expect(page.locator('#verify-result')).toBeHidden();
+    await page.locator('#verify-reset').click();
+    await expect(page.locator('#verify-threshold')).toHaveValue('0.35');
+    await expect(page.locator('#verify-run-select')).toHaveValue('');
+    await page.locator('#remove-verify-file').click();
+    await expect(page.locator('#verify-file-staged')).toBeHidden();
+    await expect(page.locator('#verify-block-reason')).toContainText('Choose or record');
+  });
+
+  test('records verification audio, cleans microphone tracks, and handles detector errors', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__trackStops = 0;
+      const track = { stop: () => { (window as any).__trackStops += 1; } };
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia: async () => ({ getTracks: () => [track] }) },
+      });
+      class FakeMediaRecorder {
+        state = 'inactive';
+        mimeType = 'audio/webm';
+        ondataavailable: ((event: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        constructor(_stream: unknown) {}
+        start() { this.state = 'recording'; }
+        stop() {
+          this.state = 'inactive';
+          this.ondataavailable?.({ data: new Blob(['recorded'], { type: this.mimeType }) });
+          this.onstop?.();
+        }
+      }
+      Object.defineProperty(window, 'MediaRecorder', { configurable: true, value: FakeMediaRecorder });
+    });
+    await mockMobileApi(page);
+    await page.route('**/api/watermark/detect', route => route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Detector could not decode this clip.' }),
+    }));
+    await page.goto('/mobile/');
+    await page.locator('.tab[data-tab="verify"]').click();
+    await page.getByRole('button', { name: 'Record' }).click();
+    await page.locator('#record-verify-file').click();
+    await expect(page.locator('#record-verify-file')).toContainText('Stop recording');
+    await page.locator('#record-verify-file').click();
+    await expect(page.locator('#verify-file-staged')).toBeVisible();
+    expect(await page.evaluate(() => (window as any).__trackStops)).toBeGreaterThan(0);
+    await page.locator('#verify-btn').click();
+    await expect(page.locator('#verify-error')).toContainText('Detector could not decode');
+    await expect(page.locator('#verify-file-staged')).toBeVisible();
+  });
+
+  test('disables verification when no detector run is available', async ({ page }) => {
+    await mockMobileApi(page);
+    await page.route('**/api/watermark/runs', route => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ default_run_id: null, runs: [] }),
+    }));
+    await page.goto('/mobile/');
+    await page.locator('.tab[data-tab="verify"]').click();
+    await expect(page.locator('#verify-run-status')).toHaveText('Detector unavailable');
+    await expect(page.locator('#verify-block-reason')).toContainText('No trained detector');
+    await expect(page.locator('#verify-btn')).toBeDisabled();
   });
 });

@@ -12,6 +12,12 @@
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["claude_exact.py", "--port", "7898"],
       "port": 7898
+    },
+    {
+      "name": "mobile-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8931"],
+      "port": 8931
     }
   ]
 }
