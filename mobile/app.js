@@ -778,6 +778,8 @@
     const id = state.selectedModelId;
     const ms = state.statusMap[id] || {};
     const active = state.activeJobId ? state.jobs.find((j) => j.id === state.activeJobId && ACTIVE_STATES.includes(j.status)) : null;
+    const runningCount = state.jobs.filter((j) => ACTIVE_STATES.includes(j.status)).length;
+    $("generate-status").textContent = runningCount ? `${runningCount} running` : "";
     $("model-name").textContent = modelName(id);
     $("model-meta").textContent = `${ms.loaded ? "loaded" : "idle"} · ${ms.device || "—"} · ${ms.total_generations || 0} runs`;
     $("model-dot").style.background = ms.loaded ? "var(--accent)" : "var(--line-3)";

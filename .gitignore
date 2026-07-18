@@ -62,3 +62,12 @@ dev-clean.tar.gz
 # Medium benchmark artifacts
 medium_benchmark_data/
 medium_benchmark_*.json
+
+# FYP report deliverables and third-party reference material.
+# NOTE: this repo is PUBLIC. The report .docx contains Appendix B - signed
+# interview consent form, participant information sheet and transcript.
+# Do not commit it here; keep it in local/private storage.
+*.docx
+~$*
+An Online Marketplace for Surplus Food - CS CSAI Sample.pdf
+New FYP Structure Guidelines.pdf
