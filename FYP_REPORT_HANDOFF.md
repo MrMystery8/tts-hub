@@ -145,6 +145,30 @@ LibreOffice PDF export mis-renders some wide tables (crushes narrow columns) eve
 - `docs/WATERMARK_FINAL_FINDINGS.md` (commit `dc88392`) — the author's own selection rationale, tier findings, and the SNR-vs-PESQ explanation. **Primary evidence for several Ch4/Ch5 claims.**
 - `docs/DETERMINISTIC_CODEBOOK_FINDINGS.md` + `_PLAN.md` (commit `b832afc`) — records the "ringing/whistling" audibility problem, the ~0.996 spectral-similarity cause of the attribution collapse, and the forgery/notch-filter weaknesses.
 
+---
+
+## Change log — accuracy pass on unimplemented claims (same session)
+
+### ⚠️ The "quality gate" did not exist. Removed from 8 places.
+`hub/voice_library.py::_wav_profile()` computes duration / rms / peak_abs / clipped_ratio and `create_voice()` stores them in `meta.json` — **but nothing ever reads them back.** No threshold, no rejection, no warning. `grep` for `clipped_ratio|peak_abs|rms` across `hub/`, `webui.py`, `claude_exact/` and `mobile/` returns nothing outside the function that computes them. The docstring's "for quality gating" was aspirational. There is also no silence measurement at all.
+
+Corrected to *profiling* language in: 4.4.3 activity prose · the Key Features claim · 6.1 Objective 1 · Table 4.1 (UC-02) main flow · Table 4.1 alternative flow · Table 4.9 stage 3 name and rationale · Table 5.3 step S4 · Table 6.1 evidence. Verified zero remaining matches for `quality gate|gating|fails the gate|prompts a re-record`.
+
+**Figure 4.3 was redrawn.** The old diagram *drew* a "Quality gate" node, a "Passes quality?" decision diamond and a `no →` "Warn user & re-record" loop. The original Graphviz sources were never committed and are not in git history, so the diagram was rebuilt from scratch matching the sibling diagrams' style. **Source now lives in `report_assets/diagrams/*.dot`** — do not let it go missing again. Render: `dot -Tpng -Gdpi=150 fig_4_3_activity_reference_intake.dot -o fig_4_3.png`.
+
+6.3 gained a matching future-work item: turning the recorded profile into an intake warning is a contained change with a direct usability benefit.
+
+### UC-10 delete dialog corrected
+The spec claimed "the system states plainly what will be removed: the reference clip, the preprocessing metadata, and any cached model state". The actual UI is a native `confirm('Delete this saved voice?')` at `claude_exact/index.html:2121`. The *behaviour* is right (`shutil.rmtree(voice_dir)` removes all three), but the dialog does not say so. Step 3 now reads "The system asks the user to confirm the deletion." Chosen over changing the code.
+
+Note: a native `confirm()` is browser chrome, not page content — **it cannot be screenshotted** by any tool. If a delete-confirmation figure is ever wanted, the dialog must first become an in-page modal.
+
+### New UI assets (`report_assets/ui/`)
+Captured by driving the real app with Playwright at 2× DPI: three tour-spotlight steps (the tour renders a dimmed backdrop + ring + explanatory card, so the figures are self-annotating), and the reference-intake panel in Record and Upload modes. Two voice-library captures were taken but **not committed** — they show first names of people who provided voice samples, and this repo is public. Decide before adding them.
+
 ### Process errors made and caught during this pass
 - **Content inserted into the front matter.** `find_para` matched a List-of-Tables entry instead of the body caption; the entire codebook block landed in the front matter. `validate.py` passed it (schema was valid). Caught by a caption-sequence check, reverted to backup, re-run with a body-only lookup. See the tooling notes.
 - **Unhonoured forward reference**, second occurrence: 5.6.1 promised a Chapter 6 item that did not exist until added.
+- **Overwrote the wrong image, then misdiagnosed it.** Swapping Figure 4.3's PNG used "find the caption, take the next image" — but **captions sit BELOW figures in this document**, so that targeted Figure 4.4 and destroyed its onboarding diagram. The render then still showed the old Figure 4.3, which was misread as "the write silently failed"; in fact it had succeeded on the wrong part. Caught by md5-comparing every media entry against a backup, and restored from `backup_before_gate.docx`.
+  - **Rule:** to target a figure's image, anchor on the **prose paragraph that precedes it** (e.g. "Figure 4.3 describes…"), never on its caption.
+  - **Rule:** `part._blob = ...` in python-docx **does** persist. Prefer a zip-level rewrite of `word/media/imageNN.png`, and always md5-verify every media entry against a backup afterwards — `validate.py` passes a corrupted-but-well-formed image without complaint.
