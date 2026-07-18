@@ -159,6 +159,24 @@
 
           <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px">
 
+            <!-- quick phrases: starred runs, replayed from disk (no regeneration) -->
+            <sc-if value="{{ hasQuickPhrases }}" hint-placeholder-val="{{ true }}">
+              <div data-tour="phrases">
+                <div style="display:flex;align-items:baseline;margin-bottom:7px">
+                  <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Quick phrases</label>
+                  <span style="margin-left:auto;font-size:10px;color:var(--tx-3)">plays instantly</span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:7px">
+                  <sc-for list="{{ quickPhrases }}" as="p" hint-placeholder-count="3">
+                    <button onClick="{{ p.onPlay }}" title="{{ p.title }}" aria-label="{{ p.aria }}" style="display:flex;align-items:center;gap:7px;max-width:260px;padding:9px 13px;border:1px solid {{ p.border }};border-radius:999px;background:{{ p.bg }};font-size:12.5px;font-weight:600;color:var(--tx)">
+                      <span style="flex:0 0 auto;color:var(--accent)">{{ p.icon }}</span>
+                      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.label }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
             <!-- script editor -->
             <div data-tour="script">
               <div style="display:flex;align-items:baseline;margin-bottom:7px">
@@ -301,7 +319,7 @@
               <sc-if value="{{ blockReason }}" hint-placeholder-val="{{ true }}">
                 <span style="font-size:11.5px;color:var(--err);max-width:260px;text-align:right">{{ blockReason }}</span>
               </sc-if>
-              <button onClick="{{ runGenerate }}" disabled="{{ runDisabled }}" style="display:flex;align-items:center;gap:9px;padding:12px 26px;border-radius:8px;font-size:14px;font-weight:700;background:{{ runBg }};color:{{ runColor }};opacity:{{ runOpacity }};box-shadow:{{ runShadow }}">
+              <button onClick="{{ runGenerate }}" disabled="{{ runDisabled }}" aria-disabled="{{ runDisabled }}" style="display:flex;align-items:center;gap:9px;padding:12px 26px;border-radius:8px;font-size:14px;font-weight:700;background:{{ runBg }};color:{{ runColor }};opacity:{{ runOpacity }};box-shadow:{{ runShadow }}">
                 <svg width="12" height="13" viewBox="0 0 12 13"><path d="M1 1.5 L11 6.5 L1 11.5 Z" fill="currentColor"/></svg>
                 {{ runLabel }}
               </button>
@@ -440,6 +458,9 @@
               <div data-wave="full" data-wave-url="{{ outAudioUrl }}" data-wave-seek style="height:38px;width:100%"></div>
             </div>
             <div style="display:flex;gap:8px;flex:0 0 auto">
+              <button onClick="{{ toggleOutFavorite }}" aria-label="{{ outFavoriteAria }}" aria-pressed="{{ outFavorite }}" title="{{ outFavoriteTitle }}" style="display:flex;align-items:center;gap:7px;padding:10px 14px;border:1px solid {{ outFavoriteBorder }};border-radius:7px;background:{{ outFavoriteBg }};color:{{ outFavoriteColor }};font-weight:700;font-size:12.5px">
+                <span style="font-size:15px;line-height:1">{{ outFavoriteGlyph }}</span>{{ outFavoriteLabel }}
+              </button>
               <button onClick="{{ downloadOut }}" style="display:flex;align-items:center;gap:7px;padding:10px 16px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12.5px">
                 <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1 V8 M3 5.5 L6 8.5 L9 5.5 M2 10.5 H10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>Download
               </button>
@@ -470,11 +491,11 @@ class Component extends DCLogic {
     theme: 'dark',
     surface: 'generate',
     selectedModelId: 'index-tts2',
-    text: 'The studio falls quiet as the console lights settle into a slow, even glow.',
+    text: '',
     promptText: '',
     instructText: '',
     refMode: 'saved',
-    selectedVoiceId: 'v_lina',
+    selectedVoiceId: '',
     refFileReady: false,
     refFileName: '',
     recording: false,
@@ -482,9 +503,9 @@ class Component extends DCLogic {
     watermarkEnabled: false,
     settings: this.defaults(),
     openGroups: { 'index-tts2:Basics': true, 'chatterbox-multilingual:Basics': true, 'f5-hindi-urdu:Basics': true, 'cosyvoice3-mlx:Basics': true, 'qwen3-tts-mlx:Basics': true, 'pocket-tts:Basics': true, 'voxcpm-ane:Basics': true },
-    jobs: this.seedJobs(),
-    statusMap: this.seedStatus(),
-    voices: this.seedVoices(),
+    jobs: [],
+    statusMap: {},
+    voices: [],
     activeJobId: null,
     outputJobId: null,
     railOpen: true,
@@ -504,8 +525,11 @@ class Component extends DCLogic {
     // jobs surface
     jobFilter: 'all',
     jobDetailId: null,
+    // irreversible-action confirmation ({ name, items, keeps, onConfirm })
+    confirmDelete: null,
     // watermark
-    selectedRunId: 'wm_run_a',
+    selectedRunId: '',
+    wmRuns: [],
     wmVerifyFile: null,
     wmThreshold: 0.35,
     wmDetectResult: null,
@@ -555,39 +579,6 @@ class Component extends DCLogic {
       pocket: { voice: 'hf://kyutai/tts-voices/alba-mackenna/casual.wav', temperature: 0.8, lsdDecodeSteps: 8, eosThreshold: 0.4, noiseClamp: '', truncatePrompt: false },
       voxcpm: { voice: '', cfgValue: 2, inferenceTimesteps: 10, maxLength: 2048 },
     };
-  }
-
-  seedStatus() {
-    return {
-      'index-tts2': { loaded: true, device: 'mps', last_generation_duration_ms: 8420, total_generations: 47, last_generation_time: Date.now() - 1000 * 60 * 6 },
-      'qwen3-tts-mlx': { loaded: true, device: 'mlx', last_generation_duration_ms: 5210, total_generations: 31, last_generation_time: Date.now() - 1000 * 60 * 22 },
-      'chatterbox-multilingual': { loaded: false, device: 'mps', total_generations: 12 },
-      'f5-hindi-urdu': { loaded: false, device: 'mps', total_generations: 8 },
-      'cosyvoice3-mlx': { loaded: false, device: 'mlx', total_generations: 19 },
-      'pocket-tts': { loaded: false, device: 'cpu', total_generations: 3 },
-      'voxcpm-ane': { loaded: false, device: 'ane', total_generations: 0 },
-    };
-  }
-
-  seedVoices() {
-    const now = Date.now();
-    return [
-      { id: 'v_lina', name: 'Lina — narration', created_at: now - 86400000 * 3, duration_s: 12.4, has_transcript: true, compatible_models: ['index-tts2', 'f5-hindi-urdu', 'cosyvoice3-mlx', 'qwen3-tts-mlx', 'voxcpm-ane', 'chatterbox-multilingual'] },
-      { id: 'v_arman', name: 'Arman — promo', created_at: now - 86400000 * 8, duration_s: 8.1, has_transcript: false, compatible_models: ['index-tts2', 'cosyvoice3-mlx', 'qwen3-tts-mlx', 'chatterbox-multilingual'] },
-      { id: 'v_meera', name: 'Meera — Hindi', created_at: now - 86400000 * 1, duration_s: 15.9, has_transcript: true, compatible_models: ['f5-hindi-urdu', 'index-tts2', 'voxcpm-ane', 'cosyvoice3-mlx'] },
-      { id: 'v_kai', name: 'Kai — calm', created_at: now - 3600000 * 5, duration_s: 6.7, has_transcript: true, compatible_models: ['index-tts2', 'qwen3-tts-mlx', 'voxcpm-ane'] },
-    ];
-  }
-
-  seedJobs() {
-    const now = Date.now();
-    return [
-      { id: 'job_4001', status: 'completed', phase: 'completed', model_id: 'index-tts2', voice_id: 'v_lina', text: 'The studio falls quiet as the console lights settle into a slow, even glow.', output_format: 'wav', watermark_enabled: true, watermark_run: 'wm_run_a', created_at: now - 1000 * 60 * 6, worker_duration_ms: 8420, output: { filename: 'index-tts2_4001.wav', format: 'wav', duration_s: 6.2, sample_rate: 24000 } },
-      { id: 'job_4000', status: 'completed', phase: 'completed', model_id: 'qwen3-tts-mlx', voice_id: 'v_arman', text: 'Welcome back to the broadcast. Today we cover three quick updates.', output_format: 'mp3', watermark_enabled: false, created_at: now - 1000 * 60 * 22, worker_duration_ms: 5210, output: { filename: 'qwen3_4000.mp3', format: 'mp3', duration_s: 4.8, sample_rate: 24000 } },
-      { id: 'job_3998', status: 'failed', phase: 'failed', model_id: 'f5-hindi-urdu', voice_id: 'v_meera', text: 'Aaj ka mausam bahut suhana hai aur hawa thandi chal rahi hai.', output_format: 'wav', watermark_enabled: false, created_at: now - 1000 * 60 * 41, error: 'Worker exited: reference transcript shorter than minimum length.' },
-      { id: 'job_3995', status: 'cancelled', phase: 'cancelled', model_id: 'chatterbox-multilingual', voice_id: null, text: 'A long multilingual passage that was cancelled mid-run by the operator.', output_format: 'flac', watermark_enabled: false, created_at: now - 1000 * 60 * 70 },
-      { id: 'job_3990', status: 'completed', phase: 'completed', model_id: 'cosyvoice3-mlx', voice_id: 'v_lina', text: 'Cross-lingual synthesis sample rendered for the demo reel.', output_format: 'wav', watermark_enabled: false, created_at: now - 1000 * 60 * 130, worker_duration_ms: 9930, output: { filename: 'cosy_3990.wav', format: 'wav', duration_s: 5.1, sample_rate: 24000 } },
-    ];
   }
 
   // ---------- helpers ----------
@@ -932,7 +923,6 @@ class Component extends DCLogic {
   cancelJobById(id) { if (this._jobTimer) clearTimeout(this._jobTimer); this.setState(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, status: 'cancelled', phase: 'cancelled' } : j), activeJobId: s.activeJobId === id ? null : s.activeJobId })); this.flash('Run cancelled.', 'warn'); }
   replayJob(j) { if (j.status !== 'completed') return; this.setState({ outputJobId: j.id, surface: 'generate', isPlaying: true }); this.flash('Loaded run into output player.', 'success'); }
   restoreJob(j) { this.setState({ selectedModelId: j.model_id, text: j.text, outputFormat: j.output_format, watermarkEnabled: !!j.watermark_enabled, selectedVoiceId: j.voice_id || this.state.selectedVoiceId, refMode: j.voice_id ? 'saved' : this.state.refMode, surface: 'generate' }); this.flash('Run settings restored. Review before generating.', 'success'); }
-  deleteVoice(id) { this.setState(s => ({ voices: s.voices.filter(v => v.id !== id), selectedVoiceId: s.selectedVoiceId === id ? '' : s.selectedVoiceId })); this.flash('Voice deleted.', 'success'); }
   startRename(v) { this.setState({ renamingId: v.id, renameValue: v.name }); }
   commitRename() { const id = this.state.renamingId, name = this.state.renameValue.trim(); if (id && name) this.setState(s => ({ voices: s.voices.map(v => v.id === id ? { ...v, name } : v), renamingId: null })); else this.setState({ renamingId: null }); if (name) this.flash('Voice renamed.', 'success'); }
   addVoice() { const name = this.state.newVoiceName.trim(); if (!name) { this.flash('Name the voice first.', 'error'); return; } const v = { id: 'v_' + Math.random().toString(36).slice(2, 7), name, created_at: Date.now(), duration_s: 7 + Math.random() * 8, has_transcript: !!this.state.promptText.trim(), compatible_models: this.models.map(m => m.id) }; this.setState(s => ({ voices: [v, ...s.voices], addingVoice: false, newVoiceName: '' })); this.flash('Voice saved to library.', 'success'); }
@@ -1254,6 +1244,23 @@ class Component extends DCLogic {
     v.emoFileName = st.emoFileName || ''; v.emoPreviewUrl = st.emoPreviewUrl;
     v.emoPreviewLabel = st.emoPreviewUrl && st.activeAudioUrl === st.emoPreviewUrl && st.isPlaying ? 'Stop' : 'Listen';
 
+    // quick phrases — starred runs replay their stored audio, so there is no
+    // generation wait. This is the fast path for everyday utterances.
+    const favs = this.favouriteJobs();
+    v.hasQuickPhrases = favs.length > 0;
+    v.quickPhrases = favs.map(j => {
+      const playing = st.activeAudioUrl === new URL(this.__audioUrl(j.id), window.location.href).href && st.isPlaying;
+      return {
+        label: this.jobLabel(j),
+        icon: playing ? '❚❚' : '▶',
+        title: j.text,
+        aria: (playing ? 'Stop' : 'Play') + ' quick phrase: ' + this.jobLabel(j),
+        border: playing ? 'var(--accent)' : 'var(--line-2)',
+        bg: playing ? 'var(--accent-dim, var(--bg-3))' : 'var(--bg-1)',
+        onPlay: () => this.playFavourite(j),
+      };
+    });
+
     // action bar
     const fmts = ['wav', 'mp3', 'flac'];
     v.formatTabs = fmts.map(f => ({ label: f.toUpperCase(), onClick: () => this.setFormat(f), color: st.outputFormat === f ? 'var(--accent-tx)' : 'var(--tx-2)', bg: st.outputFormat === f ? 'var(--accent)' : 'transparent' }));
@@ -1264,10 +1271,14 @@ class Component extends DCLogic {
     v.wmTrack = wmOn ? 'var(--accent)' : 'var(--line-3)'; v.wmKnobX = wmOn ? '15px' : '2px';
     v.wmLabel = !wmOk ? 'Not supported' : (wmOn ? 'On' : 'Off');
 
-    const reason = this.validate();
+    // One job runs at a time (the service queue is serialized), so block a
+    // second submit instead of silently queueing it.
+    const busyStates = ['queued', 'preparing', 'generating', 'watermarking', 'converting'];
+    const busy = (st.jobs || []).some(j => busyStates.includes(j.status));
+    const reason = busy ? 'Generating — hold on, this run is still going.' : this.validate();
     v.blockReason = reason;
     v.runDisabled = !!reason;
-    v.runLabel = reason ? 'Run' : 'Run generation';
+    v.runLabel = busy ? 'Generating…' : (reason ? 'Run' : 'Run generation');
     v.runBg = reason ? 'var(--bg-3)' : 'var(--accent)';
     v.runColor = reason ? 'var(--tx-3)' : 'var(--accent-tx)';
     v.runOpacity = reason ? '0.7' : '1';
@@ -1310,6 +1321,15 @@ class Component extends DCLogic {
       v.outAudioUrl = outUrl;
       v.isPlaying = outActive && st.isPlaying; v.isPaused = !(outActive && st.isPlaying);
       v.togglePlay = () => this.togglePlay();
+      v.outFavorite = !!out.favorite;
+      v.outFavoriteGlyph = out.favorite ? '★' : '☆';
+      v.outFavoriteLabel = out.favorite ? 'Saved' : 'Save';
+      v.outFavoriteAria = out.favorite ? 'Remove playing audio from quick phrases' : 'Save playing audio as a quick phrase';
+      v.outFavoriteTitle = out.favorite ? 'Remove from Quick Phrases' : 'Save to Quick Phrases';
+      v.outFavoriteBorder = out.favorite ? 'var(--accent-line)' : 'var(--line-2)';
+      v.outFavoriteBg = out.favorite ? 'var(--accent-dim)' : 'var(--bg-3)';
+      v.outFavoriteColor = out.favorite ? 'var(--accent)' : 'var(--tx-2)';
+      v.toggleOutFavorite = () => this.toggleFavorite(out.id);
       v.downloadOut = () => this.downloadOut();
     }
 
@@ -1345,7 +1365,7 @@ class Component extends DCLogic {
     let list = this.state.voices.slice();
     if (q) list = list.filter(v => (v.name || '').toLowerCase().includes(q));
     list.sort((a, b) => sort === 'name' ? (a.name || '').localeCompare(b.name || '') : sort === 'duration' ? (b.duration_s || 0) - (a.duration_s || 0) : (this.__ms(b.created_at) - this.__ms(a.created_at)));
-    const sig = 'voices3|' + this.state.voices.length + '|' + this.state.renamingId + '|' + this.state.addingVoice + '|' + this.state.theme + '|' + this.state.renameValue + '|' + this.state.newVoiceName + '|' + this.state.newVoiceText + '|' + this.state.newVoiceFileName + '|' + (!!this.state.newVoiceBlob) + '|' + this.state.newRecording + '|' + this.state.editVoiceId + '|' + this.state.editName + '|' + this.state.editText + '|' + this.state.editFileName + '|' + (!!this.state.editBlob) + '|' + this.state.editLoading + '|' + this.state.activeAudioUrl + '|' + this.state.isPlaying + '|' + this.state.expandedVoiceId + '|' + q + '|' + sort + '|' + JSON.stringify(this.state.voiceMeta || {});
+    const sig = 'voices3|' + JSON.stringify(this.state.confirmDelete || null) + '|' + this.state.voices.length + '|' + this.state.renamingId + '|' + this.state.addingVoice + '|' + this.state.theme + '|' + this.state.renameValue + '|' + this.state.newVoiceName + '|' + this.state.newVoiceText + '|' + this.state.newVoiceFileName + '|' + (!!this.state.newVoiceBlob) + '|' + this.state.newRecording + '|' + this.state.editVoiceId + '|' + this.state.editName + '|' + this.state.editText + '|' + this.state.editFileName + '|' + (!!this.state.editBlob) + '|' + this.state.editLoading + '|' + this.state.activeAudioUrl + '|' + this.state.isPlaying + '|' + this.state.expandedVoiceId + '|' + q + '|' + sort + '|' + JSON.stringify(this.state.voiceMeta || {});
     if (root.__sig === sig) return; root.__sig = sig;
     const __ss = this.__captureScroll(root);
     root.innerHTML = '';
@@ -1470,8 +1490,44 @@ class Component extends DCLogic {
     body.appendChild(rows);
     root.appendChild(body);
     if (this.state.editVoiceId) root.appendChild(this.__voiceEditorModal());
+    if (this.state.confirmDelete) root.appendChild(this.__confirmDeleteModal());
     this.__restoreScroll(root, __ss);
     this.drawWaves();
+  }
+
+  // Deleting a voice is irreversible and local, so say exactly what goes
+  // rather than leaning on a bare browser confirm().
+  __confirmDeleteModal() {
+    const cd = this.state.confirmDelete;
+    const overlay = this.el('div', 'position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);padding:24px');
+    overlay.onclick = e => { if (e.target === overlay) this.setState({ confirmDelete: null }); };
+    const card = this.el('div', 'width:100%;max-width:420px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.45);padding:20px;display:flex;flex-direction:column;gap:14px');
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Delete "' + cd.name + '"?' }));
+
+    const list = this.el('div', 'display:flex;flex-direction:column;gap:7px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);padding:12px');
+    list.appendChild(this.el('div', 'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-3)', { textContent: 'This removes' }));
+    cd.items.forEach(t => {
+      const row = this.el('div', 'display:flex;gap:8px;font-size:12.5px;color:var(--tx-2);line-height:1.45');
+      row.appendChild(this.el('span', 'color:var(--err)', { textContent: '•' }));
+      row.appendChild(this.el('span', '', { textContent: t }));
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+
+    card.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3);line-height:1.5', { textContent: cd.keeps }));
+    card.appendChild(this.el('div', 'font-size:12px;color:var(--err);font-weight:600', { textContent: 'This is permanent and cannot be undone.' }));
+
+    const acts = this.el('div', 'display:flex;gap:8px;margin-top:2px');
+    const cancel = this.el('button', 'flex:1;padding:10px;border-radius:8px;border:1px solid var(--line-2);color:var(--tx-2);font-size:12.5px;font-weight:600', { textContent: 'Keep it' });
+    cancel.onclick = () => this.setState({ confirmDelete: null });
+    const go = this.el('button', 'flex:1;padding:10px;border-radius:8px;border:1px solid var(--err);background:var(--err-dim);color:var(--err);font-size:12.5px;font-weight:700', { textContent: 'Delete permanently' });
+    go.onclick = () => { const fn = cd.onConfirm; this.setState({ confirmDelete: null }); fn(); };
+    acts.appendChild(cancel); acts.appendChild(go);
+    card.appendChild(acts);
+    overlay.appendChild(card);
+    return overlay;
   }
 
   // Shared audio picker block used by the add card and the edit popup. Shows a
@@ -1561,14 +1617,14 @@ class Component extends DCLogic {
   }
 
   renderJobs(root) {
-    const sig = 'jobs' + this.state.jobs.map(j => j.id + j.status).join(',') + this.state.jobFilter + this.state.jobDetailId + this.state.theme + this.state.activeAudioUrl + this.state.isPlaying;
+    const sig = 'jobs' + (this.__taught('favourite') ? 'T' : 'U') + this.state.jobs.map(j => j.id + j.status + (j.favorite ? '★' : '') + (j.label || '')).join(',') + this.state.jobFilter + this.state.jobDetailId + this.state.theme + this.state.activeAudioUrl + this.state.isPlaying + JSON.stringify(this.state.confirmDelete || null);
     if (root.__sig === sig) return; root.__sig = sig;
     const __ss = this.__captureScroll(root);
     root.innerHTML = '';
     const head = this.el('div', 'height:52px;flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:0 24px;border-bottom:1px solid var(--line)');
     head.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Jobs' }));
     const filters = this.el('div', 'margin-left:auto;display:flex;gap:2px;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:2px');
-    [['all', 'All'], ['active', 'Active'], ['completed', 'Completed'], ['failed', 'Failed']].forEach(([k, l]) => {
+    [['all', 'All'], ['favorite', '★ Saved'], ['active', 'Active'], ['completed', 'Completed'], ['failed', 'Failed']].forEach(([k, l]) => {
       const b = this.el('button', 'padding:6px 13px;border-radius:5px;font-size:11.5px;font-weight:600;' + (this.state.jobFilter === k ? 'background:var(--accent);color:var(--accent-tx)' : 'color:var(--tx-2)'), { textContent: l });
       b.onclick = () => this.setState({ jobFilter: k });
       filters.appendChild(b);
@@ -1582,18 +1638,32 @@ class Component extends DCLogic {
 
     const activeStates = ['queued', 'preparing', 'generating', 'watermarking', 'converting'];
     let jobs = this.state.jobs;
-    if (this.state.jobFilter === 'active') jobs = jobs.filter(j => activeStates.includes(j.status));
+    if (this.state.jobFilter === 'favorite') jobs = jobs.filter(j => j.favorite);
+    else if (this.state.jobFilter === 'active') jobs = jobs.filter(j => activeStates.includes(j.status));
     else if (this.state.jobFilter === 'completed') jobs = jobs.filter(j => j.status === 'completed');
     else if (this.state.jobFilter === 'failed') jobs = jobs.filter(j => j.status === 'failed' || j.status === 'cancelled');
 
     if (jobs.length === 0) {
-      const empty = this.el('div', 'padding:80px;text-align:center;color:var(--tx-3);font-size:13px', { textContent: 'No jobs match this filter.' });
+      const empty = this.el('div', 'padding:80px;text-align:center;color:var(--tx-3);font-size:13px', { textContent: this.state.jobFilter === 'favorite' ? 'Nothing saved yet. Star a finished run to keep it as a quick phrase.' : 'No jobs match this filter.' });
       body.appendChild(empty);
     }
 
-    const cols = 'grid-template-columns:116px minmax(160px,1fr) 130px 64px 78px 86px';
+    // Teach the star once, at the moment it becomes useful.
+    if (!this.__taught('favourite') && this.favouriteJobs().length === 0 && this.state.jobs.some(j => j.status === 'completed' && j.output)) {
+      const tip = this.el('div', 'margin:14px 24px 0;display:flex;align-items:center;gap:10px;border:1px solid var(--accent-line, var(--line-2));background:var(--bg-2);border-radius:9px;padding:11px 13px');
+      tip.appendChild(this.el('span', 'font-size:15px;color:var(--accent);flex:0 0 auto', { textContent: '☆' }));
+      tip.appendChild(this.el('span', 'font-size:12.5px;color:var(--tx-2);line-height:1.45;flex:1', { textContent: 'Star a run to keep it as a quick phrase. Saved phrases play instantly on the Generate screen — no waiting for the model.' }));
+      const dismiss = this.el('button', 'flex:0 0 auto;padding:6px 10px;border-radius:6px;border:1px solid var(--line-2);color:var(--tx-3);font-size:11.5px;font-weight:600', { textContent: 'Got it' });
+      dismiss.onclick = () => { this.__markTaught('favourite'); this.setState({}); };
+      tip.appendChild(dismiss);
+      body.appendChild(tip);
+    }
+
+    // Text column floors at 0 so the grid can shrink when the detail drawer is
+    // open; the cell ellipsises, so there is nothing to overflow.
+    const cols = 'grid-template-columns:34px 116px minmax(0,1fr) 130px 64px 78px 86px';
     const hdr = this.el('div', 'display:grid;' + cols + ';gap:12px;padding:11px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--tx-3)');
-    ['Status', 'Text', 'Model', 'Format', 'Duration', 'When'].forEach(h => hdr.appendChild(this.el('div', '', { textContent: h })));
+    ['', 'Status', 'Text', 'Model', 'Format', 'Duration', 'When'].forEach(h => hdr.appendChild(this.el('div', '', { textContent: h })));
     if (jobs.length) body.appendChild(hdr);
 
     jobs.forEach(j => {
@@ -1602,11 +1672,26 @@ class Component extends DCLogic {
       row.onmouseenter = () => { if (this.state.jobDetailId !== j.id) row.style.background = 'var(--bg-1)'; };
       row.onmouseleave = () => { if (this.state.jobDetailId !== j.id) row.style.background = ''; };
       row.onclick = () => this.setState({ jobDetailId: j.id });
+      const canStar = j.status === 'completed' && !!j.output;
+      const star = this.el('button', 'width:28px;height:28px;border-radius:6px;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;' + (j.favorite ? 'color:var(--accent)' : 'color:var(--tx-3)') + (canStar ? '' : ';opacity:.25;cursor:default'), { textContent: j.favorite ? '★' : '☆' });
+      star.setAttribute('aria-pressed', j.favorite ? 'true' : 'false');
+      star.setAttribute('aria-label', j.favorite ? 'Remove from quick phrases' : 'Save as a quick phrase');
+      star.title = canStar ? (j.favorite ? 'Remove from quick phrases' : 'Save as a quick phrase') : 'Only finished runs can be saved';
+      if (!canStar) star.setAttribute('aria-disabled', 'true');
+      star.onclick = e => { e.stopPropagation(); if (canStar) this.toggleFavorite(j.id); };
+      row.appendChild(star);
       const pill = this.el('div', 'display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:' + col + ';background:' + bg + ';padding:4px 9px;border-radius:5px;width:fit-content');
       if (activeStates.includes(j.status)) pill.appendChild(this.el('span', 'width:6px;height:6px;border-radius:50%;background:' + col + ';animation:pulse 1.2s infinite'));
       pill.appendChild(this.el('span', '', { textContent: label }));
       row.appendChild(pill);
-      row.appendChild(this.el('div', 'font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)', { textContent: j.text }));
+      const textCell = this.el('div', 'min-width:0;display:flex;flex-direction:column;gap:2px');
+      if (j.label) {
+        textCell.appendChild(this.el('div', 'font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)', { textContent: j.label }));
+        textCell.appendChild(this.el('div', 'font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx-3)', { textContent: j.text }));
+      } else {
+        textCell.appendChild(this.el('div', 'font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)', { textContent: j.text }));
+      }
+      row.appendChild(textCell);
       row.appendChild(this.el('div', 'font-size:12px;color:var(--tx-2)', { textContent: this.model(j.model_id).name }));
       row.appendChild(this.el('div', 'font-family:var(--mono);font-size:11px;color:var(--tx-2)', { textContent: j.output_format.toUpperCase() }));
       row.appendChild(this.el('div', 'font-family:var(--mono);font-size:11px;color:var(--tx-2)', { textContent: this.fmtDur(j.worker_duration_ms) }));
@@ -1620,11 +1705,19 @@ class Component extends DCLogic {
     if (dj) {
       const d = this.el('div', 'width:340px;flex:0 0 340px;border-left:1px solid var(--line);background:var(--bg-1);overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:16px');
       d.setAttribute('data-scroll-keep', 'jobs-detail');
-      const dh = this.el('div', 'display:flex;align-items:center;gap:10px');
+      const dh = this.el('div', 'display:flex;align-items:center;gap:8px');
       const [col, bg, label] = this.statusPill(dj.status);
-      dh.appendChild(this.el('div', 'font-weight:700;font-size:14px', { textContent: 'Run ' + dj.id.replace('job_', '#') }));
-      dh.appendChild(this.el('span', 'font-size:11px;font-weight:600;color:' + col + ';background:' + bg + ';padding:3px 9px;border-radius:5px', { textContent: label }));
-      const close = this.el('button', 'margin-left:auto;color:var(--tx-3);font-size:16px;width:24px;height:24px', { textContent: '×' });
+      // The 32-char job id has no break opportunities, so this column must be
+      // allowed to shrink (min-width:0) or it pushes the pill out of the panel.
+      const titleWrap = this.el('div', 'flex:1;min-width:0');
+      const titleText = dj.label ? dj.label : 'Run ' + dj.id.replace('job_', '#');
+      const title = this.el('div', 'font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: titleText });
+      title.title = titleText;
+      titleWrap.appendChild(title);
+      if (dj.label) titleWrap.appendChild(this.el('div', 'font-family:var(--mono);font-size:10px;color:var(--tx-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: dj.id }));
+      dh.appendChild(titleWrap);
+      dh.appendChild(this.el('span', 'flex:0 0 auto;font-size:11px;font-weight:600;color:' + col + ';background:' + bg + ';padding:3px 9px;border-radius:5px', { textContent: label }));
+      const close = this.el('button', 'flex:0 0 auto;color:var(--tx-3);font-size:16px;width:24px;height:24px', { textContent: '×' });
       close.onclick = () => this.setState({ jobDetailId: null });
       dh.appendChild(close);
       d.appendChild(dh);
@@ -1660,14 +1753,19 @@ class Component extends DCLogic {
 
       const acts = this.el('div', 'display:flex;flex-wrap:wrap;gap:8px');
       const mk = (l, fn, danger) => { const b = this.el('button', 'flex:1;min-width:90px;padding:9px;border-radius:7px;font-size:11.5px;font-weight:600;' + (danger ? 'border:1px solid var(--err);color:var(--err);background:var(--err-dim)' : 'border:1px solid var(--line-2);color:var(--tx-2)'), { textContent: l }); b.onclick = fn; return b; };
+      if (dj.status === 'completed' && dj.output) {
+        acts.appendChild(mk(dj.favorite ? '★ Saved' : '☆ Save phrase', () => this.toggleFavorite(dj.id)));
+        acts.appendChild(mk('Rename', () => this.renameJob(dj.id)));
+      }
       acts.appendChild(mk('Restore settings', () => this.restoreJob(dj)));
       if (activeStates.includes(dj.status)) acts.appendChild(mk('Cancel', () => this.cancelJobById(dj.id), true));
-      acts.appendChild(mk('Delete', () => this.deleteJob(dj.id), true));
+      else acts.appendChild(mk('Delete', () => this.deleteJob(dj.id), true));
       d.appendChild(acts);
       wrap.appendChild(d);
     }
 
     root.appendChild(wrap);
+    if (this.state.confirmDelete) root.appendChild(this.__confirmDeleteModal());
     this.__restoreScroll(root, __ss);
     this.drawWaves();
   }
@@ -1713,11 +1811,7 @@ class Component extends DCLogic {
   }
 
   renderWatermark(root) {
-    const runs = [
-      { id: 'wm_run_a', label: 'sanity_ids_v2', status: 'passed', updated_at: Date.now() - 3600000 * 4, metrics: { accuracy: 0.991, ber: 0.004, snr_db: 41.2, payload_bits: 16 }, config: { model: 'index-tts2', threshold: 0.35, embed_strength: 0.06 }, report: 'Decoder recovered 16/16 payload bits across 240 eval clips. BER well below 0.01 target; perceptual SNR within transparent range.' },
-      { id: 'wm_run_b', label: 'qwen_overfit_check', status: 'passed', updated_at: Date.now() - 86400000, metrics: { accuracy: 0.984, ber: 0.009, snr_db: 39.7, payload_bits: 16 }, config: { model: 'qwen3-tts-mlx', threshold: 0.35, embed_strength: 0.07 }, report: 'Overfit guardrail held on held-out speakers. Slight BER increase under MP3 re-encode but within tolerance.' },
-      { id: 'wm_run_c', label: 'robustness_mp3', status: 'review', updated_at: Date.now() - 86400000 * 3, metrics: { accuracy: 0.93, ber: 0.041, snr_db: 36.1, payload_bits: 16 }, config: { model: 'index-tts2', threshold: 0.4, embed_strength: 0.05 }, report: 'Aggressive 64kbps re-encode degrades recovery. Flagged for review; consider raising embed strength.' },
-    ];
+    const runs = [];
     const sig = 'wm' + this.state.selectedRunId + this.state.theme + this.state.wmThreshold;
     if (root.__sig === sig) return; root.__sig = sig;
     root.innerHTML = '';
@@ -2133,12 +2227,76 @@ class Component extends DCLogic {
 
   async cancelJob() { if (this.state.activeJobId) await this.cancelJobById(this.state.activeJobId); }
   async cancelJobById(id) { try { const job = this.__normalizeJob(await this.__api('/api/generation-jobs/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })); this.setState(s => ({ jobs: [job, ...s.jobs.filter(j => j.id !== job.id)], activeJobId: null })); this.flash('Run cancelled.', 'warn'); } catch (e) { this.flash(e.message || 'Cancel failed.', 'error'); } }
-  async deleteJob(id) { try { await this.__api('/api/generation-jobs/' + encodeURIComponent(id), { method: 'DELETE' }); this.setState(s => ({ jobs: s.jobs.filter(j => j.id !== id), jobDetailId: s.jobDetailId === id ? null : s.jobDetailId, outputJobId: s.outputJobId === id ? null : s.outputJobId })); this.flash('Run deleted.', 'success'); } catch (e) { this.flash(e.message || 'Delete failed.', 'error'); } }
+  deleteJob(id) {
+    const j = this.state.jobs.find(x => x.id === id);
+    if (!j) return;
+    const items = ['The generated audio file stored on this Mac', 'Its submitted settings, metadata, and local history entry'];
+    if (j.favorite) items.push('Its shortcut in Quick Phrases');
+    this.setState({ confirmDelete: {
+      name: this.jobLabel(j),
+      items,
+      keeps: 'The saved reference voice, if any, is kept.',
+      onConfirm: () => this.__reallyDeleteJob(id),
+    } });
+  }
+  async __reallyDeleteJob(id) { try { await this.__api('/api/generation-jobs/' + encodeURIComponent(id), { method: 'DELETE' }); this.setState(s => ({ jobs: s.jobs.filter(j => j.id !== id), jobDetailId: s.jobDetailId === id ? null : s.jobDetailId, outputJobId: s.outputJobId === id ? null : s.outputJobId })); this.flash('Run deleted.', 'success'); } catch (e) { this.flash(e.message || 'Delete failed.', 'error'); } }
   downloadOut() { const out = this.state.outputJobId ? this.state.jobs.find(j => j.id === this.state.outputJobId && j.output) : null; if (!out) return; const a = document.createElement('a'); a.href = this.__audioUrl(out.id); a.download = out.output.filename || 'output.' + out.output_format; document.body.appendChild(a); a.click(); a.remove(); }
+
+  // ---- Favourites: starred runs double as the saved-phrase board ----
+  // A starred run replays its already-rendered audio, so it is instant where a
+  // fresh generation costs seconds. Starring prompts for a short label because
+  // the raw script makes an unreadable chip.
+  __taught(key) { try { return localStorage.getItem('ttshub.taught.' + key) === '1'; } catch (e) { return false; } }
+  __markTaught(key) { try { localStorage.setItem('ttshub.taught.' + key, '1'); } catch (e) { /* private mode */ } }
+  jobLabel(j) { const t = (j.label || '').trim(); if (t) return t; const s = (j.text || '').trim(); return s.length > 34 ? s.slice(0, 34).trimEnd() + '…' : (s || 'Untitled run'); }
+  favouriteJobs() { return this.state.jobs.filter(j => j.favorite && j.status === 'completed' && j.output).sort((a, b) => (b.favorited_at || 0) - (a.favorited_at || 0)); }
+
+  async __patchJob(id, patch, okMsg) {
+    try {
+      const job = this.__normalizeJob(await this.__api('/api/generation-jobs/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }));
+      this.setState(s => ({ jobs: s.jobs.map(j => j.id === job.id ? job : j) }));
+      if (okMsg) this.flash(okMsg, 'success');
+      return job;
+    } catch (e) { this.flash(e.message || 'Could not update this run.', 'error'); return null; }
+  }
+
+  async toggleFavorite(id) {
+    const j = this.state.jobs.find(x => x.id === id);
+    if (!j) return;
+    if (j.favorite) { await this.__patchJob(id, { favorite: false }, 'Removed from quick phrases.'); return; }
+    const suggested = (j.label || '').trim() || (j.text || '').trim().slice(0, 40);
+    const name = window.prompt('Name this quick phrase — it plays instantly, no waiting.', suggested);
+    if (name === null) return; // cancelled: do not star
+    await this.__patchJob(id, { favorite: true, label: name.trim() || null }, 'Saved to quick phrases.');
+    this.__markTaught('favourite');
+  }
+
+  async renameJob(id) {
+    const j = this.state.jobs.find(x => x.id === id);
+    if (!j) return;
+    const name = window.prompt('Rename this run.', (j.label || '').trim() || (j.text || '').trim().slice(0, 40));
+    if (name === null) return;
+    await this.__patchJob(id, { label: name.trim() || null }, name.trim() ? 'Run renamed.' : 'Name cleared.');
+  }
+
+  playFavourite(j) { this.setState({ outputJobId: j.id }); this.playUrl(this.__audioUrl(j.id)); }
 
   async unloadModel(id) { try { const form = new FormData(); form.append('model_id', id); await this.__api('/api/unload', { method: 'POST', body: form }); await this.__refreshCore(true); this.flash(this.model(id).name + ' unloaded — memory freed.', 'success'); } catch (e) { this.flash(e.message || 'Unload failed.', 'error'); } }
   loadModel(id) { this.selectModel(id); this.setSurface('generate'); this.flash('Model will load on generation.', 'success'); }
-  async deleteVoice(id) { if (!confirm('Delete this saved voice?')) return; try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'DELETE' }); await this.__refreshCore(true); this.flash('Voice deleted.', 'success'); } catch (e) { this.flash(e.message || 'Voice delete failed.', 'error'); } }
+  deleteVoice(id) {
+    const v = this.state.voices.find(x => x.id === id);
+    if (!v) return;
+    const starred = this.favouriteJobs().filter(j => j.voice_id === id).length;
+    const items = ['The reference recording stored on this Mac', 'Its transcript and any cached model embeddings'];
+    if (starred) items.push(starred + ' quick phrase' + (starred === 1 ? '' : 's') + ' will keep playing, but cannot be regenerated in this voice');
+    this.setState({ confirmDelete: {
+      name: v.name || 'this voice',
+      items,
+      keeps: 'Clips you already generated with this voice stay in Jobs.',
+      onConfirm: () => this.__reallyDeleteVoice(id),
+    } });
+  }
+  async __reallyDeleteVoice(id) { try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'DELETE' }); await this.__refreshCore(true); this.flash('Voice deleted.', 'success'); } catch (e) { this.flash(e.message || 'Voice delete failed.', 'error'); } }
   async commitRename() { const id = this.state.renamingId, name = this.state.renameValue.trim(); if (!id || !name) { this.setState({ renamingId: null }); return; } try { await this.__api('/api/voices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); await this.__refreshCore(true); this.setState({ renamingId: null }); this.flash('Voice renamed.', 'success'); } catch (e) { this.flash(e.message || 'Rename failed.', 'error'); } }
 
   // ---- Add voice: stage the clip, keep editing, save explicitly ----

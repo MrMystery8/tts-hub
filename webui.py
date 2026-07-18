@@ -185,6 +185,12 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
     if mobile_dir.exists():
         app.mount("/mobile", StaticFiles(directory=str(mobile_dir), html=True), name="mobile")
 
+    # Shared brand assets (marks, icon sources) — served to every UI from one place
+    # so the desktop and mobile shells cannot drift apart. See brand/README.md.
+    brand_dir = hub_root / "brand"
+    if brand_dir.exists():
+        app.mount("/brand", StaticFiles(directory=str(brand_dir)), name="brand")
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return (ui_dir / "index.html").read_text(encoding="utf-8")
@@ -494,6 +500,44 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
     def get_generation_job(job_id: str):
         try:
             return generation_jobs.get(job_id)
+        except (FileNotFoundError, ValueError):
+            return JSONResponse({"error": "generation job not found"}, status_code=404)
+
+    @app.patch("/api/generation-jobs/{job_id}")
+    async def update_generation_job(job_id: str, request: Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be valid JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+        allowed_fields = {"favorite", "label"}
+        unknown_fields = sorted(set(payload) - allowed_fields)
+        if unknown_fields:
+            return JSONResponse(
+                {"error": f"unsupported field(s): {', '.join(unknown_fields)}"},
+                status_code=400,
+            )
+        if not payload:
+            return JSONResponse({"error": "provide favorite and/or label"}, status_code=400)
+
+        favorite = payload.get("favorite")
+        if favorite is not None and not isinstance(favorite, bool):
+            return JSONResponse({"error": "favorite must be a boolean"}, status_code=400)
+
+        label = payload.get("label")
+        clear_label = "label" in payload and label is None
+        if label is not None and not isinstance(label, str):
+            return JSONResponse({"error": "label must be a string or null"}, status_code=400)
+
+        try:
+            return generation_jobs.update_meta(
+                job_id,
+                favorite=favorite,
+                label=label,
+                clear_label=clear_label,
+            )
         except (FileNotFoundError, ValueError):
             return JSONResponse({"error": "generation job not found"}, status_code=404)
 

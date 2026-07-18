@@ -52,6 +52,7 @@
     playingVoiceId: null,
     jobFilter: "all",
     jobDetailId: null,
+    confirmAction: null,
     addName: "",
     addText: "",
     addFile: null,       // File or Blob staged for the new voice
@@ -227,6 +228,13 @@
     return map[status] || map.queued;
   }
 
+  // One job runs at a time (the service queue is serialized), so a second
+  // submit would silently queue. Block it and say why.
+  function runBlockReason() {
+    if (state.jobs.some((j) => ACTIVE_STATES.includes(j.status))) return "Generating — hold on, this run is still going.";
+    return validate();
+  }
+
   function validate() {
     if (!state.text.trim()) return "Script text is required.";
     const id = state.selectedModelId;
@@ -285,6 +293,50 @@
       renderMiniplayer();
     }
   });
+
+  // ---- Favourites: starred runs double as the saved-phrase board ----
+  // Replaying a starred run costs nothing because its audio is already on
+  // disk, so these are the fast path for everyday utterances.
+  function jobLabel(j) {
+    const t = (j.label || "").trim();
+    if (t) return t;
+    const s = (j.text || "").trim();
+    return s.length > 30 ? `${s.slice(0, 30).trimEnd()}…` : s || "Untitled run";
+  }
+  function favouriteJobs() {
+    return state.jobs
+      .filter((j) => j.favorite && j.status === "completed" && j.output)
+      .sort((a, b) => (b.favorited_at || 0) - (a.favorited_at || 0));
+  }
+  async function patchJob(id, patch, okMsg) {
+    try {
+      const job = await api(`/api/generation-jobs/${encodeURIComponent(id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+      });
+      state.jobs = state.jobs.map((j) => (j.id === job.id ? job : j));
+      if (okMsg) flash(okMsg, "success");
+      render();
+      // An open job sheet is not redrawn by render(); refresh it so the star
+      // and title reflect what was just saved.
+      if (state.sheet === "job") renderSheet(true);
+    } catch (e) { flash(e.message || "Could not update this run.", "error"); }
+  }
+  async function toggleFavorite(id) {
+    const j = state.jobs.find((x) => x.id === id);
+    if (!j) return;
+    if (j.favorite) { await patchJob(id, { favorite: false }, "Removed from quick phrases."); return; }
+    const suggested = (j.label || "").trim() || (j.text || "").trim().slice(0, 40);
+    const name = window.prompt("Name this quick phrase — it plays instantly, no waiting.", suggested);
+    if (name === null) return;
+    await patchJob(id, { favorite: true, label: name.trim() || null }, "Saved to quick phrases.");
+  }
+  async function renameJob(id) {
+    const j = state.jobs.find((x) => x.id === id);
+    if (!j) return;
+    const name = window.prompt("Rename this run.", (j.label || "").trim() || (j.text || "").trim().slice(0, 40));
+    if (name === null) return;
+    await patchJob(id, { label: name.trim() || null }, name.trim() ? "Run renamed." : "Name cleared.");
+  }
 
   function playOutput(jobId, autoplay) {
     const url = `/api/generation-jobs/${encodeURIComponent(jobId)}/audio`;
@@ -464,7 +516,7 @@
   }
 
   async function runGenerate() {
-    const reason = validate();
+    const reason = runBlockReason();
     if (reason) { flash(reason, "error"); return; }
     const id = state.selectedModelId;
     const useVoice = state.refMode === "saved" && state.selectedVoiceId && compatVoices().some((v) => v.id === state.selectedVoiceId);
@@ -523,8 +575,22 @@
     }
   }
 
-  async function deleteVoice(v) {
-    if (!window.confirm(`Delete “${v.name || v.id}”? This cannot be undone.`)) return;
+  function deleteVoice(v) {
+    const starred = favouriteJobs().filter((j) => j.voice_id === v.id).length;
+    const items = [
+      "The reference recording stored on this device",
+      "Its transcript, preprocessing metadata, and cached model embeddings",
+    ];
+    if (starred) items.push(`${starred} saved phrase${starred === 1 ? "" : "s"} will keep playing, but cannot be regenerated in this voice`);
+    openConfirm({
+      title: `Delete “${v.name || v.id}”?`,
+      items,
+      note: "Clips already generated with this voice stay in Jobs.",
+      onConfirm: () => reallyDeleteVoice(v),
+    });
+  }
+
+  async function reallyDeleteVoice(v) {
     try {
       await api(`/api/voices/${encodeURIComponent(v.id)}`, { method: "DELETE" });
       if (state.selectedVoiceId === v.id) state.selectedVoiceId = "";
@@ -581,8 +647,21 @@
     }
   }
 
-  async function deleteJob(j) {
-    if (!window.confirm("Delete this completed run and its audio? This cannot be undone.")) return;
+  function deleteJob(j) {
+    const items = [
+      "The generated audio file stored on this device",
+      "Its submitted settings, metadata, and local history entry",
+    ];
+    if (j.favorite) items.push("Its shortcut in Quick Phrases");
+    openConfirm({
+      title: `Delete “${jobLabel(j)}”?`,
+      items,
+      note: "The saved reference voice, if any, is kept.",
+      onConfirm: () => reallyDeleteJob(j),
+    });
+  }
+
+  async function reallyDeleteJob(j) {
     try {
       await api(`/api/generation-jobs/${encodeURIComponent(j.id)}`, { method: "DELETE" });
       if (state.outputJobId === j.id) { outAudio.pause(); state.outputJobId = null; }
@@ -752,6 +831,36 @@
     renderTransport();
     renderMiniplayer();
     renderSheet();
+    renderConfirm();
+  }
+
+  function openConfirm(action) {
+    state.confirmAction = action;
+    renderConfirm();
+  }
+
+  function closeConfirm() {
+    state.confirmAction = null;
+    renderConfirm();
+  }
+
+  function renderConfirm() {
+    const action = state.confirmAction;
+    const backdrop = $("confirm-backdrop");
+    backdrop.classList.toggle("hidden", !action);
+    if (!action) return;
+    $("confirm-title").textContent = action.title;
+    $("confirm-note").textContent = action.note || "";
+    $("confirm-note").classList.toggle("hidden", !action.note);
+    const items = $("confirm-items");
+    items.innerHTML = "";
+    action.items.forEach((text) => {
+      const row = el("div", "confirm-item");
+      row.appendChild(el("span", "confirm-bullet", "•"));
+      row.appendChild(el("span", null, text));
+      items.appendChild(row);
+    });
+    $("confirm-delete").textContent = action.confirmLabel || "Delete permanently";
   }
 
   function renderHeader() {
@@ -867,6 +976,25 @@
     count.textContent = `${state.text.length} chars`;
     count.classList.toggle("err", state.text.length === 0);
 
+    // quick phrases — starred runs replay stored audio, so there is no wait
+    const favs = favouriteJobs();
+    $("phrase-section").classList.toggle("hidden", favs.length === 0);
+    const pcar = $("phrase-carousel");
+    pcar.innerHTML = "";
+    for (const j of favs) {
+      const playing = state.outputJobId === j.id && outPlaying;
+      const chip = el("button", "phrase-chip" + (playing ? " playing" : ""));
+      chip.appendChild(el("span", "pc-icon", playing ? "❚❚" : "▶"));
+      chip.appendChild(el("span", "pc-name", jobLabel(j)));
+      chip.title = j.text || "";
+      chip.setAttribute("aria-label", `${playing ? "Stop" : "Play"} quick phrase: ${jobLabel(j)}`);
+      chip.addEventListener("click", () => {
+        if (playing) outAudio.pause();
+        else playOutput(j.id, true);
+      });
+      pcar.appendChild(chip);
+    }
+
     // options summary
     const wmOn = state.watermarkEnabled && WM_SUPPORTED.has(id);
     const group = MODEL_GROUP[id];
@@ -876,12 +1004,13 @@
     $("options-summary").textContent = `${speed}${temp}${state.outputFormat.toUpperCase()}${wmOn ? " · WM" : ""}`;
 
     // run bar
-    const reason = validate();
+    const reason = runBlockReason();
     const blocked = !!reason;
     $("block-reason").textContent = reason || "";
     $("block-reason").classList.toggle("hidden", !blocked);
     $("run-btn").classList.toggle("blocked", blocked);
-    $("run-label").textContent = blocked ? "Run" : "Run generation";
+    $("run-btn").setAttribute("aria-disabled", blocked ? "true" : "false");
+    $("run-label").textContent = runningCount ? "Generating…" : blocked ? "Run" : "Run generation";
   }
 
   function renderTransport() {
@@ -924,7 +1053,8 @@
 
   function renderMiniplayer() {
     const out = state.outputJobId ? state.jobs.find((j) => j.id === state.outputJobId && j.status === "completed") : null;
-    const showMp = !!out && !state.activeJobId && state.surface === "generate";
+    const playerSurface = state.surface === "generate" || state.surface === "jobs";
+    const showMp = !!out && playerSurface && (state.surface === "jobs" || !state.activeJobId);
     $("miniplayer").classList.toggle("hidden", !showMp);
     if (!showMp) return;
 
@@ -933,6 +1063,11 @@
     const current = Math.min(Number(outAudio.currentTime || 0), duration || Infinity);
     $("mp-name").textContent = o.filename || out.id;
     $("mp-meta").textContent = `${(o.format || "").toUpperCase()} · tap waveform to seek`;
+    const favorite = $("mp-favorite");
+    favorite.textContent = out.favorite ? "★" : "☆";
+    favorite.title = out.favorite ? "Remove from Quick Phrases" : "Save to Quick Phrases";
+    favorite.setAttribute("aria-label", out.favorite ? "Remove playing audio from quick phrases" : "Save playing audio as a quick phrase");
+    favorite.setAttribute("aria-pressed", out.favorite ? "true" : "false");
     $("mp-current").textContent = fmtSec(current);
     $("mp-duration").textContent = fmtSec(duration);
     $("mp-duration").dataset.seconds = String(duration);
@@ -1041,21 +1176,24 @@
     // filters
     const filters = $("job-filters");
     filters.innerHTML = "";
-    [["all", "All"], ["active", "Active"], ["completed", "Done"], ["failed", "Failed"]].forEach(([k, l]) => {
+    [["all", "All"], ["favorite", "★ Saved"], ["active", "Active"], ["completed", "Done"], ["failed", "Failed"]].forEach(([k, l]) => {
       const b = el("button", "filter-btn" + (state.jobFilter === k ? " sel" : ""), l);
       b.addEventListener("click", () => { state.jobFilter = k; renderJobsPage(); });
       filters.appendChild(b);
     });
 
     let jobs = state.jobs;
-    if (state.jobFilter === "active") jobs = jobs.filter((j) => ACTIVE_STATES.includes(j.status));
+    if (state.jobFilter === "favorite") jobs = jobs.filter((j) => j.favorite);
+    else if (state.jobFilter === "active") jobs = jobs.filter((j) => ACTIVE_STATES.includes(j.status));
     else if (state.jobFilter === "completed") jobs = jobs.filter((j) => j.status === "completed");
     else if (state.jobFilter === "failed") jobs = jobs.filter((j) => j.status === "failed" || j.status === "cancelled");
 
     const list = $("job-list");
     list.innerHTML = "";
     if (!jobs.length) {
-      list.appendChild(el("div", "no-jobs", "No jobs match this filter."));
+      list.appendChild(el("div", "no-jobs", state.jobFilter === "favorite"
+        ? "Nothing saved yet. Open a finished run and tap Save phrase."
+        : "No jobs match this filter."));
       return;
     }
     for (const j of jobs) {
@@ -1071,11 +1209,17 @@
       if (ACTIVE_STATES.includes(j.status)) pill.appendChild(el("span", "live-dot"));
       pill.appendChild(document.createTextNode(label));
       top.appendChild(pill);
+      if (j.favorite) top.appendChild(el("span", "pc-icon", "★"));
       top.appendChild(el("span", "job-model", modelName(req.model_id)));
       top.appendChild(el("span", "job-ago", fmtAgo(j.created_at)));
       card.appendChild(top);
 
-      card.appendChild(el("div", "job-text", req.text || "(no script recorded)"));
+      if (j.label) {
+        card.appendChild(el("div", "job-text named", j.label));
+        card.appendChild(el("div", "job-script", req.text || "(no script recorded)"));
+      } else {
+        card.appendChild(el("div", "job-text", req.text || "(no script recorded)"));
+      }
 
       const facts = el("div", "job-facts");
       facts.appendChild(el("span", null, (req.output_format || (j.output || {}).format || "?").toUpperCase()));
@@ -1206,8 +1350,10 @@
     if (!open) { renderedSheet = null; return; }
     if (!force && renderedSheet === state.sheet) return;
     renderedSheet = state.sheet;
-    $("sheet-title").textContent =
-      { model: "Choose model", voice: "Choose voice", settings: "Options", job: "Run detail", add: "New reference voice", edit: "Edit voice" }[state.sheet] || "";
+    const detailJob = state.jobDetailId ? state.jobs.find((job) => job.id === state.jobDetailId) : null;
+    $("sheet-title").textContent = state.sheet === "job" && detailJob
+      ? jobLabel(detailJob)
+      : ({ model: "Choose model", voice: "Choose voice", settings: "Options", add: "New reference voice", edit: "Edit voice" }[state.sheet] || "");
     const body = $("sheet-body");
     body.innerHTML = "";
     if (state.sheet === "model") renderModelSheet(body);
@@ -1539,9 +1685,7 @@
       const actions = el("div", "dj-actions");
       const play = el("button", "dj-play", "▶ Play");
       play.addEventListener("click", () => {
-        state.surface = "generate";
-        state.sheet = null;
-        state.jobDetailId = null;
+        closeSheet();
         playOutput(dj.id, true);
       });
       const dl = el("button", "dj-dl", "↓ Download");
@@ -1549,6 +1693,16 @@
       actions.appendChild(play);
       actions.appendChild(dl);
       col.appendChild(actions);
+
+      const favActions = el("div", "dj-actions");
+      const star = el("button", "dj-restore", dj.favorite ? "★ Saved" : "☆ Save phrase");
+      star.setAttribute("aria-pressed", dj.favorite ? "true" : "false");
+      star.addEventListener("click", () => toggleFavorite(dj.id));
+      const ren = el("button", "dj-restore", "Rename");
+      ren.addEventListener("click", () => renameJob(dj.id));
+      favActions.appendChild(star);
+      favActions.appendChild(ren);
+      col.appendChild(favActions);
     }
 
     const voiceName = req.voice_id
@@ -1754,6 +1908,7 @@
   });
   $("mp-toggle").addEventListener("click", toggleOutput);
   $("mp-wave").addEventListener("pointerdown", (event) => seekOutput(event.clientX));
+  $("mp-favorite").addEventListener("click", () => state.outputJobId && toggleFavorite(state.outputJobId));
   $("mp-download").addEventListener("click", () => state.outputJobId && downloadOutput(state.outputJobId));
   document.querySelectorAll("[data-verify-mode]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1800,6 +1955,13 @@
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", (e) => { if (e.target === $("sheet-backdrop")) closeSheet(); });
   $("sheet").addEventListener("click", (e) => e.stopPropagation());
+  $("confirm-cancel").addEventListener("click", closeConfirm);
+  $("confirm-backdrop").addEventListener("click", (e) => { if (e.target === $("confirm-backdrop")) closeConfirm(); });
+  $("confirm-delete").addEventListener("click", () => {
+    const action = state.confirmAction;
+    closeConfirm();
+    if (action && action.onConfirm) action.onConfirm();
+  });
   document.querySelectorAll(".tab").forEach((t) =>
     t.addEventListener("click", () => {
       if (state.refRecording && t.dataset.tab !== "generate" && recorder) recorder.stop();
@@ -1814,10 +1976,11 @@
     count.textContent = `${state.text.length} chars`;
     count.classList.toggle("err", state.text.length === 0);
     // refresh run-bar state without re-rendering the textarea
-    const reason = validate();
+    const reason = runBlockReason();
     $("block-reason").textContent = reason || "";
     $("block-reason").classList.toggle("hidden", !reason);
     $("run-btn").classList.toggle("blocked", !!reason);
+    $("run-btn").setAttribute("aria-disabled", reason ? "true" : "false");
     $("run-label").textContent = reason ? "Run" : "Run generation";
   });
   $("prompt-text").addEventListener("input", () => {

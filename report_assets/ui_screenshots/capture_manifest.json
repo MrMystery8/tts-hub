@@ -1,0 +1,85 @@
+{
+  "captured_at": "2026-07-18T17:22:28.007Z",
+  "base_url": "http://localhost:7896",
+  "source": {
+    "commit": "1cbb5f04c7dc61060ad43fea382db49224af402a",
+    "dirty_worktree": true
+  },
+  "viewports": {
+    "desktop": {
+      "width": 1440,
+      "height": 900,
+      "deviceScaleFactor": 2
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "deviceScaleFactor": 2
+    }
+  },
+  "voice": {
+    "id": "d41dbd79c33346648627e3a9a2679c74",
+    "name": "FYP Demo - Narration"
+  },
+  "jobs": [
+    {
+      "id": "ce5c891f523e47758df88b7bd465824b",
+      "model_id": "index-tts2",
+      "status": "completed",
+      "watermark_enabled": false,
+      "favorite": false,
+      "label": null
+    },
+    {
+      "id": "fe37d7da4b324ca1ba0f601e419c5e45",
+      "model_id": "chatterbox-multilingual",
+      "status": "completed",
+      "watermark_enabled": false,
+      "favorite": false,
+      "label": null
+    },
+    {
+      "id": "aa8f70991b4641f09986bb1bbf2e0147",
+      "model_id": "qwen3-tts-mlx",
+      "status": "completed",
+      "watermark_enabled": true,
+      "favorite": true,
+      "label": "Please wait"
+    }
+  ],
+  "detection": {
+    "detected": true,
+    "wm_prob": 0.9976256489753723,
+    "model": {
+      "id": 1,
+      "name": "Qwen3-TTS MLX (qwen3-tts-mlx)",
+      "tts_model_id": "qwen3-tts-mlx"
+    },
+    "run": {
+      "id": "outputs/dashboard_runs/sweep3_B_static_12_2"
+    }
+  },
+  "ui_state": {
+    "mobile_quick_phrases_first": true,
+    "mobile_jobs_player_visible": true,
+    "player_favorite_controls": [
+      "desktop",
+      "mobile"
+    ]
+  },
+  "figures": [
+    "Figure_4.12_Desktop_Generate.png",
+    "Figure_4.13_Desktop_Voices.png",
+    "Figure_4.14_Desktop_Reference_Intake.png",
+    "Figure_4.15_Desktop_Model_Rail.png",
+    "Figure_4.16_Desktop_Jobs.png",
+    "Figure_4.17_Desktop_Watermark_Lab.png",
+    "Figure_4.18_Desktop_Tour_Navigation.png",
+    "Figure_4.19_Desktop_Tour_Reference.png",
+    "Figure_4.20_Desktop_Tour_Actions.png",
+    "Figure_4.21_Mobile_Generate.png",
+    "Figure_4.22_Mobile_Jobs.png",
+    "Figure_4.23_Mobile_Voices.png",
+    "Figure_4.24_Mobile_Verify.png"
+  ]
+}

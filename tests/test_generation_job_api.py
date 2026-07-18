@@ -25,6 +25,60 @@ def _wav_bytes() -> bytes:
 
 
 class TestGenerationJobApi(unittest.TestCase):
+    def test_generation_job_user_metadata_patch_validation_and_persistence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ui = root / "ui"
+            static = root / "static"
+            ui.mkdir()
+            static.mkdir()
+            (ui / "index.html").write_text("<div>test</div>", encoding="utf-8")
+
+            def fake_generate(manager, *, model_id, request):
+                output = manager.outputs_root / "favorite.wav"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(_wav_bytes())
+                return GenerateResult(output_path=output, meta={"seconds": 0.1, "sr": 16000})
+
+            with patch("hub.hub_manager.HubManager.generate", fake_generate):
+                client = TestClient(create_app(hub_root=root, ui_dir=ui, static_dir=static))
+                created = client.post(
+                    "/api/generation-jobs",
+                    data={"model_id": "pocket-tts", "text": "help me", "output_format": "wav"},
+                ).json()
+                job_id = created["id"]
+                deadline = time.time() + 3
+                job = created
+                while time.time() < deadline and job["status"] not in {"completed", "failed"}:
+                    time.sleep(0.02)
+                    job = client.get(f"/api/generation-jobs/{job_id}").json()
+
+                response = client.patch(
+                    f"/api/generation-jobs/{job_id}",
+                    json={"favorite": True, "label": "  Emergency phrase  "},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()["favorite"])
+                self.assertEqual(response.json()["label"], "Emergency phrase")
+                self.assertIsNotNone(response.json()["favorited_at"])
+                self.assertEqual(client.get(f"/api/generation-jobs/{job_id}").json()["label"], "Emergency phrase")
+
+                cleared = client.patch(f"/api/generation-jobs/{job_id}", json={"favorite": False, "label": None})
+                self.assertEqual(cleared.status_code, 200)
+                self.assertFalse(cleared.json()["favorite"])
+                self.assertIsNone(cleared.json()["label"])
+                self.assertIsNone(cleared.json()["favorited_at"])
+
+                self.assertEqual(client.patch(f"/api/generation-jobs/{job_id}", json={}).status_code, 400)
+                self.assertEqual(client.patch(f"/api/generation-jobs/{job_id}", json={"favorite": "yes"}).status_code, 400)
+                self.assertEqual(client.patch(f"/api/generation-jobs/{job_id}", json={"label": 3}).status_code, 400)
+                self.assertEqual(client.patch(f"/api/generation-jobs/{job_id}", json={"other": True}).status_code, 400)
+                self.assertEqual(client.patch(f"/api/generation-jobs/{'f' * 32}", json={"favorite": True}).status_code, 404)
+
+                self.assertEqual(client.patch(f"/api/generation-jobs/{job_id}", json={"favorite": True}).status_code, 200)
+                self.assertEqual(client.delete(f"/api/generation-jobs/{job_id}").status_code, 200)
+                self.assertEqual(client.get(f"/api/generation-jobs/{job_id}").status_code, 404)
+
     def test_mobile_assets_and_model_ui_metadata_are_served(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

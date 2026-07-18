@@ -39,6 +39,15 @@
       <div class="page-count" id="generate-status"></div>
     </div>
     <div class="stack-scroll">
+      <!-- starred runs are the fastest everyday communication path -->
+      <div id="phrase-section" class="hidden">
+        <div class="sec-head">
+          <label class="sec-label">Quick phrases</label>
+          <span class="sec-hint">plays instantly</span>
+        </div>
+        <div class="phrase-carousel" id="phrase-carousel"></div>
+      </div>
+
       <button class="model-row" id="model-row">
         <span class="dot" id="model-dot"></span>
         <span class="model-row-txt">
@@ -225,15 +234,14 @@
         <span class="mp-name" id="mp-name"></span>
         <span class="mp-done">DONE</span>
       </div>
+      <div class="mp-meta" id="mp-meta"></div>
       <div class="mp-wave" id="mp-wave"></div>
       <div class="mp-time"><span id="mp-current">0:00</span><span id="mp-duration">0:00</span></div>
     </div>
-    <div class="mp-right">
-      <button class="dl-btn" id="mp-download">
-        <svg width="14" height="14" viewBox="0 0 12 12"><path d="M6 1 V8 M3 5.5 L6 8.5 L9 5.5 M2 10.5 H10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="mp-meta" id="mp-meta"></div>
-    </div>
+    <button class="mp-action mp-favorite" id="mp-favorite" aria-label="Save playing audio as a quick phrase" aria-pressed="false"></button>
+    <button class="mp-action dl-btn" id="mp-download" aria-label="Download playing audio">
+      <svg width="14" height="14" viewBox="0 0 12 12"><path d="M6 1 V8 M3 5.5 L6 8.5 L9 5.5 M2 10.5 H10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
 
   <!-- ============ tab bar ============ -->
@@ -274,6 +282,23 @@
         <button class="sheet-close" id="sheet-close">✕</button>
       </div>
       <div class="sheet-body" id="sheet-body"></div>
+    </div>
+  </div>
+
+  <!-- ============ irreversible-action confirmation ============ -->
+  <div class="confirm-backdrop hidden" id="confirm-backdrop" role="presentation">
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div class="confirm-title" id="confirm-title"></div>
+      <div class="confirm-list">
+        <div class="confirm-kicker">This removes</div>
+        <div id="confirm-items"></div>
+      </div>
+      <div class="confirm-note" id="confirm-note"></div>
+      <div class="confirm-permanent">This is permanent and cannot be undone.</div>
+      <div class="confirm-actions">
+        <button class="confirm-cancel" id="confirm-cancel">Keep it</button>
+        <button class="confirm-delete" id="confirm-delete">Delete permanently</button>
+      </div>
     </div>
   </div>
 

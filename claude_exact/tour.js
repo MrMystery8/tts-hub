@@ -43,6 +43,11 @@
         body: 'Whatever you type here is what gets spoken. The character counter on the right keeps an eye on model limits.',
       },
       {
+        // Only present once something is starred; unresolved steps are skipped.
+        anchor: 'phrases', placement: 'bottom', title: 'Phrases you use often',
+        body: 'Star a finished run under Jobs and it lands here. These play back instantly from the clip already on disk — no waiting for the model — so your everyday sentences are always one tap away.',
+      },
+      {
         anchor: 'reference', placement: 'bottom', title: 'Give it a voice',
         body: 'Voice-cloning engines need a reference: pick a saved voice, upload a clip, or record one right here. A verbatim transcript makes the clone noticeably better.',
       },

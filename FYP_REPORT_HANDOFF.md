@@ -172,3 +172,34 @@ Captured by driving the real app with Playwright at 2× DPI: three tour-spotligh
 - **Overwrote the wrong image, then misdiagnosed it.** Swapping Figure 4.3's PNG used "find the caption, take the next image" — but **captions sit BELOW figures in this document**, so that targeted Figure 4.4 and destroyed its onboarding diagram. The render then still showed the old Figure 4.3, which was misread as "the write silently failed"; in fact it had succeeded on the wrong part. Caught by md5-comparing every media entry against a backup, and restored from `backup_before_gate.docx`.
   - **Rule:** to target a figure's image, anchor on the **prose paragraph that precedes it** (e.g. "Figure 4.3 describes…"), never on its caption.
   - **Rule:** `part._blob = ...` in python-docx **does** persist. Prefer a zip-level rewrite of `word/media/imageNN.png`, and always md5-verify every media entry against a backup afterwards — `validate.py` passes a corrupted-but-well-formed image without complaint.
+
+---
+
+## UI feature and evidence refresh — 2026-07-19
+
+### Completed scope
+- Finished persistent job favourites and labels across the service, PATCH API, desktop and mobile clients. Legacy records default safely; labels normalise to 80 characters and can be cleared with `null`; favourite timestamps are created and removed with star state.
+- Completed Quick Phrases and Saved filtering. Replaying a saved phrase requests the existing job audio and does not submit a generation job.
+- The Run control now shows `Generating...` and remains unavailable while any job is active. Long 32-character job IDs and the added star column remain inside the desktop and mobile layouts.
+- Mobile Generate now places Quick Phrases immediately after the page heading, before model and reference selection. Both the desktop output dock and the mobile lower player expose a direct Save/star control for the currently loaded job.
+- Playing a completed mobile job stays on Jobs and opens the same lower player above the navigation; it no longer redirects to Generate. The repaired player layout keeps metadata, waveform, star and download controls fully visible at 390 x 844.
+- Saved jobs remain deletable. Desktop and mobile use itemised in-page dialogs that identify local audio and metadata, with an additional Quick Phrase warning for favourited jobs. Voice deletion remains API-backed and warns when saved phrases depend on the voice.
+- Removed the obsolete state-only desktop `deleteVoice` path while retaining the real API deletion flow. Mobile sheets refresh immediately after rename and star actions. The mobile service-worker shell cache is `tts-hub-mobile-v11`.
+
+### Automated and browser evidence
+- Backend coverage lives in `tests/test_generation_jobs.py` and `tests/test_generation_job_api.py`.
+- Desktop coverage lives in `tests/e2e/claude_exact_favorites.spec.ts`; mobile coverage is in `tests/e2e/mobile_app.spec.ts`.
+- Final verification passed: **13/13 backend unittests** and **11/11 scoped Playwright tests**. `node --check` passed for the mobile app, service worker and capture script; Python compilation passed for the job service, API and DOCX refresh script.
+- Stored-audio network replay is automated; audible sound remains the only manual acceptance check.
+- Current 2x-DPI captures are Figures 4.12--4.24 in `report_assets/ui_screenshots/`. The authoritative record is `report_assets/ui_screenshots/capture_manifest.json` (captured `2026-07-18T17:22:28.007Z`); it records timestamp, git identity, dirty state, viewports, record IDs, favourite/label state, player state and the real Run B detector result.
+- Reproduction: `node report_assets/ui_screenshots/capture_report_screenshots.cjs`; DOCX replacement: `.venv/bin/python3 report_assets/refresh_fyp_ui_figures.py`.
+
+### Private report outputs
+- Updated report: `Ayaan Minhas-TP077859-APD3F2511CS(AI)-FYP Final Report (DRAFT).docx` (ignored/private).
+- Latest pre-refresh backup: `report_assets/backups/Ayaan Minhas-TP077859-APD3F2511CS(AI)-FYP Final Report (DRAFT)-pre-ui-refresh-2026-07-19-012432.docx`.
+- Latest verified render: `tmp/docs/fyp-ui-player-refresh/Ayaan Minhas-TP077859-APD3F2511CS(AI)-FYP Final Report (DRAFT).pdf`, with page renders and contact sheets beside it.
+- All 13 approved UI figures were recaptured. Eleven embedded media files changed; Figures 4.14 and 4.15 were byte-identical to their deterministic recaptures. No media outside the approved 13 relationships changed. ZIP validation, python-docx loading, PDF rendering and a 191-page visual sweep passed; Section 4.5 was inspected closely on rendered pages 108--119.
+- TOC, List of Figures and List of Tables fields were deliberately not refreshed. Their text remains a later final-report task.
+
+### Remaining manual check
+- Play one Quick Phrase through speakers/headphones on desktop and mobile and confirm it is audible. Automation already verifies the audio GET and absence of a generation POST.

@@ -2,12 +2,45 @@ import tempfile
 import threading
 import time
 import unittest
+import json
 from pathlib import Path
 
 from hub.generation_jobs import GenerationJobService
 
 
 class TestGenerationJobService(unittest.TestCase):
+    def test_legacy_metadata_defaults_and_user_fields_round_trip(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "generations"
+            service = GenerationJobService(root=root, executor=lambda *_args: {}, cancel_active=lambda _model_id: None)
+            job_id = "a" * 32
+            job_dir = root / job_id
+            job_dir.mkdir()
+            (job_dir / "metadata.json").write_text(
+                json.dumps({"id": job_id, "status": "completed", "created_at": 1, "updated_at": 1}),
+                encoding="utf-8",
+            )
+
+            legacy = service.get(job_id)
+            self.assertFalse(legacy["favorite"])
+            self.assertIsNone(legacy["label"])
+            self.assertIsNone(legacy["favorited_at"])
+
+            starred = service.update_meta(job_id, favorite=True, label="  " + "x" * 100 + "  ")
+            self.assertTrue(starred["favorite"])
+            self.assertIsNotNone(starred["favorited_at"])
+            self.assertEqual(starred["label"], "x" * 80)
+
+            renamed = service.update_meta(job_id, clear_label=True)
+            self.assertIsNone(renamed["label"])
+            unstarred = service.update_meta(job_id, favorite=False)
+            self.assertFalse(unstarred["favorite"])
+            self.assertIsNone(unstarred["favorited_at"])
+            self.assertEqual(service.list()[0]["id"], job_id)
+
+            service.delete(job_id)
+            self.assertFalse(job_dir.exists())
+
     def test_completed_job_persists_output_and_metadata(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "generations"

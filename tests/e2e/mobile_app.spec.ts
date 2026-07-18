@@ -103,10 +103,11 @@ test.describe('mobile app', () => {
     await expect(page.locator('.job-card').first()).toContainText('Desktop snapshot text');
     await page.locator('.job-card').first().click();
     await expect(page.locator('#sheet-body')).toContainText('Test voice');
-    let confirmText = '';
-    page.once('dialog', async dialog => { confirmText = dialog.message(); await dialog.dismiss(); });
     await page.getByRole('button', { name: 'Delete' }).click();
-    expect(confirmText).toContain('cannot be undone');
+    await expect(page.locator('#confirm-backdrop')).toBeVisible();
+    await expect(page.locator('#confirm-backdrop')).toContainText('generated audio file');
+    await expect(page.locator('#confirm-backdrop')).toContainText('cannot be undone');
+    await page.getByRole('button', { name: 'Keep it' }).click();
     await page.getByRole('button', { name: 'Restore settings' }).click();
     await expect(page.locator('#script')).toHaveValue('Desktop snapshot text');
     await page.locator('.tab[data-tab="jobs"]').click();
@@ -166,6 +167,116 @@ test.describe('mobile app', () => {
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'light');
     await page.reload();
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'light');
+  });
+
+  test('saves, renames, filters, and instantly replays quick phrases while gating active runs', async ({ page }) => {
+    const id = 'b'.repeat(32);
+    const now = Date.now() / 1000;
+    let currentJob: any = {
+      id, status: 'completed', created_at: now, model_id: 'qwen3-tts-mlx', voice_id: 'a'.repeat(32),
+      text: 'Please give me a moment.', output_format: 'wav', favorite: false, label: null,
+      output: { format: 'wav', filename: 'phrase.wav', duration_s: 1.2 }, request: {},
+    };
+    let generationPosts = 0;
+    let audioGets = 0;
+    const patches: any[] = [];
+    page.on('request', request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/generation-jobs') generationPosts += 1;
+    });
+    await mockMobileApi(page, [currentJob]);
+    await page.route(`**/api/generation-jobs/${id}`, async route => {
+      if (route.request().method() !== 'PATCH') return route.continue();
+      const patch = route.request().postDataJSON();
+      patches.push(patch);
+      currentJob = {
+        ...currentJob,
+        ...patch,
+        label: Object.prototype.hasOwnProperty.call(patch, 'label') ? patch.label : currentJob.label,
+        favorited_at: patch.favorite === true ? now + patches.length : patch.favorite === false ? null : currentJob.favorited_at,
+      };
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(currentJob) });
+    });
+    await page.route(`**/api/generation-jobs/${id}/audio`, route => {
+      audioGets += 1;
+      return route.fulfill({ contentType: 'audio/wav', body: silentWav() });
+    });
+    await page.route('**/api/generation-jobs', route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ jobs: [currentJob] }) });
+    });
+    await page.goto('/mobile/');
+    await page.locator('.tab[data-tab="jobs"]').click();
+    await page.locator('.job-card').first().click();
+    page.once('dialog', async dialog => {
+      expect(dialog.type()).toBe('prompt');
+      await dialog.accept('Need a moment');
+    });
+    await page.getByRole('button', { name: 'Save phrase' }).click();
+    await expect(page.locator('#sheet-body button').filter({ hasText: 'Saved' })).toBeVisible();
+    await expect(page.locator('#sheet-title')).toContainText('Need a moment');
+
+    page.once('dialog', dialog => dialog.accept('Please wait'));
+    await page.getByRole('button', { name: 'Rename' }).click();
+    await expect(page.locator('#sheet-title')).toContainText('Please wait');
+    await page.locator('#sheet-close').click();
+    await page.locator('.filter-btn').filter({ hasText: 'Saved' }).click();
+    await expect(page.locator('.job-card')).toHaveCount(1);
+    await expect(page.locator('.job-card').first()).toContainText('Please wait');
+
+    await page.locator('.job-card').first().click();
+    await expect(page.locator('#sheet-backdrop')).toBeVisible();
+    await page.locator('#sheet-body .dj-play').click();
+    await expect(page.locator('#surface-jobs')).toBeVisible();
+    await expect(page.locator('#miniplayer')).toBeVisible();
+    await expect(page.locator('#sheet-backdrop')).toBeHidden();
+    await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#mp-favorite').click();
+    await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'false');
+    page.once('dialog', dialog => dialog.accept('Please wait'));
+    await page.locator('#mp-favorite').click();
+    await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'true');
+    const playerLayout = await page.locator('#miniplayer').evaluate(player => {
+      const playerBox = player.getBoundingClientRect();
+      const waveBox = player.querySelector('#mp-wave')!.getBoundingClientRect();
+      const downloadBox = player.querySelector('#mp-download')!.getBoundingClientRect();
+      return {
+        playerLeft: playerBox.left,
+        playerRight: playerBox.right,
+        waveWidth: waveBox.width,
+        downloadRight: downloadBox.right,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(playerLayout.playerLeft).toBeGreaterThanOrEqual(0);
+    expect(playerLayout.playerRight).toBeLessThanOrEqual(playerLayout.viewportWidth);
+    expect(playerLayout.downloadRight).toBeLessThanOrEqual(playerLayout.viewportWidth - 12);
+    expect(playerLayout.waveWidth).toBeGreaterThan(150);
+
+    await page.locator('.tab[data-tab="generate"]').click();
+    await expect(page.locator('#phrase-section')).toBeVisible();
+    await page.locator('.phrase-chip').filter({ hasText: 'Please wait' }).click();
+    await expect.poll(() => audioGets).toBeGreaterThan(0);
+    expect(generationPosts).toBe(0);
+    expect(patches).toEqual([
+      { favorite: true, label: 'Need a moment' },
+      { label: 'Please wait' },
+      { favorite: false },
+      { favorite: true, label: 'Please wait' },
+    ]);
+
+    const queued = { ...currentJob, id: 'c'.repeat(32), status: 'queued', output: null, favorite: false };
+    await page.unroute('**/api/generation-jobs');
+    await page.route('**/api/generation-jobs', route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ jobs: [queued, currentJob] }) });
+    });
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await expect(page.locator('#run-label')).toHaveText('Generating…');
+    await expect(page.locator('#run-btn')).toBeDisabled();
+
+    const sw = await page.request.get('/mobile/sw.js');
+    expect(await sw.text()).toContain('tts-hub-mobile-v11');
+    expect(await sw.text()).toContain('/mobile/icon-maskable-512.png');
   });
 
   test('blocks transcript-dependent models until a transcript is available', async ({ page }) => {

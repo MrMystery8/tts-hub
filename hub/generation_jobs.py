@@ -62,7 +62,12 @@ class GenerationJobService:
         path = self._meta_path(job_id)
         if not path.exists():
             raise FileNotFoundError("generation job not found")
-        return json.loads(path.read_text(encoding="utf-8"))
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        # Jobs created before favourites existed have no such keys.
+        metadata.setdefault("favorite", False)
+        metadata.setdefault("label", None)
+        metadata.setdefault("favorited_at", None)
+        return metadata
 
     def _save(self, job_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         metadata["updated_at"] = time.time()
@@ -112,6 +117,9 @@ class GenerationJobService:
             "watermark_enabled": bool(request.get("watermark_enabled")),
             "watermark_run": request.get("watermark_run"),
             "output": None,
+            "favorite": False,
+            "label": None,
+            "favorited_at": None,
         }
         self._save(job_id, metadata)
         request = dict(request)
@@ -125,13 +133,43 @@ class GenerationJobService:
     def get(self, job_id: str) -> dict[str, Any]:
         return self._load(job_id)
 
+    def update_meta(
+        self,
+        job_id: str,
+        *,
+        favorite: bool | None = None,
+        label: str | None = None,
+        clear_label: bool = False,
+    ) -> dict[str, Any]:
+        """Update user-owned presentation fields (star + rename).
+
+        These are independent of the job lifecycle, so this is safe to call at
+        any time, including while the job is still running.
+        """
+        with self._lock:
+            metadata = self._load(job_id)
+            if favorite is not None:
+                metadata["favorite"] = bool(favorite)
+                metadata["favorited_at"] = time.time() if favorite else None
+            if clear_label:
+                metadata["label"] = None
+            elif label is not None:
+                trimmed = label.strip()[:80]
+                metadata["label"] = trimmed or None
+            return self._save(job_id, metadata)
+
     def list(self) -> list[dict[str, Any]]:
         jobs: list[dict[str, Any]] = []
         for path in self.root.glob("*/metadata.json"):
             try:
-                jobs.append(json.loads(path.read_text(encoding="utf-8")))
+                metadata = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            # Jobs created before favourites existed have no such keys.
+            metadata.setdefault("favorite", False)
+            metadata.setdefault("label", None)
+            metadata.setdefault("favorited_at", None)
+            jobs.append(metadata)
         jobs.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
         return jobs
 
