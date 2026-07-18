@@ -7,7 +7,7 @@
 
 ## Deliverable file (edit THIS one)
 `/Users/ayaanminhas/Desktop/Personal_Work/tts-hub/Ayaan Minhas-TP077859-APD3F2511CS(AI)-FYP Final Report (DRAFT).docx`
-- **~181 pages** as of the latest edit. Built by copying the IR docx and editing it (inherits styles: Times New Roman 12; Heading 1–4; "Table Grid"; "Caption"; "table of figures" for the lists).
+- **~191 pages** as of the latest edit. Built by copying the IR docx and editing it (inherits styles: Times New Roman 12; Heading 1–4; "Table Grid"; "Caption"; "table of figures" for the lists).
 - Diagrams live in the working outputs folder under `dg/` (Graphviz sources + PNGs).
 
 ## What the system actually is (for factual accuracy)
@@ -36,7 +36,7 @@ Siblings `sweep3_A_static_8_3` and `sweep3_C_adaptive` are the controlled ablati
 - **Ch6:** 6.1 Critical Evaluation (+ Table 6.1, 6.1.1 Strengths, 6.1.2 Contribution) · 6.2 Limitations · 6.3 Recommendations.
 - Appendices A, B, C, D1, D2, E, F, G, H, I, J (ordering fixed).
 
-**Current table numbering (post-renumber — use these):** Ch4 → 4.1–4.3 UC specs (original), 4.4–4.6 UC specs (new), 4.7 backends, 4.8 backend controls, 4.9 preprocessing, 4.10 hyperparameters, 4.11 tuning phases, 4.12 codebook perceptual cost, 4.13 ablation. Figures → 4.1–4.11 diagrams, 4.12–4.20 screenshots (placeholders), **4.21 codebook spectrograms**. Ch5 → 5.1a–f unit, 5.2 integration, **5.3 system**, 5.4 UAT profile, 5.5a–f UAT instrument, 5.6 cross-backend, 5.7 detection, 5.8 tiered, 5.9 perceptual, 5.10 UAT respondents, 5.11 UAT ratings, **5.12 capability positioning, 5.13 tier mapping**. Ch6 → 6.1 objectives.
+**Current table numbering (post-renumber — use these):** Ch4 → 4.1–4.3 UC specs (original), 4.4–4.6 UC specs (new), 4.7 backends, 4.8 backend controls, 4.9 preprocessing, 4.10 hyperparameters, 4.11 tuning phases, 4.12 codebook perceptual cost, 4.13 ablation. Figures → 4.1–4.11 diagrams, 4.12–4.13 desktop screens, **4.14 reference-intake panel**, 4.15–4.17 desktop screens, **4.18–4.20 guided-tour steps**, 4.21–4.24 mobile, **4.25 codebook spectrograms**. Sequence 4.12–4.25 contiguous; all in-text refs resolve. Ch5 → 5.1a–f unit, 5.2 integration, **5.3 system**, 5.4 UAT profile, 5.5a–f UAT instrument, 5.6 cross-backend, 5.7 detection, 5.8 tiered, 5.9 perceptual, 5.10 UAT respondents, 5.11 UAT ratings, **5.12 capability positioning, 5.13 tier mapping**. Ch6 → 6.1 objectives.
 
 ## Diagrams (Graphviz; SVG for sequence) — Figs 4.1–4.11
 arch · usecase · 5 activity · sequence · classes · dfd0 · dfd1.
@@ -46,7 +46,7 @@ arch · usecase · 5 activity · sequence · classes · dfd0 · dfd1.
 # TODO — what's left
 
 ## A. Blocked on your data/assets (cannot be written for you)
-- [ ] **UI screenshots** — 9 placeholders, Figs 4.12–4.20. Also blocks the 4.5 per-screen depth expansion.
+- [x] ~~**UI screenshots**~~ — **DONE by you** (9 screens, ~120–140 words of prose each), plus 4 figures added from live captures: reference-intake modes (4.14) and three guided-tour steps (4.18–4.20). Section 4.5 now has no unshown claimed behaviour.
 - [ ] **Cross-backend benchmark numbers** — **Table 5.6**, all cells empty. This is the CSAI model-comparison table the briefing explicitly asks for.
 - [ ] **UAT sessions + results** — **Tables 5.10 / 5.11**, Appendix H. 63 empty `[ ]` cells across the instrument.
 - [ ] **Semester-2 Gantt** (Appendix D2) · **poster** (Appendix I) · **Turnitin report** (Appendix F).
@@ -67,7 +67,7 @@ Sample = "An Online Marketplace for Surplus Food" (189 pp). All four items resol
 - **Ch6**: sample is 2 pages; ours is ~4 with the objective-evidence table.
 
 ## C. End-stage mechanics
-- [ ] **Refresh TOC / List of Figures / List of Tables fields in Word.** Verified by diffing body captions against front-matter entries — **exactly 6 items are missing** and nothing is orphaned: `Figure 4.21`, `Table 4.12`, `Table 5.3`, `Table 5.12`, `Table 5.13`, `Table 6.1`. All page numbers are also stale (report is now 181 pp).
+- [ ] **Refresh TOC / List of Figures / List of Tables fields in Word.** Now substantially stale: the figure renumbering (4.14–4.25) and the new tables mean most entries and every page number are out of date. Report is now ~191 pp. Do this LAST.
 - [ ] **Commit the untracked work.** `docs/WATERMARK_FINAL_FINDINGS.md`, `docs/DETERMINISTIC_CODEBOOK_FINDINGS.md`, `docs/DETERMINISTIC_CODEBOOK_PLAN.md`, `report_assets/`, and the .docx itself are all untracked. The two findings docs were recovered from git history after being deleted — don't lose them again.
 - [ ] Optional: trim UAT (~26 rating items) if too long for fatigue-prone testers.
 - [ ] Optional: produce a **redlined copy** (tracked changes) of this session's edits for the supervisor — see tooling note below.
