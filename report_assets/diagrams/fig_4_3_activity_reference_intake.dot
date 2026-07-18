@@ -1,0 +1,36 @@
+// Figure 4.3 - Activity: Reference Intake and Voice Save
+//
+// Regenerated to match the implemented behaviour. The earlier version drew a
+// "Quality gate" node, a "Passes quality?" decision and a "Warn user & re-record"
+// loop. None of that exists: hub/voice_library.py::_wav_profile() computes
+// duration / rms / peak / clipped stats and create_voice() stores them in
+// meta.json, but nothing reads them back and no clip is ever rejected.
+//
+// Style matches the sibling activity diagrams (Figures 4.2-4.6).
+// Render:  dot -Tpng -Gdpi=150 fig_4_3_activity_reference_intake.dot -o fig_4_3.png
+
+digraph ActivityReferenceIntake {
+  rankdir=TB;
+  bgcolor="white";
+  labelloc="t";
+  labeljust="l";
+  label=<<FONT POINT-SIZE="20">Figure 4.3  Activity — Reference Intake and Voice Save</FONT><BR/><BR/>>;
+  fontname="Helvetica";
+  fontcolor="#111111";
+
+  node [fontname="Helvetica", fontsize=14, shape=box, style="rounded,filled", penwidth=2];
+  edge [color="#78848f", penwidth=1.6, arrowsize=0.8];
+
+  start [shape=circle, label="", width=0.28, style=filled, fillcolor="#1b2a3a", color="#1b2a3a"];
+  done  [shape=doublecircle, label="", width=0.22, style=filled, fillcolor="#1b2a3a", color="#1b2a3a"];
+
+  open    [label="Open onboarding / voice library",              fillcolor="#e8f1fd", color="#1a73e8", fontcolor="#1a5fb4"];
+  method  [label="Choose input method\n(record mic  ·  upload file)", fillcolor="#e8f1fd", color="#1a73e8", fontcolor="#1a5fb4"];
+  capture [label="Capture reference audio (~10 s)",              fillcolor="#e8f1fd", color="#1a73e8", fontcolor="#1a5fb4"];
+  convert [label="Convert to canonical WAV (ffmpeg)",            fillcolor="#eceff4", color="#78848f", fontcolor="#37474f"];
+  profile [label="Profile clip\nduration · loudness (RMS) · peak · clipping", fillcolor="#fdeccd", color="#d08b1e", fontcolor="#b26a00"];
+  persist [label="Persist voice + profile metadata",             fillcolor="#e0f5f5", color="#00838f", fontcolor="#00838f"];
+  ready   [label="Voice available for generation",               fillcolor="#e8f1fd", color="#1a73e8", fontcolor="#1a5fb4"];
+
+  start -> open -> method -> capture -> convert -> profile -> persist -> ready -> done;
+}
