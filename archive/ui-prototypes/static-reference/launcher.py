@@ -10,15 +10,15 @@ from fastapi.staticfiles import StaticFiles
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="TTS Hub original Claude Design static reference",
+        description="Archived TTS Hub static design reference",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7897)
     args = parser.parse_args()
 
-    ui_dir = Path(__file__).resolve().parent / "claude_original"
-    app = FastAPI(title="TTS Hub Claude Original Static Reference")
+    ui_dir = Path(__file__).resolve().parent / "client"
+    app = FastAPI(title="TTS Hub Static Design Reference")
     app.mount("/static", StaticFiles(directory=str(ui_dir)), name="static")
 
     @app.get("/", include_in_schema=False)

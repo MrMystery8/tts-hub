@@ -1,4 +1,4 @@
-/* TTS Hub mobile — ported from the Claude Design "TTS Hub Mobile" spec (stack layout). */
+/* TTS Hub mobile client (stack layout). */
 .app {
   --bg:#0c0d10; --bg-1:#121419; --bg-2:#171a20; --bg-3:#1e222a; --bg-hover:#232832;
   --line:#262b34; --line-2:#333a45; --line-3:#414a57;
@@ -55,9 +55,10 @@ button { cursor: pointer; border: none; background: none; padding: 0; }
   padding-left: 16px; padding-right: 16px;
   border-bottom: 1px solid var(--line); background: var(--bg-1);
 }
-.logo { width: 24px; height: 24px; border-radius: 6px; background: var(--accent); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+/* The mark is the brand — it carries its own colour, so no filled chip behind it.
+   Waveform end-caps use var(--tx) so they invert with the theme instead of being hardcoded white. */
+.logo { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .wordmark { font-weight: 700; letter-spacing: .04em; font-size: 13px; }
-.ver { font-family: var(--mono); font-size: 9px; color: var(--tx-4); letter-spacing: .05em; }
 .clock { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--tx-3); }
 .icon-btn { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-3); color: var(--tx-2); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 

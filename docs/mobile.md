@@ -39,7 +39,7 @@ IndexTTS2 emotion-reference mode also requires a separate emotion clip.
 
 ## Running
 
-Nothing extra to run — `run.sh` (or `claude_exact.py`) serves it automatically:
+Nothing extra to run - `run.sh` (or `app.py`) serves it automatically:
 
 - Desktop UI: `http://localhost:7896/`
 - Mobile UI:  `http://localhost:7896/mobile/`
@@ -73,7 +73,7 @@ It opens fullscreen with its own icon, like a native app.
 
 - The laptop must be awake for jobs to process. To keep the server running
   with the lid closed on AC power: `sudo pmset -c disablesleep 1`
-  (or use `caffeinate -s .venv/bin/python3 claude_exact.py --port 7896`).
+  (or use `caffeinate -s .venv/bin/python3 app.py --port 7896`).
 - Jobs are stored under `outputs/generations/` and survive server restarts;
   anything interrupted mid-run is marked failed on startup.
 - Everything stays inside your private tailnet — no ports exposed to the

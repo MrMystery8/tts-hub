@@ -39,9 +39,9 @@ Top-level structure (important directories only):
 ```
 tts-hub/
 ├── webui.py                     # TTS Hub FastAPI entrypoint (serves UI + API)
-├── claude_exact.py              # Default TTS Hub entrypoint (serves UI + API)
-├── run.sh                       # Creates `.venv` + runs claude_exact.py
-├── claude_exact/                # Static frontend (HTML/JS/CSS)
+├── app.py                       # Default TTS Hub entrypoint (serves UI + API)
+├── run.sh                       # Creates `.venv` + runs app.py
+├── desktop/                     # Supported static frontend (HTML/JS/CSS)
 ├── hub/                         # Hub backend (model registry, subprocess workers, ffmpeg helpers)
 ├── workers/                     # Per-model worker adapters (one subprocess per model)
 ├── watermark/                   # Watermark training/eval package (encoder/decoder/training/dashboard)
@@ -53,7 +53,7 @@ tts-hub/
 
 ### 1.1 Primary entrypoints
 
-- **Run the Hub (UI + API):** `./run.sh` (wraps `.venv/bin/python3 claude_exact.py --port 7896`)
+- **Run the Hub (UI + API):** `./run.sh` (wraps `.venv/bin/python3 app.py --port 7896`)
 - **Check workers and ffmpeg:** `python3 tools/doctor.py`
 - **Watermark quick smoke train:** `python -m watermark.scripts.quick_voice_smoke_train ...`
 - **Watermark full train:** `python -m watermark.scripts.train_full ...`
@@ -74,7 +74,7 @@ There are multiple “dependency domains”:
 The hub is a thin orchestrator:
 
 - A **FastAPI server** (`webui.py`) serves:
-  - static UI assets from `claude_exact/`
+  - static UI assets from `desktop/`
   - a small JSON/HTTP API under `/api/*`
 - A **HubManager** (`hub/hub_manager.py`) maintains a registry of models and lazily spawns one worker subprocess per model.
 - **Workers** (in `workers/`) are “adapters”: they import and run code from sibling model repos and implement a small JSON-over-stdio protocol.
@@ -83,7 +83,7 @@ The hub is a thin orchestrator:
 
 The hub mounts the frontend and exposes endpoints:
 
-- `GET /` → `claude_exact/index.html`
+- `GET /` → `desktop/index.html`
 - `GET /api/models` → list available models (from `hub/model_registry.py`)
 - `GET /api/info` → ffmpeg availability + server time
 - `GET /api/status` → per-model process status + last generation stats
@@ -118,13 +118,13 @@ return FileResponse(str(result.output_path), media_type="audio/wav")
 
 Worker boot is lazy (first request starts the subprocess).
 
-### 2.3 `claude_exact/`: frontend behavior
+### 2.3 `desktop/`: frontend behavior
 
 The UI is plain HTML/JS/CSS:
 
-- `claude_exact/index.html`: layout and model-specific panels.
-- `claude_exact/support.js`: client logic.
-- `claude_exact/thumbnail.webp`: thumbnail asset used by the launcher.
+- `desktop/index.html`: layout and model-specific panels.
+- `desktop/support.js`: client logic.
+- `desktop/thumbnail.webp`: thumbnail asset used by the launcher.
 
 Frontend highlights:
 

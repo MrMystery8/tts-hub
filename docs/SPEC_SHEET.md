@@ -38,7 +38,7 @@ Primary target: **Apple Silicon** with **PyTorch MPS / MLX / CoreML (ANE)**.
 ### 4.1 Folder Layout
 
 - `tts-hub/webui.py`: FastAPI server + UI routes.
-- `tts-hub/claude_exact/`: single front-end (HTML/JS/CSS) with model picker and per-model settings panels.
+- `tts-hub/desktop/`: supported desktop front end (HTML/JS/CSS) with model picker and per-model settings panels.
 - `tts-hub/hub/`: hub core (ffmpeg helpers, worker launcher, model registry, path resolver).
 - `tts-hub/workers/worker_*.py`: one worker per model, each running under that repo’s own `.venv` python.
 - `tts-hub/outputs/`: generated audio outputs per model.

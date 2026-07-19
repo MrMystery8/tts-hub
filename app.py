@@ -10,7 +10,7 @@ from webui import create_app
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Default TTS Hub launcher (claude_exact UI)",
+        description="TTS Hub desktop application launcher",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")
@@ -18,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     hub_root = Path(__file__).resolve().parent
-    ui_dir = hub_root / "claude_exact"
+    ui_dir = hub_root / "desktop"
     app = create_app(hub_root=hub_root, ui_dir=ui_dir, static_dir=ui_dir)
 
     @app.get("/support.js", include_in_schema=False)

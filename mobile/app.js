@@ -1,4 +1,4 @@
-/* TTS Hub mobile — Claude Design "TTS Hub Mobile" (stack layout) wired to the real FastAPI backend. */
+/* TTS Hub mobile client wired to the FastAPI backend. */
 (() => {
   "use strict";
 

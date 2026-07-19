@@ -16,12 +16,7 @@
   },
   "scripts": {
     "start": "./run.sh",
-    "ui:dev": "vite --config frontend/vite.config.ts",
-    "ui:build": "vite build --config frontend/vite.config.ts",
-    "ui:preview": "vite preview --config frontend/vite.config.ts",
-    "claude:dev": "vite --config claude_ui/vite.config.ts",
-    "claude:build": "vite build --config claude_ui/vite.config.ts",
-    "claude:preview": "vite preview --config claude_ui/vite.config.ts",
+    "test:e2e": "playwright test",
     "e2e:install": "playwright install chromium",
     "e2e:qwen": "playwright test tests/e2e/qwen_voice_clone.spec.ts"
   }

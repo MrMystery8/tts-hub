@@ -1,7 +1,7 @@
 # TTS Hub — Onboarding & User-Guidance Concepts
 
 Research + 4 full walkthrough concepts, each with animation plans, implementation plans, and trade-offs.
-Grounded in the actual `claude_exact/` stack: single-page `index.html` + `dc-runtime` (sc-if/sc-for → React),
+Grounded in the supported `desktop/` stack: single-page `index.html` + `dc-runtime` (sc-if/sc-for → React),
 all inline styles, CSS-var theming (dark/light), IBM Plex, existing keyframes (`fade`, `pulse`, `sweep`, `spin`),
 views = Generate (model rail, editor, player), Voices, Jobs, Models, Watermark.
 
@@ -179,7 +179,7 @@ abort/cleanup edge cases are a genuine bug farm. Best treated as a v2 luxury, no
 ## 5. Shared tour-engine foundation (build once, all concepts ride on it)
 
 ```
-claude_exact/
+desktop/
   tour/
     engine.js      # anchor registry, rect tracking (ResizeObserver+scroll), overlay layer, WAAPI helpers
     spotlight.js   # Concept A renderer (SVG mask)

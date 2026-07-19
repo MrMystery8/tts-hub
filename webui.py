@@ -64,7 +64,7 @@ def _json_safe(value):
 
 
 def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path | None = None) -> FastAPI:
-    ui_dir = ui_dir or (hub_root / "claude_exact")
+    ui_dir = ui_dir or (hub_root / "desktop")
     if static_dir is None:
         static_dir = ui_dir / "static" if (ui_dir / "static").exists() else ui_dir
 
@@ -727,7 +727,7 @@ def create_app(*, hub_root: Path, ui_dir: Path | None = None, static_dir: Path |
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Unified TTS Hub (MLX/MPS/ANE) Web UI",
+        description="TTS Hub local speech synthesis server",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")

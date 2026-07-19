@@ -147,7 +147,7 @@
   - Add clear output naming, timestamps, model labels, watermark-used state, and cleanup controls.
   - Done when outputs can be reviewed and removed intentionally.
 - Task 3.6: Keep the React UI as the final surface.
-  - Treat the old React `frontend/` path as legacy unless there is a reason to maintain both.
+  - Treat the archived React prototype as historical unless there is a reason to restore it.
   - Done when there is one clearly supported frontend for final demos and testing.
 
 ## Phase 4: Runtime, Config, and Stability Hardening
@@ -274,6 +274,6 @@
 ## Assumptions and Defaults
 - Default final comparison set: `Qwen3-TTS MLX`, `IndexTTS2`, `Chatterbox Multilingual`.
 - Default final watermark attribution set: the same three backends.
-- Default final UI: `claude_exact`, not the legacy React `frontend/` path.
+- Default final UI: `desktop/`; archived React variants are not part of the delivered runtime.
 - Default benchmark datasets: `mini_benchmark_data` for fast iteration, `medium_benchmark_data` for main public evaluation.
 - Existing exploratory runs remain useful as references, but do not count as the final artifact unless explicitly pinned and documented.

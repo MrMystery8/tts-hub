@@ -36,6 +36,8 @@ wheels/
 # IDEs
 .idea/
 .vscode/
+.claude/
+.codex/
 
 # Playwright
 playwright-report/

@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}==> TTS Hub Launcher (claude_exact) <==${NC}"
+echo -e "${GREEN}==> TTS Hub Launcher <==${NC}"
 
 # 1. Check/Create Virtual Environment
 if [ ! -d ".venv" ]; then
@@ -25,5 +25,5 @@ echo -e "${GREEN}Starting TTS Hub on http://localhost:7896 ...${NC}"
 echo "Press Ctrl+C to stop."
 echo ""
 
-# Run the default claude_exact launcher using the venv python
-.venv/bin/python3 claude_exact.py --port 7896
+# Run the supported desktop application using the virtual environment.
+.venv/bin/python3 app.py --port 7896

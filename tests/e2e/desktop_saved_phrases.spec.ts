@@ -19,7 +19,7 @@ function silentWav(): Buffer {
   return buffer;
 }
 
-test.describe('claude_exact saved phrases', () => {
+test.describe('desktop saved phrases', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
   test('supports star, rename, filter, instant replay, run gating, tour, dialogs, and long ids', async ({ page }) => {

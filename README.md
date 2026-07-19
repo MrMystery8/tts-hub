@@ -1,47 +1,33 @@
 # TTS Hub
 
-TTS Hub is a local Apple Silicon-focused audio generation hub that runs multiple TTS and voice-cloning backends behind one FastAPI service and one web UI.
+TTS Hub is a local-first speech generation and voice preservation system for Apple Silicon. It presents multiple text-to-speech and voice-cloning backends through one FastAPI service, a desktop web client, and a mobile companion, with integrated audio watermarking for bounded provenance.
 
-## Current Runtime Layout
+## Supported Runtime
 
-- Active frontend source: `claude_exact/`
-- Active frontend launcher: `claude_exact.py`
-- Active backend/API app: `webui.py`
-- Default launcher script: `run.sh`
-- Legacy React UI source and launcher: `frontend/` and `new_webui.py`
-
-What is actually used today:
-- `run.sh` starts `.venv/bin/python3 claude_exact.py --port 7896`
-- `claude_exact.py` serves the static UI from `claude_exact/`
-- `claude_exact.py` then calls `webui.create_app(...)`
-- `webui.py` exposes the API routes and serves the UI assets
-
-So yes: the active UI is the static `claude_exact/` frontend, served through `claude_exact.py`. The React path in `frontend/` is retained as a legacy/alternate UI and is not the default path anymore.
-
-## Project Structure
+The supported application flow is:
 
 ```text
-tts-hub/
-├── claude_exact/      # Active static UI source
-├── claude_exact.py    # Default TTS Hub launcher
-├── frontend/          # Legacy React UI source
-├── hub/               # Core services and model/runtime management
-├── workers/           # Model worker entrypoints
-├── watermark/         # Watermarking and provenance tooling
-├── docs/              # Project documentation
-├── new_webui.py       # Legacy React UI launcher
-├── webui.py           # FastAPI app and API routes
-└── run.sh             # Default local launcher
+run.sh -> app.py -> webui.py -> desktop/
+                              -> mobile/
 ```
+
+- `app.py` starts the supported desktop application.
+- `webui.py` provides the FastAPI service and API routes.
+- `desktop/` contains the primary static web client.
+- `mobile/` contains the companion progressive web application.
+- `hub/` contains model orchestration, job management, voice storage, and audio utilities.
+- `workers/` contains isolated model worker entrypoints.
+- `watermark/` contains provenance training, embedding, detection, and evaluation code.
+- `archive/` contains unsupported historical prototypes and development records.
 
 ## Requirements
 
-- macOS on Apple Silicon is the intended environment
-- `ffmpeg` on `PATH`
-- `python3`
-- `npm`
+- macOS on Apple Silicon
+- Python 3.9 or later
+- `ffmpeg` available on `PATH`
+- Node.js and npm for Playwright tests
 
-Install `ffmpeg` with Homebrew if needed:
+Install `ffmpeg` with Homebrew:
 
 ```bash
 brew install ffmpeg
@@ -50,7 +36,7 @@ brew install ffmpeg
 ## Setup
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/MrMystery8/tts-hub.git
 cd tts-hub
 python3 -m venv .venv
 source .venv/bin/activate
@@ -58,86 +44,61 @@ pip install -r requirements.txt
 npm install
 ```
 
-## Run The System
+## Run the System
 
-Preferred:
+Preferred command:
 
 ```bash
 ./run.sh
 ```
 
-That starts the app on:
-
-```text
-http://localhost:7896
-```
+The application is then available at `http://localhost:7896`.
 
 Manual equivalent:
 
 ```bash
-.venv/bin/python3 claude_exact.py --port 7896
+.venv/bin/python3 app.py --port 7896
 ```
 
-Notes:
-- `claude_exact.py` serves the `claude_exact/` UI bundle directly.
-- The FastAPI app is mounted from `webui.py`.
-- The UI talks to the backend on the same origin in production.
+The desktop and mobile clients use the same local API. The mobile client is available at `http://localhost:7896/mobile/` and delegates synthesis to the host device.
 
-## Legacy React Frontend Development
+## Tests and Checks
 
-Run the hub backend:
+Run the principal Python tests:
 
 ```bash
-.venv/bin/python3 claude_exact.py --port 7896
+python3 -m pytest \
+  tests/test_generation_jobs.py \
+  tests/test_generation_job_api.py \
+  tests/test_voice_library.py \
+  tests/test_checkpointing.py -q
 ```
 
-In another terminal, run the React dev server:
+Install Chromium and run the supported end-to-end suites:
 
 ```bash
-npm run ui:dev
+npm run e2e:install
+npx playwright test \
+  tests/e2e/desktop_saved_phrases.spec.ts \
+  tests/e2e/mobile_app.spec.ts \
+  tests/e2e/ui_render_smoke.spec.ts
 ```
 
-Vite runs on:
+## Public Interfaces
 
-```text
-http://localhost:5173
-```
-
-The Vite config proxies `/api` to `http://127.0.0.1:7896`.
-
-## Tests And Checks
-
-Python tests:
-
-```bash
-python3 -m pytest tests/test_generation_jobs.py tests/test_generation_job_api.py tests/test_voice_library.py -q
-```
-
-Frontend build:
-
-```bash
-npm run ui:build
-```
-
-Playwright smoke test:
-
-```bash
-npx playwright install chromium
-npx playwright test tests/e2e/ui_render_smoke.spec.ts
-```
-
-## Legacy React UI Behavior
-
-The legacy React UI uses async generation jobs in addition to the legacy direct generate route:
-
-- New async flow: `/api/generation-jobs`
-- Backward-compatible direct route: `/api/generate`
-
-The async flow is what the current React UI uses for queued, persistent, cancellable runs.
+- `GET /api/models` lists registered backends and UI defaults.
+- `POST /api/generation-jobs` submits persistent asynchronous generation work.
+- `GET /api/generation-jobs` returns generation history and job state.
+- `GET`, `POST`, `PATCH`, and `DELETE /api/voices` manage the local voice library.
+- `/api/watermark/*` provides watermark run discovery, embedding support, detection, and attribution.
+- `POST /api/generate` remains available for backward-compatible synchronous generation.
 
 ## Documentation
 
-- [docs/SPEC_SHEET.md](docs/SPEC_SHEET.md)
-- [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md)
-- [docs/ROADMAP_AND_IMPROVEMENTS.md](docs/ROADMAP_AND_IMPROVEMENTS.md)
-- [docs/FYP_COMPLETION_TASK_PLAN.md](docs/FYP_COMPLETION_TASK_PLAN.md)
+- [Specification](docs/SPEC_SHEET.md)
+- [Implementation summary](docs/IMPLEMENTATION_SUMMARY.md)
+- [Technical report](docs/TECHNICAL_REPORT_VNEXT_MULTICLASS.md)
+- [Roadmap](docs/ROADMAP_AND_IMPROVEMENTS.md)
+- [Mobile companion](docs/mobile.md)
+
+Historical UI variants are retained under [archive/ui-prototypes](archive/ui-prototypes/README.md) for traceability. They are not part of the supported application or submission evidence.

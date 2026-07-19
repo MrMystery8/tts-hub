@@ -72,7 +72,7 @@ const SURFACES: Array<{ id: Surface; label: string; icon: string }> = [
   { id: 'watermark', label: 'Watermark Lab', icon: 'shield' },
 ];
 
-const STORAGE_PREFIX = 'tts-hub-claude:';
+const STORAGE_PREFIX = 'tts-hub-react-prototype:';
 
 function loadStored<T>(key: string, fallback: T): T {
   try {
@@ -274,7 +274,7 @@ export function App() {
   const [selectedRun, setSelectedRun] = useState(() => loadStored('watermarkRun', ''));
   const [ffmpegReady, setFfmpegReady] = useState<boolean | null>(null);
   const [clock, setClock] = useState(() => new Date().toLocaleTimeString());
-  const [notice, setNotice] = useState<Notice>({ kind: 'loading', text: 'Loading Claude UI...' });
+  const [notice, setNotice] = useState<Notice>({ kind: 'loading', text: 'Loading archived prototype...' });
 
   const [selectedModelId, setSelectedModelId] = useState<string | null>(() => loadStored<string | null>('model', null));
   const [text, setText] = useState(() => loadStored('text', ''));
@@ -575,7 +575,6 @@ export function App() {
         <div className="brand">
           <div className="brand-mark"><Icon name="wave" /></div>
           <strong>TTS HUB</strong>
-          <span>v2</span>
         </div>
         <nav className="nav-list">
           {SURFACES.map((item) => (

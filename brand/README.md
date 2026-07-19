@@ -17,7 +17,7 @@ meanings are in the product name.
 ## Where it is served
 
 `webui.py` mounts this directory at **`/brand`**, so every UI shares one copy and they
-cannot drift. `claude_exact` (desktop) points its favicon links there directly.
+cannot drift. The `desktop` client points its favicon links there directly.
 
 `mobile/` additionally keeps its *own* generated PNG copies (`icon-192.png`,
 `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png`, `favicon-32.png`).
@@ -45,7 +45,7 @@ them is fixed.
 holds down to 16px.
 
 **The header mark is inlined**, not `<img>`-linked, in both `mobile/index.html` and
-`claude_exact/index.html` — it has to read the theme's CSS custom properties, which an
+`desktop/index.html` - it has to read the theme's CSS custom properties, which an
 `<img>` cannot. `mark.svg` is the source of truth for the path data; if you change the
 geometry here, change it in those two files too.
 

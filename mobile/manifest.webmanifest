@@ -1,7 +1,7 @@
 {
   "name": "TTS Hub",
   "short_name": "TTS Hub",
-  "description": "Delegate TTS generation jobs to the laptop",
+  "description": "Private mobile companion for local speech generation and playback",
   "start_url": "/mobile/",
   "scope": "/mobile/",
   "display": "standalone",

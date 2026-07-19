@@ -1,7 +1,7 @@
-# `claude_exact` UI + Feature Audit
+# Desktop UI and Feature Audit
 
 Date: 2026-04-21  
-Scope: `claude_exact` frontend and the FastAPI-backed local workflows exposed on `http://127.0.0.1:7896`
+Scope: `desktop/` frontend and the FastAPI-backed local workflows exposed on `http://127.0.0.1:7896`
 
 ## Method
 

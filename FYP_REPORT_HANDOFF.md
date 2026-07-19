@@ -11,7 +11,7 @@
 - Diagrams live in the working outputs folder under `dg/` (Graphviz sources + PNGs).
 
 ## What the system actually is (for factual accuracy)
-Local-first, offline-by-default voice cloning hub (runtime name **claude_exact**) on Apple Silicon (MacBook Air M4, 24 GB).
+TTS Hub is a local-first, offline-by-default voice cloning system on Apple Silicon (MacBook Air M4, 24 GB).
 - FastAPI backend (`webui.py`) + static web UI; a **HubManager** runs **one isolated worker subprocess per model** over newline-delimited JSON stdio.
 - **Three frozen backends:** IndexTTS2 (PyTorch/MPS), Chatterbox Multilingual (PyTorch/MPS), Qwen3-TTS (MLX).
 - **Multiclass watermark:** encoder embeds bounded `x_wm = x + alpha*tanh(delta)`; decoder detects + attributes to source model; (K+1) classes, K=3.
@@ -150,7 +150,7 @@ LibreOffice PDF export mis-renders some wide tables (crushes narrow columns) eve
 ## Change log — accuracy pass on unimplemented claims (same session)
 
 ### ⚠️ The "quality gate" did not exist. Removed from 8 places.
-`hub/voice_library.py::_wav_profile()` computes duration / rms / peak_abs / clipped_ratio and `create_voice()` stores them in `meta.json` — **but nothing ever reads them back.** No threshold, no rejection, no warning. `grep` for `clipped_ratio|peak_abs|rms` across `hub/`, `webui.py`, `claude_exact/` and `mobile/` returns nothing outside the function that computes them. The docstring's "for quality gating" was aspirational. There is also no silence measurement at all.
+`hub/voice_library.py::_wav_profile()` computes duration / rms / peak_abs / clipped_ratio and `create_voice()` stores them in `meta.json` — **but nothing ever reads them back.** No threshold, no rejection, no warning. A search for `clipped_ratio|peak_abs|rms` across `hub/`, `webui.py`, `desktop/` and `mobile/` returns nothing outside the function that computes them. The docstring's "for quality gating" was aspirational. There is also no silence measurement at all.
 
 Corrected to *profiling* language in: 4.4.3 activity prose · the Key Features claim · 6.1 Objective 1 · Table 4.1 (UC-02) main flow · Table 4.1 alternative flow · Table 4.9 stage 3 name and rationale · Table 5.3 step S4 · Table 6.1 evidence. Verified zero remaining matches for `quality gate|gating|fails the gate|prompts a re-record`.
 
@@ -159,7 +159,7 @@ Corrected to *profiling* language in: 4.4.3 activity prose · the Key Features c
 6.3 gained a matching future-work item: turning the recorded profile into an intake warning is a contained change with a direct usability benefit.
 
 ### UC-10 delete dialog corrected
-The spec claimed "the system states plainly what will be removed: the reference clip, the preprocessing metadata, and any cached model state". The actual UI is a native `confirm('Delete this saved voice?')` at `claude_exact/index.html:2121`. The *behaviour* is right (`shutil.rmtree(voice_dir)` removes all three), but the dialog does not say so. Step 3 now reads "The system asks the user to confirm the deletion." Chosen over changing the code.
+The spec claimed "the system states plainly what will be removed: the reference clip, the preprocessing metadata, and any cached model state". The actual UI is a native `confirm('Delete this saved voice?')` in `desktop/index.html`. The *behaviour* is right (`shutil.rmtree(voice_dir)` removes all three), but the dialog does not say so. Step 3 now reads "The system asks the user to confirm the deletion." Chosen over changing the code.
 
 Note: a native `confirm()` is browser chrome, not page content — **it cannot be screenshotted** by any tool. If a delete-confirmation figure is ever wanted, the dialog must first become an in-page modal.
 
@@ -188,7 +188,7 @@ Captured by driving the real app with Playwright at 2× DPI: three tour-spotligh
 
 ### Automated and browser evidence
 - Backend coverage lives in `tests/test_generation_jobs.py` and `tests/test_generation_job_api.py`.
-- Desktop coverage lives in `tests/e2e/claude_exact_favorites.spec.ts`; mobile coverage is in `tests/e2e/mobile_app.spec.ts`.
+- Desktop coverage lives in `tests/e2e/desktop_saved_phrases.spec.ts`; mobile coverage is in `tests/e2e/mobile_app.spec.ts`.
 - Final verification passed: **13/13 backend unittests** and **11/11 scoped Playwright tests**. `node --check` passed for the mobile app, service worker and capture script; Python compilation passed for the job service, API and DOCX refresh script.
 - Stored-audio network replay is automated; audible sound remains the only manual acceptance check.
 - Current 2x-DPI captures are Figures 4.12--4.24 in `report_assets/ui_screenshots/`. The authoritative record is `report_assets/ui_screenshots/capture_manifest.json` (captured `2026-07-18T17:22:28.007Z`); it records timestamp, git identity, dirty state, viewports, record IDs, favourite/label state, player state and the real Run B detector result.

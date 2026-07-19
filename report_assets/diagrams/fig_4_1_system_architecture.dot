@@ -1,0 +1,101 @@
+digraph TTSHubArchitecture {
+  graph [
+    label="Figure 4.1  System Architecture - TTS Hub",
+    labelloc=t,
+    labeljust=c,
+    fontsize=24,
+    fontname="Arial",
+    bgcolor="white",
+    pad=0.12,
+    margin=0.02,
+    nodesep=0.52,
+    ranksep=0.58,
+    splines=ortho,
+    newrank=true
+  ];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=13, penwidth=2.0, margin="0.18,0.10"];
+  edge [fontname="Arial", fontsize=11, color="#536273", fontcolor="#111111", penwidth=1.7, arrowsize=0.8];
+
+  subgraph cluster_device {
+    label="Local-first device boundary  ·  Apple Silicon (MacBook Air M4, 24 GB)  ·  offline by default  ·  no cloud";
+    labelloc=t;
+    fontsize=14;
+    fontname="Arial";
+    fontcolor="#0789a5";
+    color="#0789a5";
+    penwidth=2.0;
+    style="rounded,dashed";
+    margin=16;
+
+    mobile [
+      color="#2868ad", fillcolor="#e6f0fb", fontcolor="#2868ad",
+      label=<<B>Mobile PWA  (/mobile)</B><BR/><FONT POINT-SIZE="11" COLOR="#536273">installable · offline-capable service worker<BR/>generate · jobs · voices · verify (phone → laptop)</FONT>>
+    ];
+    desktop [
+      color="#2868ad", fillcolor="#e6f0fb", fontcolor="#2868ad",
+      label=<<B>Desktop Web UI  (desktop/)</B><BR/><FONT POINT-SIZE="11" COLOR="#536273">static HTML / JS / CSS · model rail · voice library<BR/>text input · saved phrases · watermark toggle · guided tours</FONT>>
+    ];
+    { rank=same; mobile; desktop; }
+
+    api [
+      color="#2d865d", fillcolor="#e5f3eb", fontcolor="#2d865d",
+      label=<<B>Application Tier - FastAPI  (webui.py)</B><BR/><FONT POINT-SIZE="11" COLOR="#536273">/api/models · /api/generate · /api/generation-jobs<BR/>/api/voices · /api/watermark/detect · /api/unload</FONT>>
+    ];
+
+    orchestration [
+      color="#6846c4", fillcolor="#eee9fb", fontcolor="#6846c4",
+      label=<<B>Orchestration - HubManager</B><BR/><FONT POINT-SIZE="11" COLOR="#536273">model registry · one worker per model · job queue<BR/>path + venv resolution · status telemetry</FONT>>
+    ];
+    provenance [
+      color="#c72f2f", fillcolor="#fceaea", fontcolor="#c72f2f",
+      label=<<B>Provenance - Watermark Service</B><BR/><FONT POINT-SIZE="11" COLOR="#536273">encoder (embed) · decoder (detect + attribute)<BR/>Run B checkpoint · (K+1)-class</FONT>>
+    ];
+    { rank=same; orchestration; provenance; }
+
+    subgraph cluster_workers {
+      label="Model workers · one isolated subprocess each";
+      labelloc=t;
+      fontsize=12;
+      fontname="Arial";
+      fontcolor="#b77417";
+      color="#b77417";
+      penwidth=1.6;
+      style="rounded";
+      margin=12;
+
+      index [color="#b77417", fillcolor="#fff4df", fontcolor="#b77417", label=<<B>IndexTTS2</B><BR/><FONT POINT-SIZE="10" COLOR="#536273">PyTorch · MPS · AR + emotion</FONT>>];
+      chatterbox [color="#b77417", fillcolor="#fff4df", fontcolor="#b77417", label=<<B>Chatterbox ML</B><BR/><FONT POINT-SIZE="10" COLOR="#536273">PyTorch · MPS · multilingual</FONT>>];
+      qwen [color="#b77417", fillcolor="#fff4df", fontcolor="#b77417", label=<<B>Qwen3-TTS</B><BR/><FONT POINT-SIZE="10" COLOR="#536273">MLX · zero-shot</FONT>>];
+      { rank=same; index; chatterbox; qwen; }
+    }
+
+    subgraph cluster_storage {
+      label="Local storage & tooling";
+      labelloc=t;
+      fontsize=12;
+      fontname="Arial";
+      fontcolor="#0789a5";
+      color="#0789a5";
+      penwidth=1.6;
+      style="rounded";
+      margin=12;
+
+      repos [color="#0789a5", fillcolor="#e1f3f7", fontcolor="#0789a5", label=<<B>Model repos + weights</B>>];
+      voices [color="#0789a5", fillcolor="#e1f3f7", fontcolor="#0789a5", label=<<B>Voice library + outputs</B>>];
+      ffmpeg [color="#0789a5", fillcolor="#e1f3f7", fontcolor="#0789a5", label=<<B>ffmpeg</B>>];
+      { rank=same; repos; voices; ffmpeg; }
+    }
+
+    mobile -> api [label="same local API"];
+    desktop -> api [label="HTTP / multipart"];
+    api -> orchestration [label="dispatch"];
+    api -> provenance [label="detect / verify", style=dashed];
+    orchestration -> provenance [style=dashed];
+    orchestration -> index;
+    orchestration -> chatterbox [label="JSON / stdio"];
+    orchestration -> qwen;
+    index -> voices [style=invis];
+    chatterbox -> voices [label="persist outputs / load weights"];
+    qwen -> voices [style=invis];
+  }
+}

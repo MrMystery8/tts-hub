@@ -31,7 +31,7 @@ Key files:
 
 - Spec sheet: `tts-hub/SPEC_SHEET.md` (updated to match implementation)
 - Hub server: `tts-hub/webui.py`
-- UI: `tts-hub/claude_exact/index.html`, `tts-hub/claude_exact/support.js`, `tts-hub/claude_exact/thumbnail.webp`
+- UI: `tts-hub/desktop/index.html`, `tts-hub/desktop/support.js`, `tts-hub/desktop/thumbnail.webp`
 - Hub core utilities: `tts-hub/hub/`
 - Per-model workers/adapters: `tts-hub/workers/worker_*.py`
 - Diagnostics: `tts-hub/tools/doctor.py`
@@ -117,7 +117,7 @@ ffmpeg helper functions: `tts-hub/hub/audio_utils.py`
 
 ### 4.1 Common UI Features
 
-Implemented in `tts-hub/claude_exact/index.html` + `tts-hub/claude_exact/support.js`:
+Implemented in `tts-hub/desktop/index.html` + `tts-hub/desktop/support.js`:
 
 - Model picker dropdown
 - Reference audio upload + in-browser microphone recording (saved as WAV)

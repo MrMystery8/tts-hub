@@ -1,7 +1,7 @@
-# claude_exact — Backend Feature Regressions & Integration Plan
+# Desktop Client - Backend Feature Regressions and Integration Plan
 
 Comparison of backend capabilities (`webui.py` + `/api/*`) against what the
-`claude_exact` design (`claude_exact/index.html`) actually wires up.
+supported desktop design (`desktop/index.html`) actually wires up.
 
 > **Architecture note (corrected).** `index.html` is a **single class**
 > `Component extends DCLogic` (L419). It carries **duplicate methods**: an
