@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none"
+     stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="TTS Hub">
+  <!-- Primary mark: hex "hub" node drawn as a speech bubble, 5-bar waveform inside.
+       Outer waveform caps use the surface foreground, NOT white — see brand/README.md. -->
+  <path d="M24 4.5 L39.5 13.75 L39.5 30.25 L25.5 38.6 L21.8 43.2 L21.5 38 L8.5 30.25 L8.5 13.75 Z"
+        stroke="#3ddc97" stroke-width="3.2"/>
+  <g stroke-width="3.4">
+    <path d="M14 21v2"  stroke="#e9ebef"/>
+    <path d="M19 16v12" stroke="#3ddc97"/>
+    <path d="M24 12v20" stroke="#3ddc97"/>
+    <path d="M29 16v12" stroke="#3ddc97"/>
+    <path d="M34 21v2"  stroke="#e9ebef"/>
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="TTS Hub">
+  <!-- apple-touch-icon source: full-bleed square, no rounding.
+       iOS applies its own superellipse mask and will double-round a pre-rounded icon. -->
+  <rect width="512" height="512" fill="#3ddc97"/>
+  <g transform="translate(92.8 93.8) scale(6.8)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 4.5 L39.5 13.75 L39.5 30.25 L25.5 38.6 L21.8 43.2 L21.5 38 L8.5 30.25 L8.5 13.75 Z"
+          fill="#0c0d10" stroke="#0c0d10" stroke-width="2"/>
+    <g stroke="#ffffff" stroke-width="3.4" fill="none">
+      <path d="M14 21v2"/>
+      <path d="M19 16v12"/>
+      <path d="M24 12v20"/>
+      <path d="M29 16v12"/>
+      <path d="M34 21v2"/>
+    </g>
+  </g>
+</svg>
