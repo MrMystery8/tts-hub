@@ -20,7 +20,30 @@ else
     echo "Virtual environment found."
 fi
 
-# 2. Run the Server
+# 2. Configure Tailscale Serve for private mobile access.
+if command -v tailscale >/dev/null 2>&1; then
+    if tailscale serve --bg 7896 >/dev/null 2>&1; then
+        TAILSCALE_HOST=$(tailscale status --json 2>/dev/null | .venv/bin/python3 -c \
+            'import json, sys; print(json.load(sys.stdin).get("Self", {}).get("DNSName", "").rstrip("."))' \
+            2>/dev/null || true)
+
+        echo -e "${GREEN}Tailscale Serve enabled.${NC}"
+        if [ -n "${TAILSCALE_HOST}" ]; then
+            echo -e "${GREEN}Open on mobile: https://${TAILSCALE_HOST}/mobile/${NC}"
+        else
+            echo "Tailscale is enabled, but its MagicDNS name could not be detected."
+            echo "Run: tailscale serve status"
+        fi
+    else
+        echo "Warning: Tailscale Serve could not be enabled. Continuing with local access only."
+        echo "Check that Tailscale is running and signed in."
+    fi
+else
+    echo "Warning: Tailscale is not installed. Continuing with local access only."
+    echo "Install it with: brew install --cask tailscale"
+fi
+
+# 3. Run the Server
 echo -e "${GREEN}Starting TTS Hub on http://localhost:7896 ...${NC}"
 echo "Press Ctrl+C to stop."
 echo ""

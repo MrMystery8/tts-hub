@@ -2115,7 +2115,7 @@ class Component extends DCLogic {
         selectedModelId,
         selectedVoiceId,
         outputJobId,
-        activeJobId: active ? active.id : this.state.activeJobId,
+        activeJobId: active ? active.id : null,
         clock: this.__ms(infoRes.time),
         ffmpegAvailable: !!(infoRes.ffmpeg && infoRes.ffmpeg.available),
         wmRuns: runsRes.runs || [],
