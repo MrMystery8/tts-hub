@@ -93,14 +93,19 @@ test.describe('desktop saved phrases', () => {
     await page.locator('[data-tour="nav"] button').filter({ hasText: 'Jobs' }).click();
     await expect(page.getByRole('button', { name: 'Save as a quick phrase' })).toBeVisible();
 
-    page.once('dialog', dialog => dialog.accept('Need a moment'));
     await page.getByRole('button', { name: 'Save as a quick phrase' }).click();
+    const phraseDialog = page.getByRole('dialog');
+    await expect(phraseDialog).toContainText('Save quick phrase');
+    await phraseDialog.getByLabel('Name').fill('Need a moment');
+    await phraseDialog.getByRole('button', { name: 'Save phrase' }).click();
     await expect(page.getByRole('button', { name: 'Remove from quick phrases' })).toBeVisible();
     await expect(page.getByText('Need a moment', { exact: true })).toBeVisible();
 
     await page.getByText('Need a moment', { exact: true }).first().click();
-    page.once('dialog', dialog => dialog.accept('Please wait'));
     await page.getByRole('button', { name: 'Rename', exact: true }).click();
+    await expect(phraseDialog).toContainText('Rename run');
+    await phraseDialog.getByLabel('Name').fill('Please wait');
+    await phraseDialog.getByRole('button', { name: 'Rename' }).click();
     await expect(page.getByText('Please wait', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: '★ Saved', exact: true }).first().click();
     await expect(page.getByText('Please wait', { exact: true }).first()).toBeVisible();
@@ -124,12 +129,33 @@ test.describe('desktop saved phrases', () => {
     await expect(page.getByRole('button', { name: 'Remove playing audio from quick phrases' })).toBeVisible();
     await page.getByRole('button', { name: 'Remove playing audio from quick phrases' }).click();
     await expect(page.getByRole('button', { name: 'Save playing audio as a quick phrase' })).toBeVisible();
-    page.once('dialog', dialog => dialog.accept('Please wait'));
     await page.getByRole('button', { name: 'Save playing audio as a quick phrase' }).click();
+    await phraseDialog.getByLabel('Name').fill('Please wait');
+    await phraseDialog.getByRole('button', { name: 'Save phrase' }).click();
     await expect(page.getByRole('button', { name: 'Remove playing audio from quick phrases' })).toBeVisible();
 
     await page.locator('[data-tour-launch]').click();
-    await expect(page.locator('.tts-tour-dot')).toHaveCount(9);
+    await expect(page.locator('.tts-tour-dot')).toHaveCount(10);
+    for (let step = 0; step < 3; step += 1) await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Save a quick phrase');
+    await expect(page.getByRole('dialog')).toContainText('choose Save in the output player');
+    await expect.poll(async () => {
+      const save = await page.locator('[data-tour="save-phrase"]').boundingBox();
+      const ring = await page.locator('.tts-tour-ring').boundingBox();
+      if (!save || !ring) return false;
+      const centered = Math.abs((ring.x + ring.width / 2) - (save.x + save.width / 2)) < 3;
+      return centered && ring.width >= save.width && ring.width <= save.width + 20;
+    }).toBe(true);
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Play a quick phrase');
+    await expect(page.getByRole('dialog')).toContainText('Saved phrases appear here');
+    await expect.poll(async () => {
+      const shelf = await page.locator('[data-tour="phrases"]').boundingBox();
+      const ring = await page.locator('.tts-tour-ring').boundingBox();
+      if (!shelf || !ring) return false;
+      const centered = Math.abs((ring.x + ring.width / 2) - (shelf.x + shelf.width / 2)) < 3;
+      return centered && ring.width >= shelf.width && ring.width <= shelf.width + 20;
+    }).toBe(true);
     await page.getByRole('button', { name: 'Exit tour' }).click();
 
     jobs = [{ ...jobs[0], id: 'c'.repeat(32), status: 'queued', phase: 'queued', output: null, favorite: false }, jobs[0]];

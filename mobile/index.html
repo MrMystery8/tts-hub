@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/mobile/app.css" />
+  <link rel="stylesheet" href="/mobile/app.css?v=18" />
 </head>
 <body>
 <div id="app" class="app" data-theme="dark">
@@ -56,19 +56,26 @@
       <div id="phrase-section" class="hidden">
         <div class="sec-head">
           <label class="sec-label">Quick phrases</label>
-          <span class="sec-hint">plays instantly</span>
         </div>
         <div class="phrase-carousel" id="phrase-carousel"></div>
       </div>
 
-      <button class="model-row" id="model-row">
-        <span class="dot" id="model-dot"></span>
-        <span class="model-row-txt">
-          <span class="model-row-name" id="model-name">—</span>
-          <span class="model-row-meta" id="model-meta">—</span>
-        </span>
-        <span class="caret">▾</span>
-      </button>
+      <div>
+        <div class="sec-head">
+          <label class="sec-label">Model</label>
+        </div>
+        <button class="model-row" id="model-row">
+          <span class="dot" id="model-dot"></span>
+          <span class="model-row-txt">
+            <span class="model-row-head">
+              <span class="model-row-name" id="model-name">—</span>
+              <span class="model-row-recommended hidden" id="model-recommended">Recommended</span>
+            </span>
+            <span class="model-row-description hidden" id="model-description"></span>
+          </span>
+          <span class="caret">▾</span>
+        </button>
+      </div>
 
       <div id="voice-section">
         <div class="sec-head">
@@ -298,6 +305,26 @@
     </div>
   </div>
 
+  <!-- ============ quick-phrase naming dialog ============ -->
+  <div class="phrase-dialog-backdrop hidden" id="phrase-dialog-backdrop" role="presentation">
+    <form class="phrase-dialog" id="phrase-dialog" role="dialog" aria-modal="true" aria-labelledby="phrase-dialog-title">
+      <div class="phrase-dialog-head">
+        <span class="phrase-dialog-icon" aria-hidden="true">★</span>
+        <div>
+          <div class="phrase-dialog-title" id="phrase-dialog-title">Save quick phrase</div>
+          <div class="phrase-dialog-copy" id="phrase-dialog-copy"></div>
+        </div>
+        <button class="phrase-dialog-close" id="phrase-dialog-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <label class="phrase-dialog-label" for="phrase-dialog-input">Name</label>
+      <input class="phrase-dialog-input" id="phrase-dialog-input" autocomplete="off" />
+      <div class="phrase-dialog-actions">
+        <button class="phrase-dialog-cancel" id="phrase-dialog-cancel" type="button">Cancel</button>
+        <button class="phrase-dialog-submit" id="phrase-dialog-submit" type="submit">Save phrase</button>
+      </div>
+    </form>
+  </div>
+
   <!-- ============ irreversible-action confirmation ============ -->
   <div class="confirm-backdrop hidden" id="confirm-backdrop" role="presentation">
     <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -324,6 +351,6 @@
   <input type="file" id="edit-file-input" accept="audio/*" hidden />
   <input type="file" id="verify-file-input" accept="audio/*" hidden />
 </div>
-<script src="/mobile/app.js"></script>
+<script src="/mobile/app.js?v=18"></script>
 </body>
 </html>

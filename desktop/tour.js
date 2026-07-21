@@ -43,9 +43,17 @@
         body: 'Whatever you type here is what gets spoken. The character counter on the right keeps an eye on model limits.',
       },
       {
-        // Only present once something is starred; unresolved steps are skipped.
-        anchor: 'phrases', placement: 'bottom', title: 'Phrases you use often',
-        body: 'Star a finished run under Jobs and it lands here. These play back instantly from the clip already on disk — no waiting for the model — so your everyday sentences are always one tap away.',
+        // Prefer the exact Save control whenever an output exists. Before the
+        // first generation, the output dock remains a useful fallback target.
+        find: () => anchorEl('save-phrase') || anchorEl('transport'),
+        placement: 'top', title: 'Save a quick phrase',
+        body: 'After a generation finishes, choose Save in the output player and give the phrase a short, recognisable name.',
+      },
+      {
+        // This shelf exists once at least one completed result has been saved;
+        // the tour engine skips the step until then.
+        anchor: 'phrases', placement: 'bottom', title: 'Play a quick phrase',
+        body: 'Saved phrases appear here at the top of Generate. Select one to replay its finished audio with a single click.',
       },
       {
         anchor: 'reference', placement: 'bottom', title: 'Give it a voice',

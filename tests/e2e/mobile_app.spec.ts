@@ -156,6 +156,21 @@ test.describe('mobile app', () => {
   test('keeps text while polling and persists theme', async ({ page }) => {
     await mockMobileApi(page);
     await page.goto('/mobile/');
+    await expect(page.locator('#model-name')).toHaveText('Qwen3-TTS MLX');
+    await expect(page.locator('#surface-generate .sec-label').filter({ hasText: /^Model$/ })).toBeVisible();
+    await expect(page.locator('#model-recommended')).toBeVisible();
+    await expect(page.locator('#model-description')).toHaveText('Fast and reliable for daily use.');
+    await page.locator('#model-row').click();
+    await expect(page.locator('.model-opt').first()).toContainText('Qwen3-TTS MLX');
+    await expect(page.locator('.model-opt').first()).toContainText('Recommended');
+    await expect(page.locator('.model-opt').filter({ hasText: 'IndexTTS2' })).toContainText('Best quality and expressive control.');
+    await expect(page.locator('.model-opt').filter({ hasText: 'Qwen3-TTS MLX' })).toContainText('Fast and reliable for daily use.');
+    await expect(page.locator('.model-opt').filter({ hasText: 'Chatterbox Multilingual' })).toContainText('Multilingual and long-form speech.');
+    await expect(page.locator('.mo-guidance').first()).toHaveCSS('white-space', 'nowrap');
+    await expect(page.locator('#sheet-body')).not.toContainText(/(?:loaded|idle)\s*·/);
+    await page.locator('.model-opt').filter({ hasText: 'IndexTTS2' }).click();
+    await page.reload();
+    await expect(page.locator('#model-name')).toHaveText('IndexTTS2');
     await page.locator('#script').fill('Do not erase this');
     await page.evaluate(async () => {
       await fetch('/api/generation-jobs');
@@ -207,16 +222,22 @@ test.describe('mobile app', () => {
     await page.goto('/mobile/');
     await page.locator('.tab[data-tab="jobs"]').click();
     await page.locator('.job-card').first().click();
-    page.once('dialog', async dialog => {
-      expect(dialog.type()).toBe('prompt');
-      await dialog.accept('Need a moment');
-    });
     await page.getByRole('button', { name: 'Save phrase' }).click();
+    const phraseDialog = page.locator('#phrase-dialog');
+    await expect(phraseDialog).toBeVisible();
+    await expect(phraseDialog).toContainText('Save quick phrase');
+    await phraseDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.locator('#phrase-dialog-backdrop')).toBeHidden();
+    await page.getByRole('button', { name: 'Save phrase' }).click();
+    await page.locator('#phrase-dialog-input').fill('Need a moment');
+    await page.locator('#phrase-dialog-input').press('Enter');
     await expect(page.locator('#sheet-body button').filter({ hasText: 'Saved' })).toBeVisible();
     await expect(page.locator('#sheet-title')).toContainText('Need a moment');
 
-    page.once('dialog', dialog => dialog.accept('Please wait'));
     await page.getByRole('button', { name: 'Rename' }).click();
+    await expect(phraseDialog).toContainText('Rename run');
+    await page.locator('#phrase-dialog-input').fill('Please wait');
+    await phraseDialog.getByRole('button', { name: 'Rename' }).click();
     await expect(page.locator('#sheet-title')).toContainText('Please wait');
     await page.locator('#sheet-close').click();
     await page.locator('.filter-btn').filter({ hasText: 'Saved' }).click();
@@ -232,8 +253,9 @@ test.describe('mobile app', () => {
     await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'true');
     await page.locator('#mp-favorite').click();
     await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'false');
-    page.once('dialog', dialog => dialog.accept('Please wait'));
     await page.locator('#mp-favorite').click();
+    await page.locator('#phrase-dialog-input').fill('Please wait');
+    await phraseDialog.getByRole('button', { name: 'Save phrase' }).click();
     await expect(page.locator('#mp-favorite')).toHaveAttribute('aria-pressed', 'true');
     const playerLayout = await page.locator('#miniplayer').evaluate(player => {
       const playerBox = player.getBoundingClientRect();
@@ -275,7 +297,7 @@ test.describe('mobile app', () => {
     await expect(page.locator('#run-btn')).toBeDisabled();
 
     const sw = await page.request.get('/mobile/sw.js');
-    expect(await sw.text()).toContain('tts-hub-mobile-v11');
+    expect(await sw.text()).toContain('tts-hub-mobile-v18');
     expect(await sw.text()).toContain('/mobile/icon-maskable-512.png');
   });
 
@@ -345,6 +367,8 @@ test.describe('mobile app', () => {
     await expect(page.locator('#active-meta')).toContainText('position 1 of 2');
     await expect(page.locator('#active-detail')).toContainText('earlier jobs');
 
+    await page.locator('#model-row').click();
+    await page.locator('.model-opt').filter({ hasText: 'IndexTTS2' }).click();
     await page.locator('#options-row').click();
     await page.locator('#sheet-body select').first().selectOption('emo_vector');
     await expect(page.locator('.emotion-item')).toHaveCount(8);
@@ -373,17 +397,18 @@ test.describe('mobile app', () => {
   test('verifies uploaded audio with advanced controls and invalidates stale results', async ({ page }) => {
     await mockMobileApi(page);
     let detectBody = '';
+    let detectResult: any = {
+      detected: true,
+      wm_prob: 0.913,
+      model: { id: 0, name: 'IndexTTS2', tts_model_id: 'index-tts2' },
+      run: { id: 'run-b' },
+    };
     await page.route('**/api/watermark/detect', async route => {
       detectBody = route.request().postDataBuffer()?.toString('utf8') || '';
       await new Promise(resolve => setTimeout(resolve, 80));
       return route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({
-          detected: true,
-          wm_prob: 0.913,
-          model: { id: 0, name: 'IndexTTS2', tts_model_id: 'index-tts2' },
-          run: { id: 'run-b' },
-        }),
+        body: JSON.stringify(detectResult),
       });
     });
     await page.goto('/mobile/');
@@ -400,14 +425,27 @@ test.describe('mobile app', () => {
     await page.locator('#verify-btn').click();
     await expect(page.locator('#verify-btn-label')).toHaveText('Checking audio…');
     await expect(page.locator('#verify-result')).toContainText('Watermark detected');
-    await expect(page.locator('#verify-result')).toContainText('91.3%');
+    await expect(page.locator('#verify-result')).toContainText('Likely generated by IndexTTS2');
+    await expect(page.locator('#verify-result')).not.toContainText('Clear result');
     await expect(page.locator('#verify-result')).toContainText('IndexTTS2');
+    await expect(page.locator('.verify-result-facts')).toBeHidden();
+    await page.getByText('View technical details', { exact: true }).click();
+    await expect(page.locator('.verify-result-facts')).toBeVisible();
+    await expect(page.locator('.verify-result-facts')).toContainText('0.913');
     expect(detectBody).toContain('name="audio"');
     expect(detectBody).toContain('external.wav');
     expect(detectBody).toContain('name="watermark_run"');
     expect(detectBody).toContain('run-b');
     expect(detectBody).toContain('name="wm_threshold"');
     expect(detectBody).toContain('0.42');
+
+    detectResult = { detected: false, wm_prob: 0.05, model: null, run: { id: 'run-b' } };
+    await page.locator('#verify-file-input').setInputFiles({ name: 'clean.wav', mimeType: 'audio/wav', buffer: silentWav() });
+    await page.locator('#verify-btn').click();
+    await expect(page.locator('#verify-result')).toContainText('No watermark detected');
+    await expect(page.locator('#verify-result')).not.toContainText('unknown source model');
+    await page.getByText('View technical details', { exact: true }).click();
+    await expect(page.locator('.verify-result-facts')).not.toContainText('Source model');
 
     await page.locator('#verify-threshold').fill('0.5');
     await expect(page.locator('#verify-result')).toBeHidden();

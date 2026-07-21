@@ -55,4 +55,31 @@ test.describe('supported client render smoke', () => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });
+
+  test('recommends Qwen for daily use and remembers the desktop model choice', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+
+    const modelRail = page.locator('[data-tour="models"]');
+    const qwen = modelRail.getByRole('button').filter({ hasText: 'Qwen3-TTS MLX' });
+    await expect(qwen).toHaveAttribute('aria-pressed', 'true');
+    await expect(qwen).toContainText('Recommended');
+    await expect(qwen).toContainText('Fast and reliable for daily use.');
+    await expect(modelRail.getByRole('button').filter({ hasText: 'IndexTTS2' })).toContainText('Best quality and expressive control.');
+    await expect(modelRail.getByRole('button').filter({ hasText: 'Chatterbox Multilingual' })).toContainText('Multilingual and long-form speech.');
+    for (const description of [
+      'Best quality and expressive control.',
+      'Fast and reliable for daily use.',
+      'Multilingual and long-form speech.',
+    ]) {
+      const line = modelRail.getByText(description, { exact: true });
+      await expect(line).toBeVisible();
+      expect(await line.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
+    await expect(modelRail).not.toContainText(/idle\s*·|unknown\s*·|\d+ runs/);
+
+    await modelRail.getByRole('button').filter({ hasText: 'IndexTTS2' }).click();
+    await page.reload();
+    await expect(modelRail.getByRole('button').filter({ hasText: 'IndexTTS2' })).toHaveAttribute('aria-pressed', 'true');
+  });
 });

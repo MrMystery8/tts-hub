@@ -9,7 +9,7 @@
 <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
 <meta name="theme-color" content="#0c0d10">
 <script src="./support.js"></script>
-<script src="./tour.js?v=8" defer></script>
+<script src="./tour.js?v=11" defer></script>
 </head>
 <body>
 <x-dc>
@@ -140,13 +140,13 @@
           </div>
           <div style="flex:1;overflow-y:auto;padding:8px">
             <sc-for list="{{ modelRail }}" as="m" hint-placeholder-count="7">
-              <button onClick="{{ m.onSelect }}" style="display:block;width:100%;text-align:left;padding:11px 12px 11px 13px;margin-bottom:5px;border-radius:8px;border:1px solid {{ m.borderColor }};background:{{ m.bg }};border-left:3px solid {{ m.accentBar }};transition:background .12s" style-hover="background:var(--bg-hover)">
+              <button onClick="{{ m.onSelect }}" aria-pressed="{{ m.isSelected }}" style="display:block;width:100%;text-align:left;padding:11px 12px 11px 13px;margin-bottom:5px;border-radius:8px;border:1px solid {{ m.borderColor }};background:{{ m.bg }};border-left:3px solid {{ m.accentBar }};transition:background .12s" style-hover="background:var(--bg-hover)">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style="width:8px;height:8px;border-radius:50%;background:{{ m.dot }};flex:0 0 auto"></span>
                   <span style="font-weight:600;font-size:12.5px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.name }}</span>
                 </div>
-                <div style="font-family:var(--mono);font-size:10px;color:var(--tx-3);margin:5px 0 7px;padding-left:16px">{{ m.meta }}</div>
-                <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:16px">
+                <sc-if value="{{ m.guidance }}" hint-placeholder-val="{{ true }}"><div style="font-size:10.5px;line-height:1.35;color:var(--tx-2);margin:5px 0 0;padding-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.guidance }}</div></sc-if>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:16px;margin-top:8px">
                   <sc-for list="{{ m.chips }}" as="c" hint-placeholder-count="2">
                     <span style="font-size:9.5px;font-weight:600;letter-spacing:.02em;padding:2px 6px;border-radius:4px;background:{{ c.bg }};color:{{ c.color }};text-transform:uppercase">{{ c.label }}</span>
                   </sc-for>
@@ -180,7 +180,6 @@
               <div data-tour="phrases">
                 <div style="display:flex;align-items:baseline;margin-bottom:7px">
                   <label style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-2);text-transform:uppercase">Quick phrases</label>
-                  <span style="margin-left:auto;font-size:10px;color:var(--tx-3)">plays instantly</span>
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:7px">
                   <sc-for list="{{ quickPhrases }}" as="p" hint-placeholder-count="3">
@@ -474,7 +473,7 @@
               <div data-wave="full" data-wave-url="{{ outAudioUrl }}" data-wave-seek style="height:38px;width:100%"></div>
             </div>
             <div style="display:flex;gap:8px;flex:0 0 auto">
-              <button onClick="{{ toggleOutFavorite }}" aria-label="{{ outFavoriteAria }}" aria-pressed="{{ outFavorite }}" title="{{ outFavoriteTitle }}" style="display:flex;align-items:center;gap:7px;padding:10px 14px;border:1px solid {{ outFavoriteBorder }};border-radius:7px;background:{{ outFavoriteBg }};color:{{ outFavoriteColor }};font-weight:700;font-size:12.5px">
+              <button data-tour="save-phrase" onClick="{{ toggleOutFavorite }}" aria-label="{{ outFavoriteAria }}" aria-pressed="{{ outFavorite }}" title="{{ outFavoriteTitle }}" style="display:flex;align-items:center;gap:7px;padding:10px 14px;border:1px solid {{ outFavoriteBorder }};border-radius:7px;background:{{ outFavoriteBg }};color:{{ outFavoriteColor }};font-weight:700;font-size:12.5px">
                 <span style="font-size:15px;line-height:1">{{ outFavoriteGlyph }}</span>{{ outFavoriteLabel }}
               </button>
               <button onClick="{{ downloadOut }}" style="display:flex;align-items:center;gap:7px;padding:10px 16px;border-radius:7px;background:var(--accent);color:var(--accent-tx);font-weight:700;font-size:12.5px">
@@ -493,6 +492,27 @@
     <sc-if value="{{ isWatermark }}" hint-placeholder-val="{{ true }}"><div data-surface="watermark" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div></sc-if>
   </main>
 
+  <!-- quick-phrase naming dialog -->
+  <sc-if value="{{ phraseDialogOpen }}" hint-placeholder-val="{{ true }}">
+    <div onClick="{{ dismissPhraseDialog }}" onKeyDown="{{ phraseDialogKeyDown }}" style="position:fixed;inset:0;z-index:75;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.58);padding:24px">
+      <form onSubmit="{{ submitPhraseDialog }}" role="dialog" aria-modal="true" aria-labelledby="phrase-dialog-title" style="width:100%;max-width:420px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.45);padding:20px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:flex-start;gap:11px">
+          <span aria-hidden="true" style="width:32px;height:32px;flex:0 0 auto;border-radius:8px;background:var(--accent-dim);border:1px solid var(--accent-line);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:16px">★</span>
+          <div style="min-width:0">
+            <div id="phrase-dialog-title" style="font-weight:700;font-size:15px">{{ phraseDialogTitle }}</div>
+            <div style="font-size:12px;color:var(--tx-3);line-height:1.5;margin-top:3px">{{ phraseDialogDescription }}</div>
+          </div>
+        </div>
+        <label for="phrase-dialog-input" style="font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--tx-2);text-transform:uppercase">Name</label>
+        <input id="phrase-dialog-input" value="{{ phraseDialogValue }}" onChange="{{ updatePhraseDialogValue }}" autocomplete="off" autofocus style="width:100%;min-height:44px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:8px;padding:10px 12px;color:var(--tx);font-size:13px" style-focus="border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)"/>
+        <div style="display:flex;gap:8px;margin-top:2px">
+          <button type="button" onClick="{{ cancelPhraseDialog }}" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line-2);color:var(--tx-2);font-size:12.5px;font-weight:600">Cancel</button>
+          <button type="submit" aria-disabled="{{ phraseDialogSaving }}" style="flex:1;padding:10px;border-radius:8px;background:var(--accent);color:var(--accent-tx);font-size:12.5px;font-weight:700">{{ phraseDialogSubmitLabel }}</button>
+        </div>
+      </form>
+    </div>
+  </sc-if>
+
   <!-- toast -->
   <sc-if value="{{ toast }}" hint-placeholder-val="{{ true }}">
     <div class="fade-in" style="position:fixed;bottom:108px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:10px;padding:11px 18px;border-radius:9px;background:{{ toastBg }};border:1px solid {{ toastLine }};color:{{ toastColor }};box-shadow:var(--shadow);font-size:12.5px;font-weight:500;max-width:520px">
@@ -506,7 +526,7 @@ class Component extends DCLogic {
   state = {
     theme: 'dark',
     surface: 'generate',
-    selectedModelId: 'index-tts2',
+    selectedModelId: (() => { try { return localStorage.getItem('ttshub-selected-model') || 'qwen3-tts-mlx'; } catch (e) { return 'qwen3-tts-mlx'; } })(),
     text: '',
     promptText: '',
     instructText: '',
@@ -543,6 +563,9 @@ class Component extends DCLogic {
     jobDetailId: null,
     // irreversible-action confirmation ({ name, items, keeps, onConfirm })
     confirmDelete: null,
+    phraseDialog: null,
+    phraseDialogValue: '',
+    phraseDialogSaving: false,
     // watermark
     selectedRunId: '',
     wmRuns: [],
@@ -584,6 +607,12 @@ class Component extends DCLogic {
     { id: 'pocket-tts', name: 'Pocket TTS', desc: 'CPU-first low-latency streaming TTS with optional cloning.' },
     { id: 'voxcpm-ane', name: 'VoxCPM ANE', desc: 'CoreML/ANE VoxCPM with prompt-cache cloning.' },
   ];
+
+  modelDescriptions = {
+    'index-tts2': 'Best quality and expressive control.',
+    'qwen3-tts-mlx': 'Fast and reliable for daily use.',
+    'chatterbox-multilingual': 'Multilingual and long-form speech.',
+  };
 
   defaults() {
     return {
@@ -854,6 +883,7 @@ class Component extends DCLogic {
 
   // ---------- actions ----------
   selectModel(id) {
+    try { localStorage.setItem('ttshub-selected-model', id); } catch (e) { /* private mode */ }
     const next = { selectedModelId: id };
     if (this.needsRef(id) && this.state.refMode === 'none') next.refMode = 'saved';
     if (!this.needsRef(id) && id !== 'voxcpm-ane' && id !== 'pocket-tts') {} 
@@ -1158,6 +1188,22 @@ class Component extends DCLogic {
     v.ffmpegDot = 'var(--accent)'; v.ffmpegLabel = 'ready';
     v.serverClock = new Date(st.clock).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+    // quick-phrase naming / renaming dialog
+    const phraseDialog = st.phraseDialog;
+    v.phraseDialogOpen = !!phraseDialog;
+    v.phraseDialogTitle = phraseDialog && phraseDialog.mode === 'rename' ? 'Rename run' : 'Save quick phrase';
+    v.phraseDialogDescription = phraseDialog && phraseDialog.mode === 'rename'
+      ? 'Use a short name that is easy to recognise in Jobs and Quick Phrases.'
+      : 'This name will appear in Quick Phrases at the top of Generate.';
+    v.phraseDialogValue = st.phraseDialogValue;
+    v.phraseDialogSaving = st.phraseDialogSaving;
+    v.phraseDialogSubmitLabel = st.phraseDialogSaving ? 'Saving…' : (phraseDialog && phraseDialog.mode === 'rename' ? 'Rename' : 'Save phrase');
+    v.updatePhraseDialogValue = e => this.setState({ phraseDialogValue: e.target.value });
+    v.cancelPhraseDialog = () => this.closePhraseDialog();
+    v.dismissPhraseDialog = e => { if (e.target === e.currentTarget) this.closePhraseDialog(); };
+    v.phraseDialogKeyDown = e => { if (e.key === 'Escape') this.closePhraseDialog(); };
+    v.submitPhraseDialog = e => this.submitPhraseDialog(e);
+
     v.isGenerate = st.surface === 'generate';
     v.isVoices = st.surface === 'voices';
     v.isJobs = st.surface === 'jobs';
@@ -1172,20 +1218,22 @@ class Component extends DCLogic {
     v.setOpen = st.setOpen; v.setClosed = !st.setOpen;
     v.setW = st.setOpen ? '344px' : '52px';
     v.toggleSet = () => this.setState(s => ({ setOpen: !s.setOpen }));
-    v.railDots = this.models.map(m => ({ dot: (stat[m.id] && stat[m.id].loaded) ? 'var(--accent)' : 'var(--line-3)', sel: m.id === id ? 'var(--accent)' : 'transparent', onSelect: () => this.selectModel(m.id), letter: m.name[0] }));
+    const orderedModels = [...this.models].sort((a, b) => Number(b.id === 'qwen3-tts-mlx') - Number(a.id === 'qwen3-tts-mlx'));
+    v.railDots = orderedModels.map(m => ({ dot: (stat[m.id] && stat[m.id].loaded) ? 'var(--accent)' : 'var(--line-3)', sel: m.id === id ? 'var(--accent)' : 'transparent', onSelect: () => this.selectModel(m.id), letter: m.name[0] }));
 
     // model rail
-    v.modelRail = this.models.map(m => {
+    v.modelRail = orderedModels.map(m => {
       const ms = stat[m.id] || {};
       const chips = [];
+      if (m.id === 'qwen3-tts-mlx') chips.push({ label: 'Recommended', bg: 'var(--accent-dim)', color: 'var(--accent)' });
       if (this.needsRef(m.id)) chips.push({ label: 'ref', bg: 'var(--warn-dim)', color: 'var(--warn)' });
       if (m.id === 'f5-hindi-urdu' || m.id === 'voxcpm-ane') chips.push({ label: 'transcript', bg: 'var(--blue-dim)', color: 'var(--blue)' });
       if (this.wmSupported(m.id)) chips.push({ label: 'watermark', bg: 'var(--purple-dim)', color: 'var(--purple)' });
       const isSel = m.id === id;
       return {
-        name: m.name, onSelect: () => this.selectModel(m.id),
+        name: m.name, onSelect: () => this.selectModel(m.id), isSelected: isSel,
+        guidance: this.modelDescriptions[m.id] || '',
         dot: ms.loaded ? 'var(--accent)' : 'var(--line-3)',
-        meta: (ms.loaded ? 'loaded' : 'idle') + ' · ' + (ms.device || '—') + ' · ' + (ms.total_generations || 0) + ' runs',
         chips,
         bg: isSel ? 'var(--bg-3)' : 'transparent',
         borderColor: isSel ? 'var(--accent-line)' : 'var(--line)',
@@ -1798,16 +1846,18 @@ class Component extends DCLogic {
 
     const body = this.el('div', 'flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:11px');
     body.setAttribute('data-scroll-keep', 'models-body');
-    this.models.forEach(m => {
+    [...this.models].sort((a, b) => Number(b.id === 'qwen3-tts-mlx') - Number(a.id === 'qwen3-tts-mlx')).forEach(m => {
       const ms = this.state.statusMap[m.id];
       const c = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px 18px;display:flex;align-items:center;gap:18px');
       const left = this.el('div', 'flex:1;min-width:0');
       const t = this.el('div', 'display:flex;align-items:center;gap:9px;margin-bottom:5px');
       t.appendChild(this.el('span', 'width:9px;height:9px;border-radius:50%;background:' + (ms.loaded ? 'var(--accent)' : 'var(--line-3)'), {}));
       t.appendChild(this.el('span', 'font-weight:700;font-size:13.5px', { textContent: m.name }));
+      if (m.id === 'qwen3-tts-mlx') t.appendChild(this.el('span', 'font-size:9px;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:4px;color:var(--accent);background:var(--accent-dim)', { textContent: 'Recommended' }));
       t.appendChild(this.el('span', 'font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:4px;' + (ms.loaded ? 'color:var(--accent);background:var(--accent-dim)' : 'color:var(--tx-3);background:var(--bg-3)'), { textContent: ms.loaded ? 'Loaded' : 'Unloaded' }));
       left.appendChild(t);
       left.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3);line-height:1.4', { textContent: m.desc }));
+      if (this.modelDescriptions[m.id]) left.appendChild(this.el('div', 'font-size:11px;color:var(--tx-2);line-height:1.4;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: this.modelDescriptions[m.id] }));
       c.appendChild(left);
 
       const stats = this.el('div', 'display:flex;gap:26px;flex:0 0 auto');
@@ -2104,7 +2154,7 @@ class Component extends DCLogic {
       const voices = (voicesRes.voices || []).map(v => this.__normalizeVoice(v));
       const jobs = (jobsRes.jobs || []).map(j => this.__normalizeJob(j));
       const statusMap = this.__defaultStatusMap(this.models, statusRes.models || {});
-      const selectedModelId = this.models.some(m => m.id === this.state.selectedModelId) ? this.state.selectedModelId : (this.models[0] && this.models[0].id) || this.state.selectedModelId;
+      const selectedModelId = this.models.some(m => m.id === this.state.selectedModelId) ? this.state.selectedModelId : ((this.models.find(m => m.id === 'qwen3-tts-mlx') || this.models[0] || {}).id || this.state.selectedModelId);
       const selectedVoiceId = voices.some(v => v.id === this.state.selectedVoiceId) ? this.state.selectedVoiceId : (voices[0] && voices[0].id) || '';
       const outputJobId = jobs.some(j => j.id === this.state.outputJobId && j.status === 'completed') ? this.state.outputJobId : ((jobs.find(j => j.status === 'completed' && j.output) || {}).id || null);
       const active = jobs.find(j => this.__activeStatus(j.status));
@@ -2280,19 +2330,40 @@ class Component extends DCLogic {
     const j = this.state.jobs.find(x => x.id === id);
     if (!j) return;
     if (j.favorite) { await this.__patchJob(id, { favorite: false }, 'Removed from quick phrases.'); return; }
-    const suggested = (j.label || '').trim() || (j.text || '').trim().slice(0, 40);
-    const name = window.prompt('Name this quick phrase — it plays instantly, no waiting.', suggested);
-    if (name === null) return; // cancelled: do not star
-    await this.__patchJob(id, { favorite: true, label: name.trim() || null }, 'Saved to quick phrases.');
-    this.__markTaught('favourite');
+    this.openPhraseDialog(id, 'save');
   }
 
-  async renameJob(id) {
+  renameJob(id) {
     const j = this.state.jobs.find(x => x.id === id);
     if (!j) return;
-    const name = window.prompt('Rename this run.', (j.label || '').trim() || (j.text || '').trim().slice(0, 40));
-    if (name === null) return;
-    await this.__patchJob(id, { label: name.trim() || null }, name.trim() ? 'Run renamed.' : 'Name cleared.');
+    this.openPhraseDialog(id, 'rename');
+  }
+
+  openPhraseDialog(id, mode) {
+    const j = this.state.jobs.find(x => x.id === id);
+    if (!j) return;
+    const suggested = (j.label || '').trim() || (j.text || '').trim().slice(0, 40);
+    this.setState({ phraseDialog: { jobId: id, mode }, phraseDialogValue: suggested, phraseDialogSaving: false });
+    setTimeout(() => { const input = document.getElementById('phrase-dialog-input'); if (input) { input.focus(); input.select(); } }, 0);
+  }
+
+  closePhraseDialog() {
+    if (this.state.phraseDialogSaving) return;
+    this.setState({ phraseDialog: null, phraseDialogValue: '', phraseDialogSaving: false });
+  }
+
+  async submitPhraseDialog(event) {
+    if (event) event.preventDefault();
+    const dialog = this.state.phraseDialog;
+    if (!dialog || this.state.phraseDialogSaving) return;
+    const name = (this.state.phraseDialogValue || '').trim();
+    this.setState({ phraseDialogSaving: true });
+    const updated = dialog.mode === 'rename'
+      ? await this.__patchJob(dialog.jobId, { label: name || null }, name ? 'Run renamed.' : 'Name cleared.')
+      : await this.__patchJob(dialog.jobId, { favorite: true, label: name || null }, 'Saved to quick phrases.');
+    if (!updated) { this.setState({ phraseDialogSaving: false }); return; }
+    if (dialog.mode === 'save') this.__markTaught('favourite');
+    this.setState({ phraseDialog: null, phraseDialogValue: '', phraseDialogSaving: false });
   }
 
   playFavourite(j) { this.setState({ outputJobId: j.id }); this.playUrl(this.__audioUrl(j.id)); }
@@ -2469,42 +2540,53 @@ class Component extends DCLogic {
     const detail = this.el('div', 'flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:18px;min-width:0');
     detail.setAttribute('data-scroll-keep', 'wm-detail');
     const selected = runs.find(r => r.id === this.state.selectedRunId) || runs[0];
-    if (!selected) detail.appendChild(this.el('div', 'color:var(--tx-3);font-size:13px', { textContent: 'No watermark runs found.' }));
-    else {
-      const dh = this.el('div', 'display:flex;align-items:center;gap:12px'); dh.appendChild(this.el('div', 'font-weight:700;font-size:17px', { textContent: selected.label || selected.id })); dh.appendChild(this.el('span', 'font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:5px', { textContent: selected.status || 'unknown' })); detail.appendChild(dh);
-      const box = this.el('pre', 'margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg-1);padding:14px;color:var(--tx-2);font-family:var(--mono);font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:280px;overflow:auto', { textContent: 'Loading run details...' }); detail.appendChild(box);
-      this.__api('/api/watermark/run_details?run_id=' + encodeURIComponent(selected.id)).then(d => { box.textContent = JSON.stringify({ id: d.id, label: d.label, status: d.status, metrics: d.metrics, config: d.config, error: d.error, report_excerpt: d.report_excerpt }, null, 2); }).catch(e => { box.textContent = e.message || String(e); });
-    }
     const verify = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px;display:flex;flex-direction:column;gap:12px');
-    verify.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'Verify audio' }));
+    verify.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: 'Verify audio' }));
     verify.appendChild(this.el('div', 'font-size:12px;color:var(--tx-3)', { textContent: 'Upload a clip to check for an embedded watermark payload.' }));
     const vrow = this.el('div', 'display:flex;align-items:center;gap:12px');
     const up = this.el('button', 'padding:12px 18px;border:1.5px dashed var(--line-3);border-radius:8px;background:var(--bg-3);color:var(--tx-2);font-weight:600;font-size:12px', { textContent: '＋ Choose audio' });
-    up.onclick = () => this.__detectWatermark(); vrow.appendChild(up);
-    const tl = this.el('div', 'display:flex;align-items:center;gap:9px'); tl.appendChild(this.el('span', 'font-size:12px;color:var(--tx-3)', { textContent: 'Threshold' })); const slider = this.el('input', 'width:130px;accent-color:var(--accent)', {}); slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = this.state.wmThreshold; slider.oninput = e => this.setState({ wmThreshold: parseFloat(e.target.value) }); tl.appendChild(slider); tl.appendChild(this.el('span', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);width:36px', { textContent: this.state.wmThreshold.toFixed(2) })); vrow.appendChild(tl); verify.appendChild(vrow); detail.appendChild(verify);
+    up.onclick = () => this.__detectWatermark(); vrow.appendChild(up); verify.appendChild(vrow);
+    const settings = document.createElement('details'); settings.open = !!this._wmSettingsOpen; settings.ontoggle = () => { this._wmSettingsOpen = settings.open; }; settings.style.cssText = 'border-top:1px solid var(--line);padding-top:10px';
+    const settingsSummary = document.createElement('summary'); settingsSummary.textContent = 'Detection settings'; settingsSummary.style.cssText = 'width:max-content;color:var(--tx-3);font-size:11px;font-weight:650;cursor:pointer'; settings.appendChild(settingsSummary);
+    const tl = this.el('div', 'display:flex;align-items:center;gap:9px;margin-top:12px'); tl.appendChild(this.el('span', 'font-size:12px;color:var(--tx-3)', { textContent: 'Detection threshold' })); const slider = this.el('input', 'width:130px;accent-color:var(--accent)', {}); slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = this.state.wmThreshold; slider.oninput = e => this.setState({ wmThreshold: parseFloat(e.target.value) }); tl.appendChild(slider); tl.appendChild(this.el('span', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);width:36px', { textContent: this.state.wmThreshold.toFixed(2) })); settings.appendChild(tl); verify.appendChild(settings); detail.appendChild(verify);
     if (this.state.wmDetectResult) {
       const r = this.state.wmDetectResult;
-      const result = this.el('div', 'border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:16px;display:flex;flex-direction:column;gap:12px');
-      const tone = r.detected ? 'var(--accent)' : 'var(--warn)';
-      const top = this.el('div', 'display:flex;align-items:center;gap:10px');
-      top.appendChild(this.el('div', 'font-weight:700;font-size:13px', { textContent: 'Detection result' }));
-      top.appendChild(this.el('span', 'font-size:11px;font-weight:700;text-transform:uppercase;color:' + tone + ';background:' + (r.detected ? 'var(--accent-dim)' : 'var(--warn-dim)') + ';padding:3px 9px;border-radius:5px', { textContent: r.detected ? 'Detected' : 'Not detected' }));
+      const score = Math.max(0, Math.min(1, Number(r.wm_prob || 0)));
+      const sourceModel = (r.model && (r.model.name || r.model.tts_model_id || r.model.id)) || '';
+      const result = this.el('div', 'border:1px solid ' + (r.detected ? 'var(--accent-line)' : 'var(--line-2)') + ';border-radius:10px;background:var(--bg-1);padding:18px;display:flex;flex-direction:column;gap:12px');
+      result.setAttribute('role', 'status'); result.setAttribute('aria-live', 'polite');
+      const top = this.el('div', 'display:flex;align-items:center;gap:12px');
+      top.appendChild(this.el('span', 'width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:18px;font-weight:700;color:' + (r.detected ? 'var(--accent-tx)' : 'var(--tx-2)') + ';background:' + (r.detected ? 'var(--accent)' : 'var(--bg-3)') + ';border:1px solid ' + (r.detected ? 'var(--accent)' : 'var(--line-2)'), { textContent: r.detected ? '✓' : '—' }));
+      top.appendChild(this.el('div', 'font-weight:750;font-size:18px;letter-spacing:-.01em', { textContent: r.detected ? 'Watermark detected' : 'No watermark detected' }));
       result.appendChild(top);
+      result.appendChild(this.el('div', 'font-size:13px;line-height:1.5;color:var(--tx-2)', { textContent: r.detected ? (sourceModel ? 'Embedded provenance evidence was found. Likely generated by ' + sourceModel + '.' : 'Embedded provenance evidence was found, but its source model could not be identified.') : 'No embedded TTS Hub watermark was found at the current setting.' }));
+      const evidence = document.createElement('details'); evidence.style.cssText = 'border-top:1px solid var(--line);padding-top:11px';
+      const evidenceSummary = document.createElement('summary'); evidenceSummary.textContent = 'View technical details'; evidenceSummary.style.cssText = 'width:max-content;color:var(--tx-3);font-size:11px;font-weight:650;cursor:pointer'; evidence.appendChild(evidenceSummary);
       const grid = this.el('div', 'display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px');
-      [
-        ['Probability', Number(r.wm_prob || 0).toFixed(3)],
-        ['Model', (r.model && (r.model.name || r.model.tts_model_id || r.model.id)) || 'Unknown'],
-        ['Run', (r.run && r.run.id) || this.state.selectedRunId || 'Auto'],
+      grid.style.marginTop = '11px';
+      const evidenceRows = [
+        ['Raw score', score.toFixed(3)],
+        ['Detector run', (r.run && r.run.id) || this.state.selectedRunId || 'Automatic'],
         ['Threshold', String(this.state.wmThreshold.toFixed ? this.state.wmThreshold.toFixed(2) : this.state.wmThreshold)],
-      ].forEach(([k, val]) => { const cell = this.el('div', 'border:1px solid var(--line);border-radius:8px;background:var(--bg-2);padding:10px;min-width:0'); cell.appendChild(this.el('div', 'font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx-3);margin-bottom:4px', { textContent: k })); cell.appendChild(this.el('div', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: String(val) })); grid.appendChild(cell); });
-      result.appendChild(grid);
+      ];
+      if (r.detected) evidenceRows.splice(1, 0, ['Source model', sourceModel || 'Could not be identified']);
+      evidenceRows.forEach(([k, val]) => { const cell = this.el('div', 'border:1px solid var(--line);border-radius:8px;background:var(--bg-2);padding:10px;min-width:0'); cell.appendChild(this.el('div', 'font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx-3);margin-bottom:4px', { textContent: k })); cell.appendChild(this.el('div', 'font-family:var(--mono);font-size:12px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis', { textContent: String(val) })); grid.appendChild(cell); });
+      evidence.appendChild(grid); result.appendChild(evidence);
       detail.appendChild(result);
+    }
+    if (!selected) detail.appendChild(this.el('div', 'color:var(--tx-3);font-size:13px', { textContent: 'No watermark runs found.' }));
+    else {
+      const runEvidence = document.createElement('details'); runEvidence.style.cssText = 'border-top:1px solid var(--line);padding-top:12px';
+      const runSummary = document.createElement('summary'); runSummary.textContent = 'View detector run details'; runSummary.style.cssText = 'width:max-content;color:var(--tx-3);font-size:11px;font-weight:650;cursor:pointer'; runEvidence.appendChild(runSummary);
+      const dh = this.el('div', 'display:flex;align-items:center;gap:12px;margin:14px 0 10px'); dh.appendChild(this.el('div', 'font-weight:700;font-size:15px', { textContent: selected.label || selected.id })); dh.appendChild(this.el('span', 'font-size:10px;font-weight:700;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:3px 9px;border-radius:5px', { textContent: selected.status || 'unknown' })); runEvidence.appendChild(dh);
+      const box = this.el('pre', 'margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg-1);padding:14px;color:var(--tx-2);font-family:var(--mono);font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:280px;overflow:auto', { textContent: 'Loading run details...' }); runEvidence.appendChild(box); detail.appendChild(runEvidence);
+      this.__api('/api/watermark/run_details?run_id=' + encodeURIComponent(selected.id)).then(d => { box.textContent = JSON.stringify({ id: d.id, label: d.label, status: d.status, metrics: d.metrics, config: d.config, error: d.error, report_excerpt: d.report_excerpt }, null, 2); }).catch(e => { box.textContent = e.message || String(e); });
     }
     wrap.appendChild(detail); root.appendChild(wrap);
     this.__restoreScroll(root, __ss);
   }
 
-  __detectWatermark() { const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none'; input.onchange = async () => { const file = input.files && input.files[0]; input.remove(); if (!file) return; this.setState({ wmDetectResult: null }); const form = new FormData(); form.append('audio', file, file.name); if (this.state.selectedRunId) form.append('watermark_run', this.state.selectedRunId); form.append('wm_threshold', String(this.state.wmThreshold)); try { const r = await this.__api('/api/watermark/detect', { method: 'POST', body: form }); this.setState({ wmDetectResult: r }); this.flash((r.detected ? 'Watermark detected' : 'No watermark detected') + ' · p=' + Number(r.wm_prob || 0).toFixed(3), r.detected ? 'success' : 'warn'); } catch (e) { this.flash(e.message || 'Detection failed.', 'error'); } }; document.body.appendChild(input); input.click(); }
+  __detectWatermark() { const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none'; input.onchange = async () => { const file = input.files && input.files[0]; input.remove(); if (!file) return; this.setState({ wmDetectResult: null }); const form = new FormData(); form.append('audio', file, file.name); if (this.state.selectedRunId) form.append('watermark_run', this.state.selectedRunId); form.append('wm_threshold', String(this.state.wmThreshold)); try { const r = await this.__api('/api/watermark/detect', { method: 'POST', body: form }); this.setState({ wmDetectResult: r }); this.flash(r.detected ? 'Watermark detected.' : 'No watermark detected.', r.detected ? 'success' : 'warn'); } catch (e) { this.flash(e.message || 'Detection failed.', 'error'); } }; document.body.appendChild(input); input.click(); }
 
 }
 </script>

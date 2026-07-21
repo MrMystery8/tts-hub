@@ -9,6 +9,21 @@
   const NEEDS_REF = new Set(["index-tts2", "f5-hindi-urdu", "cosyvoice3-mlx", "qwen3-tts-mlx"]);
   const NEEDS_TRANSCRIPT = new Set(["f5-hindi-urdu", "voxcpm-ane"]);
   const WM_SUPPORTED = new Set(["index-tts2", "qwen3-tts-mlx", "chatterbox-multilingual"]);
+  const RECOMMENDED_MODEL_ID = "qwen3-tts-mlx";
+  const MODEL_DESCRIPTIONS = {
+    "index-tts2": "Best quality and expressive control.",
+    "qwen3-tts-mlx": "Fast and reliable for daily use.",
+    "chatterbox-multilingual": "Multilingual and long-form speech.",
+  };
+  const MODEL_PREFERENCE_KEY = "ttshub-selected-model";
+  const loadPreferredModel = () => {
+    try { return localStorage.getItem(MODEL_PREFERENCE_KEY) || RECOMMENDED_MODEL_ID; }
+    catch { return RECOMMENDED_MODEL_ID; }
+  };
+  const savePreferredModel = (id) => {
+    try { localStorage.setItem(MODEL_PREFERENCE_KEY, id); }
+    catch { /* Storage may be unavailable in private browsing. */ }
+  };
   const SHOWS_REF = (id) => NEEDS_REF.has(id) || id === "voxcpm-ane" || id === "chatterbox-multilingual" || id === "pocket-tts";
   const FALLBACK_SETTINGS = {
     index: { emoMode: "speaker", emoAlpha: 0.65, useRandom: false, emoVector: "[0,0,0,0,0,0,0.45,0]", emoText: "", maxTextTokens: 120, maxMelTokens: 1500, fastMode: false, doSample: true, temperature: 0.8, topP: 0.8, topK: 30, numBeams: 3, repetitionPenalty: 10, lengthPenalty: 0 },
@@ -29,7 +44,7 @@
     statusMap: {},
     voices: [],
     jobs: [],
-    selectedModelId: null,
+    selectedModelId: loadPreferredModel(),
     selectedVoiceId: "",
     text: "",
     outputFormat: "wav",
@@ -319,23 +334,60 @@
       // An open job sheet is not redrawn by render(); refresh it so the star
       // and title reflect what was just saved.
       if (state.sheet === "job") renderSheet(true);
-    } catch (e) { flash(e.message || "Could not update this run.", "error"); }
+      return job;
+    } catch (e) { flash(e.message || "Could not update this run.", "error"); return null; }
+  }
+  let phraseDialog = null;
+  let phraseDialogSaving = false;
+  function openPhraseDialog(id, mode) {
+    const j = state.jobs.find((x) => x.id === id);
+    if (!j) return;
+    phraseDialog = { jobId: id, mode };
+    phraseDialogSaving = false;
+    const renaming = mode === "rename";
+    $("phrase-dialog-title").textContent = renaming ? "Rename run" : "Save quick phrase";
+    $("phrase-dialog-copy").textContent = renaming
+      ? "Use a short name that is easy to recognise in Jobs and Quick Phrases."
+      : "This name will appear in Quick Phrases at the top of Generate.";
+    $("phrase-dialog-submit").textContent = renaming ? "Rename" : "Save phrase";
+    $("phrase-dialog-submit").disabled = false;
+    $("phrase-dialog-input").value = (j.label || "").trim() || (j.text || "").trim().slice(0, 40);
+    $("phrase-dialog-backdrop").classList.remove("hidden");
+    requestAnimationFrame(() => { $("phrase-dialog-input").focus(); $("phrase-dialog-input").select(); });
+  }
+  function closePhraseDialog() {
+    if (phraseDialogSaving) return;
+    phraseDialog = null;
+    $("phrase-dialog-backdrop").classList.add("hidden");
+  }
+  async function submitPhraseDialog() {
+    if (!phraseDialog || phraseDialogSaving) return;
+    phraseDialogSaving = true;
+    $("phrase-dialog-submit").disabled = true;
+    $("phrase-dialog-submit").textContent = "Saving…";
+    const name = $("phrase-dialog-input").value.trim();
+    const updated = phraseDialog.mode === "rename"
+      ? await patchJob(phraseDialog.jobId, { label: name || null }, name ? "Run renamed." : "Name cleared.")
+      : await patchJob(phraseDialog.jobId, { favorite: true, label: name || null }, "Saved to quick phrases.");
+    phraseDialogSaving = false;
+    if (!updated) {
+      $("phrase-dialog-submit").disabled = false;
+      $("phrase-dialog-submit").textContent = phraseDialog.mode === "rename" ? "Rename" : "Save phrase";
+      return;
+    }
+    phraseDialog = null;
+    $("phrase-dialog-backdrop").classList.add("hidden");
   }
   async function toggleFavorite(id) {
     const j = state.jobs.find((x) => x.id === id);
     if (!j) return;
     if (j.favorite) { await patchJob(id, { favorite: false }, "Removed from quick phrases."); return; }
-    const suggested = (j.label || "").trim() || (j.text || "").trim().slice(0, 40);
-    const name = window.prompt("Name this quick phrase — it plays instantly, no waiting.", suggested);
-    if (name === null) return;
-    await patchJob(id, { favorite: true, label: name.trim() || null }, "Saved to quick phrases.");
+    openPhraseDialog(id, "save");
   }
-  async function renameJob(id) {
+  function renameJob(id) {
     const j = state.jobs.find((x) => x.id === id);
     if (!j) return;
-    const name = window.prompt("Rename this run.", (j.label || "").trim() || (j.text || "").trim().slice(0, 40));
-    if (name === null) return;
-    await patchJob(id, { label: name.trim() || null }, name.trim() ? "Run renamed." : "Name cleared.");
+    openPhraseDialog(id, "rename");
   }
 
   function playOutput(jobId, autoplay) {
@@ -421,7 +473,11 @@
       const group = MODEL_GROUP[model.id];
       if (group && model.defaults) state.settings[group] = { ...state.settings[group], ...model.defaults };
     }
-    if (!state.selectedModelId && state.models.length) state.selectedModelId = state.models[0].id;
+    if (!state.models.some((model) => model.id === state.selectedModelId) && state.models.length) {
+      state.selectedModelId = state.models.some((model) => model.id === RECOMMENDED_MODEL_ID)
+        ? RECOMMENDED_MODEL_ID
+        : state.models[0].id;
+    }
   }
   async function loadStatus() {
     try {
@@ -890,7 +946,9 @@
     const runningCount = state.jobs.filter((j) => ACTIVE_STATES.includes(j.status)).length;
     $("generate-status").textContent = runningCount ? `${runningCount} running` : "";
     $("model-name").textContent = modelName(id);
-    $("model-meta").textContent = `${ms.loaded ? "loaded" : "idle"} · ${ms.device || "—"} · ${ms.total_generations || 0} runs`;
+    $("model-recommended").classList.toggle("hidden", id !== RECOMMENDED_MODEL_ID);
+    $("model-description").textContent = MODEL_DESCRIPTIONS[id] || "";
+    $("model-description").classList.toggle("hidden", !MODEL_DESCRIPTIONS[id]);
     $("model-dot").style.background = ms.loaded ? "var(--accent)" : "var(--line-3)";
 
     // voice section
@@ -1137,6 +1195,7 @@
         state.selectedVoiceId = vo.id;
         if (Array.isArray(vo.compatible_models) && vo.compatible_models.length && !vo.compatible_models.includes(state.selectedModelId)) {
           state.selectedModelId = vo.compatible_models[0];
+          savePreferredModel(state.selectedModelId);
         }
         state.surface = "generate";
         flash("Voice loaded into Generate.", "success");
@@ -1302,24 +1361,39 @@
     top.appendChild(el("span", "verify-result-icon", detected ? "✓" : "—"));
     const title = el("div");
     title.appendChild(el("div", "verify-result-title", detected ? "Watermark detected" : "No watermark detected"));
-    title.appendChild(el("div", "verify-subtitle", detected ? "Embedded provenance evidence was found." : "The score did not meet the selected threshold."));
     top.appendChild(title);
-    top.appendChild(el("span", "verify-result-confidence", `${(probability * 100).toFixed(1)}%`));
     result.appendChild(top);
     const model = state.verifyResult.model || {};
+    const sourceModel = model.name || model.tts_model_id || "";
+    result.appendChild(el(
+      "div",
+      "verify-result-explanation",
+      detected
+        ? sourceModel
+          ? `Embedded provenance evidence was found. Likely generated by ${sourceModel}.`
+          : "Embedded provenance evidence was found, but its source model could not be identified."
+        : "No embedded TTS Hub watermark was found at the current setting."
+    ));
     const resultRunId = (state.verifyResult.run || {}).id || state.verifyRunId || state.verifyDefaultRunId || "automatic";
     const resultRun = state.verifyRuns.find((run) => run.id === resultRunId);
+    const evidence = document.createElement("details");
+    evidence.className = "verify-result-evidence";
+    const summary = document.createElement("summary");
+    summary.textContent = "View technical details";
+    evidence.appendChild(summary);
     const facts = el("div", "verify-result-facts");
-    [
+    const factRows = [
       ["Raw score", probability.toFixed(3)],
-      ["Source model", model.name || model.tts_model_id || "Source model unavailable"],
       ["Detector run", (resultRun && (resultRun.label || resultRun.id)) || resultRunId],
       ["Threshold", state.verifyThreshold.toFixed(2)],
-    ].forEach(([key, value]) => {
+    ];
+    if (detected) factRows.splice(1, 0, ["Source model", sourceModel || "Could not be identified"]);
+    factRows.forEach(([key, value]) => {
       facts.appendChild(el("span", "k", key));
       facts.appendChild(el("span", "v", value));
     });
-    result.appendChild(facts);
+    evidence.appendChild(facts);
+    result.appendChild(evidence);
   }
 
   /* ================= sheets ================= */
@@ -1365,17 +1439,20 @@
   }
 
   function renderModelSheet(body) {
-    for (const m of state.models) {
+    const orderedModels = [...state.models].sort((a, b) => Number(b.id === RECOMMENDED_MODEL_ID) - Number(a.id === RECOMMENDED_MODEL_ID));
+    for (const m of orderedModels) {
       const s2 = state.statusMap[m.id] || {};
       const isSel = m.id === state.selectedModelId;
       const btn = el("button", "model-opt" + (isSel ? " sel" : ""));
+      btn.setAttribute("aria-pressed", String(isSel));
       const top = el("div", "mo-top");
       const dot = el("span", "dot");
       dot.style.background = s2.loaded ? "var(--accent)" : "var(--line-3)";
       top.appendChild(dot);
       top.appendChild(el("span", "mo-name", m.name || m.id));
-      top.appendChild(el("span", "mo-meta", `${s2.loaded ? "loaded" : "idle"} · ${s2.device || "—"}`));
+      if (m.id === RECOMMENDED_MODEL_ID) top.appendChild(el("span", "mo-recommended", "Recommended"));
       btn.appendChild(top);
+      if (MODEL_DESCRIPTIONS[m.id]) btn.appendChild(el("div", "mo-guidance", MODEL_DESCRIPTIONS[m.id]));
       const chips = el("div", "mo-chips");
       if (NEEDS_REF.has(m.id)) chips.appendChild(el("span", "cap-chip ref", "ref"));
       if (NEEDS_TRANSCRIPT.has(m.id)) chips.appendChild(el("span", "cap-chip transcript", "transcript"));
@@ -1383,6 +1460,7 @@
       if (chips.children.length) btn.appendChild(chips);
       btn.addEventListener("click", () => {
         state.selectedModelId = m.id;
+        savePreferredModel(m.id);
         const cv = compatVoices();
         if (!cv.some((x) => x.id === state.selectedVoiceId)) state.selectedVoiceId = cv.length ? cv[0].id : "";
         state.sheet = null;
@@ -1732,7 +1810,7 @@
     const actions2 = el("div", "dj-actions");
     const restore = el("button", "dj-restore", "Restore settings");
     restore.addEventListener("click", () => {
-      if (req.model_id) state.selectedModelId = req.model_id;
+      if (req.model_id) { state.selectedModelId = req.model_id; savePreferredModel(req.model_id); }
       if (req.voice_id) state.selectedVoiceId = req.voice_id;
       if (req.text != null) state.text = req.text;
       if (req.prompt_text != null) state.promptText = req.prompt_text;
@@ -1955,6 +2033,10 @@
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", (e) => { if (e.target === $("sheet-backdrop")) closeSheet(); });
   $("sheet").addEventListener("click", (e) => e.stopPropagation());
+  $("phrase-dialog").addEventListener("submit", (e) => { e.preventDefault(); submitPhraseDialog(); });
+  $("phrase-dialog-close").addEventListener("click", closePhraseDialog);
+  $("phrase-dialog-cancel").addEventListener("click", closePhraseDialog);
+  $("phrase-dialog-backdrop").addEventListener("click", (e) => { if (e.target === $("phrase-dialog-backdrop")) closePhraseDialog(); });
   $("confirm-cancel").addEventListener("click", closeConfirm);
   $("confirm-backdrop").addEventListener("click", (e) => { if (e.target === $("confirm-backdrop")) closeConfirm(); });
   $("confirm-delete").addEventListener("click", () => {
@@ -1970,6 +2052,7 @@
       render();
     })
   );
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && phraseDialog) closePhraseDialog(); });
   $("script").addEventListener("input", () => {
     state.text = $("script").value;
     const count = $("char-count");
@@ -2066,7 +2149,12 @@
     ["refPreviewUrl", "emoPreviewUrl", "editPreviewUrl", "verifyPreviewUrl"].forEach((key) => { if (state[key]) URL.revokeObjectURL(state[key]); });
   });
 
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .register("/mobile/sw.js?v=18", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => {});
+  }
 
   /* ================= boot ================= */
 
