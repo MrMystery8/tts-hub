@@ -72,6 +72,13 @@ Users receive a safe default and plain-language trade-offs without losing access
 - The desktop Generate tutorial now contains two distinct Quick Phrase steps:
   1. `Save a quick phrase` spotlights the exact Save button in the completed-output player.
   2. `Play a quick phrase` spotlights the Quick Phrases shelf and explains one-click playback.
+- Mobile now has its own touch-first tutorial rather than a reduced desktop overlay.
+- The mobile `?` button replays a guide tailored to the currently open tab:
+  - Generate covers navigation, model and reference choice, script entry, options, generation, saving, and Quick Phrase playback.
+  - Voices covers adding and managing reusable references.
+  - Jobs covers filtering history and reopening completed work.
+  - Verify covers choosing audio, optional technical controls, and running detection.
+- The mobile tutorial uses safe-area-aware placement, large Back/Next controls, reduced-motion support, focus trapping, and a card that docks opposite the highlighted control.
 - Before a completed output exists, the save lesson uses the output dock as its fallback target.
 - The playback lesson is included once at least one phrase exists.
 - Browser-native prompts were replaced with styled, product-native dialogs on desktop and mobile.
@@ -95,7 +102,7 @@ The Tailscale URL served the latest application, but an installed mobile PWA cou
 - The service worker registers with `updateViaCache: "none"` and requests an update after registration.
 - Old application caches are removed during service-worker activation.
 - Network-first shell handling remains in place, with the cache retained only as an offline fallback.
-- The current mobile application-shell cache is `tts-hub-mobile-v18`.
+- The current mobile application-shell cache is `tts-hub-mobile-v19`.
 - The current desktop tutorial asset version is `v11`.
 
 ### Result
@@ -114,6 +121,7 @@ The post-UAT changes are covered by Playwright tests for:
 - custom Quick Phrase save and rename dialogs on desktop and mobile;
 - dialog cancellation and keyboard submission;
 - separate tutorial spotlights for saving and playing Quick Phrases;
+- touch-first, per-tab mobile tutorial content and spotlight geometry;
 - mobile service-worker cache versioning; and
 - supported viewport rendering without horizontal overflow.
 
@@ -123,7 +131,7 @@ Validation command:
 npx playwright test
 ```
 
-Latest result: 17 passed and 2 optional Qwen integration tests skipped.
+Latest result: 18 passed and 2 optional Qwen integration tests skipped.
 
 ## Remaining UAT backlog
 

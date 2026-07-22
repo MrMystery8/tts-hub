@@ -2151,7 +2151,7 @@
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("/mobile/sw.js?v=18", { updateViaCache: "none" })
+      .register("/mobile/sw.js?v=19", { updateViaCache: "none" })
       .then((registration) => registration.update())
       .catch(() => {});
   }

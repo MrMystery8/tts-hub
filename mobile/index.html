@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/mobile/app.css?v=18" />
+  <link rel="stylesheet" href="/mobile/app.css?v=19" />
 </head>
 <body>
 <div id="app" class="app" data-theme="dark">
@@ -40,6 +40,7 @@
     </div>
     <div class="wordmark">TTS&nbsp;HUB</div>
     <span class="clock" id="clock"></span>
+    <button class="icon-btn help-btn" id="mobile-tour-launch" title="Show help" aria-label="Show tutorial">?</button>
     <button class="icon-btn" id="theme-toggle" title="Toggle theme">
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7.5" cy="7.5" r="3.2"/><path d="M7.5 1v1.6M7.5 12.4V14M1 7.5h1.6M12.4 7.5H14M2.9 2.9l1.1 1.1M11 11l1.1 1.1M12.1 2.9L11 4M4 11l-1.1 1.1"/></svg>
     </button>
@@ -351,6 +352,7 @@
   <input type="file" id="edit-file-input" accept="audio/*" hidden />
   <input type="file" id="verify-file-input" accept="audio/*" hidden />
 </div>
-<script src="/mobile/app.js?v=18"></script>
+<script src="/mobile/app.js?v=19"></script>
+<script src="/mobile/tour.js?v=19"></script>
 </body>
 </html>

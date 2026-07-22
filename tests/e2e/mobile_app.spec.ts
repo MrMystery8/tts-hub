@@ -120,6 +120,67 @@ test.describe('mobile app', () => {
     expect(errors).toEqual([]);
   });
 
+  test('provides touch-first tutorials for every mobile surface', async ({ page }) => {
+    const now = Date.now() / 1000;
+    await mockMobileApi(page, [{
+      id: 'f'.repeat(32), status: 'completed', created_at: now, updated_at: now,
+      model_id: 'qwen3-tts-mlx', voice_id: 'a'.repeat(32), text: 'Please wait a moment.',
+      output_format: 'wav', watermark_enabled: false, favorite: true, label: 'Please wait', favorited_at: now,
+      output: { format: 'wav', filename: 'phrase.wav', duration_s: 1.2 }, request: {},
+    }]);
+    await page.goto('/mobile/');
+    await page.getByRole('button', { name: 'Play quick phrase: Please wait' }).click();
+    await expect(page.locator('#miniplayer')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Show tutorial' }).click();
+    const tutorial = page.locator('.mobile-tour');
+    const card = page.locator('.mobile-tour-card');
+    await expect(tutorial).toBeVisible();
+    await expect(card).toContainText('Move around the mobile hub');
+    await expect(card.locator('.mobile-tour-count')).toHaveText('1 / 9');
+    expect(await card.getByRole('button', { name: 'Next' }).evaluate(button => button.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await expect(card).toHaveClass(/top/);
+
+    for (let step = 0; step < 6; step += 1) await card.getByRole('button', { name: 'Next' }).click();
+    await expect(card).toContainText('Save a Quick Phrase');
+    await expect.poll(async () => {
+      const target = await page.locator('#mp-favorite').boundingBox();
+      const spot = await page.locator('.mobile-tour-spotlight').boundingBox();
+      if (!target || !spot) return false;
+      return Math.abs((target.x + target.width / 2) - (spot.x + spot.width / 2)) < 3;
+    }).toBe(true);
+
+    await card.getByRole('button', { name: 'Next' }).click();
+    await expect(card).toContainText('Play a Quick Phrase');
+    await expect.poll(async () => {
+      const target = await page.locator('#phrase-section').boundingBox();
+      const spot = await page.locator('.mobile-tour-spotlight').boundingBox();
+      if (!target || !spot) return false;
+      return Math.abs((target.x + target.width / 2) - (spot.x + spot.width / 2)) < 3;
+    }).toBe(true);
+    await card.getByRole('button', { name: 'Exit tutorial' }).click();
+    await expect(tutorial).toBeHidden();
+
+    await page.locator('.tab[data-tab="voices"]').click();
+    await page.getByRole('button', { name: 'Show tutorial' }).click();
+    await expect(card).toContainText('Add a reference voice');
+    await expect(card.locator('.mobile-tour-count')).toHaveText('1 / 2');
+    await card.getByRole('button', { name: 'Exit tutorial' }).click();
+
+    await page.locator('.tab[data-tab="jobs"]').click();
+    await page.getByRole('button', { name: 'Show tutorial' }).click();
+    await expect(card).toContainText('Filter generation history');
+    await expect(card.locator('.mobile-tour-count')).toHaveText('1 / 2');
+    await card.getByRole('button', { name: 'Exit tutorial' }).click();
+
+    await page.locator('.tab[data-tab="verify"]').click();
+    await page.getByRole('button', { name: 'Show tutorial' }).click();
+    await expect(card).toContainText('Choose verification audio');
+    await expect(card.locator('.mobile-tour-count')).toHaveText('1 / 3');
+    await page.keyboard.press('Escape');
+    await expect(tutorial).toBeHidden();
+  });
+
   test('submits exact worker fields and versioned snapshots for every model', async ({ page }) => {
     await mockMobileApi(page);
     const submissions: Array<{ model: string, body: string }> = [];
@@ -297,7 +358,7 @@ test.describe('mobile app', () => {
     await expect(page.locator('#run-btn')).toBeDisabled();
 
     const sw = await page.request.get('/mobile/sw.js');
-    expect(await sw.text()).toContain('tts-hub-mobile-v18');
+    expect(await sw.text()).toContain('tts-hub-mobile-v19');
     expect(await sw.text()).toContain('/mobile/icon-maskable-512.png');
   });
 

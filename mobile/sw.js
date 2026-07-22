@@ -1,9 +1,10 @@
 /* Minimal service worker: cache the app shell, never cache API or audio. */
-const CACHE = "tts-hub-mobile-v18";
+const CACHE = "tts-hub-mobile-v19";
 const SHELL = [
   "/mobile/",
-  "/mobile/app.css?v=18",
-  "/mobile/app.js?v=18",
+  "/mobile/app.css?v=19",
+  "/mobile/app.js?v=19",
+  "/mobile/tour.js?v=19",
   "/mobile/manifest.webmanifest",
   "/mobile/icon-192.png",
   "/mobile/icon-512.png",
